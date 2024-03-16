@@ -14,18 +14,23 @@ A game of tiny tanks that go to battle
 
 ## Installation
 
-Describe how to install and set up the project, including any dependencies that need to be installed and how to install them.
-
+1. Clone the Treads repo
+2. Install node packages
 ```sh
 npm install
 ```
 
 ## Usage
+1. Run the server in development mode
+```sh
+npm run start
+```
+2. Build the project in production mode
+```sh
+npm run build
+```
 
 ## Contributing
-```sh
-git clone <TREADS>
-```
 
 ## License
 MIT License
