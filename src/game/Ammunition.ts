@@ -1,4 +1,5 @@
 import { ObstacleCanvas } from "./ObstacleCanvas";
+import { Tank } from "./Tank";
 
 export class Ammunition {
     public xPos: number;
@@ -75,10 +76,32 @@ export class Ammunition {
             }
         });
 
-        
-
         if (this.bounces > this.maxBounces) {
             this.isDestroyed = true;
+        }
+    }
+
+    checkEnemyHit (enemyTanks: Tank[]): void {
+        enemyTanks.forEach(enemyTank => {
+            if (enemyTank.isDestroyed) {
+                return;
+            }
+            if (this.xPos > enemyTank.xLeft && this.xPos < enemyTank.xRight && this.yPos > enemyTank.yTop && this.yPos < enemyTank.yBottom) {
+                this.isDestroyed = true;
+                enemyTank.isDestroyed = true;
+                console.log("Enemy hit!!!");
+            }
+        })
+    }
+
+    checkPlayerHit (playerTank: Tank): void {
+        if (playerTank.isDestroyed) {
+            return;
+        }
+        if (this.xPos > playerTank.xLeft && this.xPos < playerTank.xRight && this.yPos > playerTank.yTop && this.yPos < playerTank.yBottom) {
+            // playerTank.isDestroyed = true;
+            this.isDestroyed = true;
+            console.log("Player Hit!!!");
         }
     }
 

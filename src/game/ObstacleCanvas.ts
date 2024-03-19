@@ -1,4 +1,3 @@
-import { Tank } from './Tank';
 import { Obstacle } from './Obstacle';
 
 export class ObstacleCanvas {

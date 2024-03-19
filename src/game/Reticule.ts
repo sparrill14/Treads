@@ -51,10 +51,10 @@ export class AdjustingCustomColorReticule extends Reticule {
         this.maxReticuleLength = maxReticuleLength;
     }
 
-    override draw(context: CanvasRenderingContext2D, tankXPos: number, tankYPos: number, mouseXPos: number, mouseYpos: number): void {
+    override draw(context: CanvasRenderingContext2D, tankXPosition: number, tankYPosition: number, mouseXPosition: number, mouseYPosition: number): void {
         // Calculate distance between tank and mouse
-        const xDist = mouseXPos - tankXPos;
-        const yDist = mouseYpos - tankYPos;
+        const xDist = mouseXPosition - tankXPosition;
+        const yDist = mouseYPosition - tankYPosition;
         const distance = Math.sqrt(Math.pow(xDist, 2) + Math.pow(yDist, 2));
 
         // map distance / maxReticuleLength to the range [1, 10] and [10, 1]
@@ -67,9 +67,26 @@ export class AdjustingCustomColorReticule extends Reticule {
             context.strokeStyle = this.color;
             context.setLineDash([dashLength, spaceLength]);
             context.beginPath();
-            context.moveTo(tankXPos + (this.tankSize / 2), tankYPos + (this.tankSize / 2),);
-            context.lineTo(mouseXPos, mouseYpos);
+            context.moveTo(tankXPosition + (this.tankSize / 2), tankYPosition + (this.tankSize / 2),);
+            context.lineTo(mouseXPosition, mouseYPosition);
             context.lineWidth = this.reticuleWidth
+            context.stroke();
+
+            context.setLineDash([]);
+            // Define the length of the "X" arms
+            let xLength = 10; // This is the half length of each arm of the "X"
+
+            // Draw the "X" at the mouse position
+            // Line 1 of the "X"
+            context.beginPath();
+            context.moveTo(mouseXPosition - xLength, mouseYPosition - xLength);
+            context.lineTo(mouseXPosition + xLength, mouseYPosition + xLength);
+            context.stroke();
+
+            // Line 2 of the "X"
+            context.beginPath();
+            context.moveTo(mouseXPosition - xLength, mouseYPosition + xLength);
+            context.lineTo(mouseXPosition + xLength, mouseYPosition - xLength);
             context.stroke();
         }
     }

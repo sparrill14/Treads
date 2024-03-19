@@ -1,7 +1,5 @@
-import { Tank, StevesTank, GregsTank } from './Tank';
+import { Tank, DefaultPlayerTank } from './Tank';
 import { GameRenderer } from './GameRenderer';
-import { PlayerController } from '../controllers/PlayerController';
-import { Obstacle } from './Obstacle';
 import { ObstacleCanvas } from './ObstacleCanvas';
 
 export class GameCanvas {
@@ -21,8 +19,7 @@ export class GameCanvas {
         this.gameRenderer.initializeCanvas(this.width, this.height);
         this.lastRenderTime = 0;
         window.addEventListener('resize', this.resizeCanvas.bind(this));
-        const playerController = new PlayerController(this.gameRenderer.canvas);
-        this.playerTank = new GregsTank(playerController, 200, 250, width, height, obstacleCanvas);
+        this.playerTank = new DefaultPlayerTank(this.gameRenderer.canvas, 200, 250, obstacleCanvas);
         requestAnimationFrame(this.gameLoop.bind(this));
     }
 

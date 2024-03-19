@@ -1,36 +1,76 @@
-import { IController } from "../controllers/IController";
+import { KeyStates } from "../utils/KeyStates";
+import { Ammunition, BasicAIAmmunition, PlayerAmmunition } from "./Ammunition";
 import { ObstacleCanvas } from "./ObstacleCanvas";
-import { Reticule, SimplePlayerReticule, CustomColorReticule, AdjustingCustomColorReticule, NoReticule } from "./Reticule";
+import { Reticule, AdjustingCustomColorReticule, NoReticule } from "./Reticule";
+import tankFire from "../assets/audio/tankFire.mp3"
 
 export class Tank {
     public xPos: number;
     public yPos: number;
+    public xLeft: number;
+    public xRight: number;
+    public yTop: number;
+    public yBottom: number;
     public speed: number;
     public size: number;
     public tankMidpoint: number;
     public color: string;
     public reticule: Reticule;
-    public controller: IController;
     public gunBarrellWidth: number = 7;
     public isDestroyed: boolean = false;
     public obstacleCanvas: ObstacleCanvas;
     public twoPi: number = 2 * Math.PI;
 
+    public keyStates: KeyStates = {
+        ArrowUp: false,
+        ArrowDown: false,
+        ArrowLeft: false,
+        ArrowRight: false,
+        w: false,
+        a: false,
+        s: false,
+        d: false
+    }
+
+    public aimAngle: number;
+    public aimXPos: number;
+    public aimYPos: number;
+    public xOffset: number;
+    public yOffset: number;
+    // public xPos: number;
+    // public yPos: number;
+    // public tankSize: number;
+    public ammunition: Ammunition[] = [];
+    public maxAmmunition: number;
+
     protected canvasWidth: number;
     protected canvasHeight: number;
 
-    constructor(controller: IController, reticule: Reticule, xPos: number, yPos: number, speed: number, size: number, color: string, canvasWidth: number, canvasHeight: number, obstacleCanvas: ObstacleCanvas) {
-        this.controller = controller;
+    constructor(canvas: HTMLCanvasElement, reticule: Reticule, xPos: number, yPos: number, speed: number, size: number, color: string, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[]) {
         this.reticule = reticule;
         this.xPos = xPos;
         this.yPos = yPos;
+        this.xLeft = xPos;
+        this.xRight = xPos + size;
+        this.yTop = yPos;
+        this.yBottom = yPos + size;
         this.speed = speed;
         this.size = size;
         this.color = color;
-        this.canvasWidth = canvasWidth;
-        this.canvasHeight = canvasHeight;
+        this.canvasWidth = canvas.width;
+        this.canvasHeight = canvas.height;
         this.obstacleCanvas = obstacleCanvas;
         this.tankMidpoint = this.size / 2;
+        this.ammunition = ammunition;
+        this.maxAmmunition = ammunition.length
+
+        this.aimAngle = 90;
+        const canvasRect: DOMRect = canvas.getBoundingClientRect();
+        this.xOffset = canvasRect.left;
+        this.yOffset = canvasRect.top;
+        // Set the initital awX and Y aim position to the center of the canvas
+        this.aimXPos = canvas.width / 2;
+        this.aimYPos = canvas.height / 2;
     }
 
     public draw(context: CanvasRenderingContext2D): void {
@@ -55,8 +95,8 @@ export class Tank {
         context.stroke();
 
         // Tank gun barrell
-        const endX = this.xPos + this.tankMidpoint + (Math.cos(this.controller.aimAngle) * this.size);
-        const endY = this.yPos + this.tankMidpoint + (Math.sin(this.controller.aimAngle) * this.size);
+        const endX = this.xPos + this.tankMidpoint + (Math.cos(this.aimAngle) * this.size);
+        const endY = this.yPos + this.tankMidpoint + (Math.sin(this.aimAngle) * this.size);
         context.beginPath();
         context.moveTo(this.xPos + this.tankMidpoint, this.yPos + this.tankMidpoint);
         context.lineTo(endX, endY);
@@ -89,44 +129,49 @@ export class Tank {
             theta += 2 * Math.PI;
         }
 
-        this.controller.aim(theta);
+        this.aim(theta);
 
         // Move the tank
-        if(this.controller.up() && this.controller.right()) {
+        if(this.up() && this.right()) {
             this.moveNorthEast();
         }
 
-        else if(this.controller.up() && this.controller.left()) {
+        else if(this.up() && this.left()) {
             this.moveNorthWest();
         }
 
-        else if(this.controller.down() && this.controller.right()) {
+        else if(this.down() && this.right()) {
             this.moveSouthEast();
         }
 
-        else if(this.controller.down() && this.controller.left()) {
+        else if(this.down() && this.left()) {
             this.moveSouthWest();
         }
 
-        else if(this.controller.up()) {
+        else if(this.up()) {
             this.moveNorth();
         }
 
-        else if(this.controller.down()) {
+        else if(this.down()) {
             this.moveSouth();
         }
 
-        else if(this.controller.left()) {
+        else if(this.left()) {
             this.moveWest();
         }
 
-        else if(this.controller.right()) {
+        else if(this.right()) {
             this.moveEast();
         }
 
+        this.xLeft = this.xPos;
+        this.xRight = this.xPos + this.size;
+        this.yTop = this.yPos;
+        this.yBottom = this.yPos + this.size;
+
         // Send position to controller
-        this.controller.xPos = this.xPos;
-        this.controller.yPos = this.yPos;
+        this.xPos = this.xPos;
+        this.yPos = this.yPos;
     }
 
     public moveNorth(): void {
@@ -292,39 +337,101 @@ export class Tank {
             this.xPos = Math.max(this.xPos - this.speed, 0);
         }
     }
+
+    public aim(angle: number): void {
+        this.aimAngle = angle;
+    }
+
+    public up(): boolean {
+        return this.keyStates.ArrowUp || this.keyStates.w;
+    }
+
+    public down(): boolean {
+        return this.keyStates.ArrowDown || this.keyStates.s;
+    }
+
+    public left(): boolean {
+        return this.keyStates.ArrowLeft || this.keyStates.a;
+    }
+
+    public right(): boolean {
+        return this.keyStates.ArrowRight || this.keyStates.d;
+    }
 }
 
-export class StationaryTank extends Tank {
-    constructor(controller: IController, xPos: number, yPos: number, canvasWidth: number, canvasHeight: number, obstacleCanvas: ObstacleCanvas) {
+export class PlayerTank extends Tank {
+    public tankFireAudio: HTMLAudioElement;
+
+    constructor(canvas: HTMLCanvasElement, reticule: Reticule, xPos: number, yPos: number, speed: number, size: number, color: string, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[]) {
+        super(canvas, reticule, xPos, yPos, speed, size, color, obstacleCanvas, ammunition)
+        this.tankFireAudio = new Audio(tankFire)
+
+        document.addEventListener('keydown', (event: KeyboardEvent) => {
+            if (this.keyStates.hasOwnProperty(event.key)) {
+                this.keyStates[event.key] = true;
+            }
+        });
+
+        document.addEventListener('keyup', (event: KeyboardEvent) => {
+            if (this.keyStates.hasOwnProperty(event.key)) {
+                this.keyStates[event.key] = false;
+            }
+        });
+
+        canvas.addEventListener('mousemove', (event: MouseEvent) => {
+            this.aimXPos = event.clientX - this.xOffset;
+            this.aimYPos = event.clientY - this.yOffset;
+        });
+
+        canvas.addEventListener('click', (event: MouseEvent) => {
+            const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
+            if (availableAmmunitionIndex !== -1) {
+                this.tankFireAudio.play()
+                this.ammunition[availableAmmunitionIndex] = new PlayerAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, canvas.width, canvas.height, false);
+            }
+        });
+    }
+}
+
+export class EnemyTank extends Tank {
+    constructor(canvas: HTMLCanvasElement, reticule: Reticule, xPos: number, yPos: number, speed: number, size: number, color: string, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[]) {
+        super(canvas, reticule, xPos, yPos, speed, size, color, obstacleCanvas, ammunition)
+        setInterval(() => {
+            if (this.isDestroyed) {
+                return;
+            }
+            const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
+            if (availableAmmunitionIndex !== -1) {
+                this.ammunition[availableAmmunitionIndex] = new BasicAIAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, this.canvasWidth, this.canvasHeight, false);
+            }
+        }, 5000);
+    }
+}
+
+export class StationaryTank extends EnemyTank {
+    constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas) {
         let fastTankSpeed: number = 0;
         let fastTankSize: number = 30;
         let fastTankColor: string = '#935217';
-        super(controller, new NoReticule(), xPos, yPos, fastTankSpeed, fastTankSize, fastTankColor, canvasWidth, canvasHeight, obstacleCanvas);
+        let ammunition: Ammunition[] = [
+            new BasicAIAmmunition(0, 0, 0, 0, 0, true),
+        ]
+        super(canvas, new NoReticule(), xPos, yPos, fastTankSpeed, fastTankSize, fastTankColor, obstacleCanvas, ammunition);
     }
 }
 
-export class StevesTank extends Tank {
-    constructor(controller: IController, xPos: number, yPos: number, canvasWidth: number, canvasHeight: number, obstacleCanvas: ObstacleCanvas) {
-        let stevesTankSpeed: number = 5;
-        let stevesTankSize: number = 30;
-        let stevesTankColor: string = '#6384a1';
-        super(controller, new AdjustingCustomColorReticule(stevesTankSize, stevesTankColor, canvasWidth), xPos, yPos, stevesTankSpeed, stevesTankSize, stevesTankColor, canvasWidth, canvasHeight, obstacleCanvas);
-    }
-}
-
-export class LivsTank extends Tank {
-    constructor(controller: IController, xPos: number, yPos: number, canvasWidth: number, canvasHeight: number, obstacleCanvas: ObstacleCanvas) {
-        let livsTankSpeed: number = 10;
-        let livsTankSize: number = 30;
-        let livsTankColor: string = 'pink';
-        super(controller, new AdjustingCustomColorReticule(livsTankSize, livsTankColor, canvasWidth), xPos, yPos, livsTankSpeed, livsTankSize, livsTankColor, canvasWidth, canvasHeight, obstacleCanvas);
-    }
-}
-
-export class GregsTank extends Tank {
-    constructor(controller: IController, xPos: number, yPos: number, canvasWidth: number, canvasHeight: number, obstacleCanvas: ObstacleCanvas) {
-        let gregsTankSpeed: number = 3;
-        let gregsTankColor: string = '#3b5232';
-        super(controller, new AdjustingCustomColorReticule(controller.tankSize, gregsTankColor, canvasWidth), xPos, yPos, gregsTankSpeed, controller.tankSize, gregsTankColor, canvasWidth, canvasHeight, obstacleCanvas);
+export class DefaultPlayerTank extends PlayerTank {
+    constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas) {
+        let defaultPlayerTankSpeed: number = 5;
+        let defaultPlayerTankSize: number = 30;
+        let defaultPlayerTankColor: string = '#6384a1';
+        let ammunition: Ammunition[] = [
+            new PlayerAmmunition(0, 0, 0, 0, 0, true),
+            new PlayerAmmunition(0, 0, 0, 0, 0, true),
+            new PlayerAmmunition(0, 0, 0, 0, 0, true),
+            new PlayerAmmunition(0, 0, 0, 0, 0, true),
+            new PlayerAmmunition(0, 0, 0, 0, 0, true),
+        ]
+        super(canvas, new AdjustingCustomColorReticule(defaultPlayerTankSize, defaultPlayerTankColor, canvas.width), xPos, yPos, defaultPlayerTankSpeed, defaultPlayerTankSize, defaultPlayerTankColor, obstacleCanvas, ammunition);
     }
 }
