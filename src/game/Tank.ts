@@ -29,7 +29,11 @@ export class Tank {
         w: false,
         a: false,
         s: false,
-        d: false
+        d: false,
+        W: false,
+        A: false,
+        S: false,
+        D: false
     }
 
     public aimAngle: number;
@@ -344,19 +348,19 @@ export class Tank {
     }
 
     public up(): boolean {
-        return this.keyStates.ArrowUp || this.keyStates.w;
+        return this.keyStates.ArrowUp || this.keyStates.w || this.keyStates.W;
     }
 
     public down(): boolean {
-        return this.keyStates.ArrowDown || this.keyStates.s;
+        return this.keyStates.ArrowDown || this.keyStates.s || this.keyStates.S;
     }
 
     public left(): boolean {
-        return this.keyStates.ArrowLeft || this.keyStates.a;
+        return this.keyStates.ArrowLeft || this.keyStates.a || this.keyStates.A;
     }
 
     public right(): boolean {
-        return this.keyStates.ArrowRight || this.keyStates.d;
+        return this.keyStates.ArrowRight || this.keyStates.d || this.keyStates.D;
     }
 }
 
