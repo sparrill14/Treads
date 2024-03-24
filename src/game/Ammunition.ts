@@ -121,26 +121,41 @@ export class Ammunition {
         context.closePath();
     }
 
-    willHitPlayerTank(obstacleCanvas: ObstacleCanvas, playerTank: Tank, ): boolean {
+    reload (startX: number, startY: number, theta: number, isDestroyed: boolean, canvasWidth: number, canvasHeight: number, ) {
+        this.xPos = startX;
+        this.yPos = startY;
+        this.theta = theta;
+        this.isDestroyed = isDestroyed;
+        this.xVelocity = Math.cos(this.theta) * this.speed;
+        this.yVelocity = Math.sin(this.theta) * this.speed;
+        this.canvasWidth = canvasWidth;
+        this.canvasHeight = canvasHeight;
+        this.bounces = 0;
+    }
+
+    willHitPlayerTank(obstacleCanvas: ObstacleCanvas, playerTank: Tank): boolean {
         let predictedXPosition: number = this.xPos;
         let predictedYPosition: number = this.yPos;
         let predictedXVelocity: number = this.xVelocity;
         let predictedYVelocity: number = this.yVelocity;
-        let bounces: number = 0;
-        while (bounces <= this.maxBounces) {
-            predictedXPosition += this.xVelocity;
-            predictedYPosition += this.yVelocity;
+        let predictedBounces: number = 0;
+        while (predictedBounces <= this.maxBounces) {
+            if (predictedBounces == 1) {
+                console.log(1);
+            }
+            predictedXPosition += predictedXVelocity;
+            predictedYPosition += predictedYVelocity;
             if (predictedXPosition <= 0 || predictedXPosition > this.canvasWidth) {
                 predictedXVelocity = -predictedXVelocity;
-                bounces++;
+                predictedBounces++;
             }
             if (predictedYPosition <= 0 || predictedYPosition > this.canvasHeight) {
                 predictedYVelocity = -predictedYVelocity;
-                bounces++;
+                predictedBounces++;
             }
             obstacleCanvas.obstacles.forEach(obstacle => {
                 if (predictedXPosition > obstacle.xLeft && predictedXPosition < obstacle.xRight && predictedYPosition > obstacle.yTop && predictedYPosition < obstacle.yBottom) {
-                    bounces++;
+                    predictedBounces++;
                     predictedXVelocity = -predictedXVelocity;
                     predictedYVelocity = -predictedYVelocity;
                 }
@@ -166,5 +181,13 @@ export class BasicAIAmmunition extends Ammunition {
         let BasicAIAmmunitionMaxBounces: number = 0;
         let BasicAIAmmunitionSpeed: number = 10;
         super(startX, startY, theta, BasicAIAmmunitionSpeed, BasicAIAmmunitionMaxBounces, canvasWidth, canvasHeight, isDestroyed);
+    }
+}
+
+export class SuperAIAmmunition extends Ammunition {
+    constructor (startX: number, startY: number, theta: number, canvasWidth: number, canvasHeight: number, isDestroyed: boolean) {
+        let superAIAmmunitionMaxBounces: number = 1;
+        let superAIAmmunitionSpeed: number = 12;
+        super(startX, startY, theta, superAIAmmunitionSpeed, superAIAmmunitionMaxBounces, canvasWidth, canvasHeight, isDestroyed);
     }
 }

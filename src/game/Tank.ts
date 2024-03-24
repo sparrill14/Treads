@@ -475,13 +475,10 @@ export class StationaryTank extends EnemyTank {
 export class StationaryRandomAimTank extends EnemyTank {
     public aimAngleChangeAmount: number = 0
 
-    constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas) {
+    constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[]) {
         let fastTankSpeed: number = 0;
         let fastTankSize: number = 30;
         let fastTankColor: string = '#ffce47';
-        let ammunition: Ammunition[] = [
-            new BasicAIAmmunition(0, 0, 0, 0, 0, true),
-        ]
         super(canvas, new NoReticule(), xPos, yPos, fastTankSpeed, fastTankSize, fastTankColor, obstacleCanvas, ammunition);
     }
 
@@ -495,7 +492,7 @@ export class StationaryRandomAimTank extends EnemyTank {
     public shoot(playerTank: Tank): void {
         const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
         if (availableAmmunitionIndex !== -1) {
-            this.ammunition[availableAmmunitionIndex] = new BasicAIAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, this.canvasWidth, this.canvasHeight, true);
+            this.ammunition[availableAmmunitionIndex].reload(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, true, this.canvasWidth, this.canvasHeight);
             let willHitPlayerTank: boolean = this.ammunition[availableAmmunitionIndex].willHitPlayerTank(this.obstacleCanvas, playerTank);
             if (willHitPlayerTank) {
                 this.ammunition[availableAmmunitionIndex].isDestroyed = false;
