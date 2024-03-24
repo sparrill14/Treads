@@ -1,20 +1,21 @@
 # Treads
 
-A game of tiny tanks that go to battle
+A top down game of mini tanks coded in pure Typscript
 
 ## Table of Contents
 
-- [Project Title](#project-title)
 - [Table of Contents](#table-of-contents)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Contributing](#contributing)
 - [License](#license)
-- [Contact](#contact)
 
 ## Installation
 
 1. Clone the Treads repo
+```sh
+git clone https://github.com/sparrill14/Treads.git
+```
 2. Install node packages
 ```sh
 npm install
@@ -36,3 +37,4 @@ npm run build
 MIT License
 
 ## Contact
+@sparrill14 on Github
