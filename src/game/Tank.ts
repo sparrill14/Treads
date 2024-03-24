@@ -41,9 +41,6 @@ export class Tank {
     public aimYPos: number;
     public xOffset: number;
     public yOffset: number;
-    // public xPos: number;
-    // public yPos: number;
-    // public tankSize: number;
     public ammunition: Ammunition[] = [];
     public maxAmmunition: number;
 
@@ -82,23 +79,19 @@ export class Tank {
             return;
         }
 
-        // Tank body
         context.fillStyle = this.color;
         context.fillRect(this.xPos, this.yPos, this.size, this.size);
 
-        // Tank outline
         context.setLineDash([]);
         context.lineJoin = 'bevel'
         context.strokeStyle = 'black';
         context.lineWidth = 2;
         context.strokeRect(this.xPos, this.yPos, this.size, this.size);
 
-        // Tank turret
         context.beginPath();
         context.arc(this.xPos + this.tankMidpoint, this.yPos + this.tankMidpoint, this.size / 3, 0, this.twoPi);
         context.stroke();
 
-        // Tank gun barrell
         const endX = this.xPos + this.tankMidpoint + (Math.cos(this.aimAngle) * this.size);
         const endY = this.yPos + this.tankMidpoint + (Math.sin(this.aimAngle) * this.size);
         context.beginPath();
@@ -109,7 +102,6 @@ export class Tank {
     }
 
     public updatePosition(): void {
-        // Move the tank
         if(this.up() && this.right()) {
             this.moveNorthEast();
         }
@@ -146,10 +138,6 @@ export class Tank {
         this.xRight = this.xPos + this.size;
         this.yTop = this.yPos;
         this.yBottom = this.yPos + this.size;
-
-        // Send position to controller
-        this.xPos = this.xPos;
-        this.yPos = this.yPos;
     }
 
     public aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
@@ -159,19 +147,8 @@ export class Tank {
 
         let dy: number;
         let dx: number;
-
-        if (this.xPos == playerTank.xPos && this.yPos == playerTank.yPos) {
-            // Aim at the mouse
-            dx = mouseXPos - this.xPos - this.tankMidpoint;
-            dy = mouseYpos - this.yPos - this.tankMidpoint;
-        }
-
-        else {
-            // Aim at the player
-            dx = playerTank.xPos + (playerTank.size / 2) - this.xPos - this.tankMidpoint;
-            dy = playerTank.yPos + (playerTank.size / 2) - this.yPos - this.tankMidpoint;
-        }
-
+        dx = mouseXPos - this.xPos - this.tankMidpoint;
+        dy = mouseYpos - this.yPos - this.tankMidpoint;
         let theta = Math.atan2(dy, dx);
         if (theta < 0) {
             theta += 2 * Math.PI;
@@ -246,7 +223,6 @@ export class Tank {
     }
 
     public moveNorthEast(): void {
-        // Loop through all obstacles to check the north and east directions and set the tank position accordingly.
         let blockedNorth: boolean = false;
         let blockedEast: boolean = false;
         for (let i = 0; i < this.obstacleCanvas.obstacles.length; i++) {
@@ -455,19 +431,8 @@ export class StationaryTank extends EnemyTank {
 
         let dy: number;
         let dx: number;
-
-        if (this.xPos == playerTank.xPos && this.yPos == playerTank.yPos) {
-            // Aim at the mouse
-            dx = mouseXPos - this.xPos - this.tankMidpoint;
-            dy = mouseYpos - this.yPos - this.tankMidpoint;
-        }
-
-        else {
-            // Aim at the player
-            dx = playerTank.xPos + (playerTank.size / 2) - this.xPos - this.tankMidpoint;
-            dy = playerTank.yPos + (playerTank.size / 2) - this.yPos - this.tankMidpoint;
-        }
-
+        dx = playerTank.xPos + (playerTank.size / 2) - this.xPos - this.tankMidpoint;
+        dy = playerTank.yPos + (playerTank.size / 2) - this.yPos - this.tankMidpoint;
         let theta = Math.atan2(dy, dx);
         if (theta < 0) {
             theta += 2 * Math.PI;
