@@ -1,5 +1,6 @@
 import { ObstacleCanvas } from "./ObstacleCanvas";
 import { Tank } from "./Tank";
+import tankDestroy from "../assets/audio/tankDestroy.mp3"
 
 export class Ammunition {
     public xPos: number;
@@ -14,6 +15,8 @@ export class Ammunition {
     public canvasHeight: number;
     public isDestroyed: boolean;
 
+    public tankDestroyAudio: HTMLAudioElement;
+
     constructor (startX: number, startY: number, theta: number, speed: number, maxBounces: number, canvasWidth: number, canvasHeight: number, isDestroyed: boolean) {
         this.xPos = startX;
         this.yPos = startY;
@@ -26,6 +29,7 @@ export class Ammunition {
         this.canvasWidth = canvasWidth;
         this.canvasHeight = canvasHeight;
         this.isDestroyed = isDestroyed;
+        this.tankDestroyAudio = new Audio(tankDestroy)
     }
 
     updatePosition (obstacleCanvas: ObstacleCanvas): void {
@@ -89,6 +93,7 @@ export class Ammunition {
             if (this.xPos > enemyTank.xLeft && this.xPos < enemyTank.xRight && this.yPos > enemyTank.yTop && this.yPos < enemyTank.yBottom) {
                 this.isDestroyed = true;
                 enemyTank.isDestroyed = true;
+                this.tankDestroyAudio.play();
                 console.log("Enemy hit!!!");
             }
         })
@@ -114,6 +119,37 @@ export class Ammunition {
         context.strokeStyle = 'black';
         context.stroke();
         context.closePath();
+    }
+
+    willHitPlayerTank(obstacleCanvas: ObstacleCanvas, playerTank: Tank, ): boolean {
+        let predictedXPosition: number = this.xPos;
+        let predictedYPosition: number = this.yPos;
+        let predictedXVelocity: number = this.xVelocity;
+        let predictedYVelocity: number = this.yVelocity;
+        let bounces: number = 0;
+        while (bounces <= this.maxBounces) {
+            predictedXPosition += this.xVelocity;
+            predictedYPosition += this.yVelocity;
+            if (predictedXPosition <= 0 || predictedXPosition > this.canvasWidth) {
+                predictedXVelocity = -predictedXVelocity;
+                bounces++;
+            }
+            if (predictedYPosition <= 0 || predictedYPosition > this.canvasHeight) {
+                predictedYVelocity = -predictedYVelocity;
+                bounces++;
+            }
+            obstacleCanvas.obstacles.forEach(obstacle => {
+                if (predictedXPosition > obstacle.xLeft && predictedXPosition < obstacle.xRight && predictedYPosition > obstacle.yTop && predictedYPosition < obstacle.yBottom) {
+                    bounces++;
+                    predictedXVelocity = -predictedXVelocity;
+                    predictedYVelocity = -predictedYVelocity;
+                }
+            });
+            if (predictedXPosition > playerTank.xLeft && predictedXPosition < playerTank.xRight && predictedYPosition > playerTank.yTop && predictedYPosition < playerTank.yBottom) {
+                return true;
+            }
+        }
+        return false;
     }
 }
 

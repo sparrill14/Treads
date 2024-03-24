@@ -22,10 +22,12 @@ export class GameRenderer {
         }
         this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-        playerTank.updatePosition(playerTank.aimXPos, playerTank.aimYPos, playerTank)
-
+        playerTank.updatePosition()
+        playerTank.aim(playerTank.aimXPos, playerTank.aimYPos, playerTank)
         enemyTanks.forEach(tank => {
-            tank.updatePosition(tank.aimXPos, tank.aimYPos, playerTank)
+            tank.updatePosition()
+            tank.aim(tank.aimXPos, tank.aimYPos, playerTank)
+            tank.shoot(playerTank)
         });
 
         enemyTanks.forEach(tank => {

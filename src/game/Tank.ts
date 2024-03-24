@@ -104,33 +104,7 @@ export class Tank {
         context.stroke();
     }
 
-    public updatePosition(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
-        if (this.isDestroyed) {
-            return;
-        }
-
-        let dy: number;
-        let dx: number;
-
-        if (this.xPos == playerTank.xPos && this.yPos == playerTank.yPos) {
-            // Aim at the mouse
-            dx = mouseXPos - this.xPos - this.tankMidpoint;
-            dy = mouseYpos - this.yPos - this.tankMidpoint;
-        }
-
-        else {
-            // Aim at the player
-            dx = playerTank.xPos + (playerTank.size / 2) - this.xPos - this.tankMidpoint;
-            dy = playerTank.yPos + (playerTank.size / 2) - this.yPos - this.tankMidpoint;
-        }
-
-        let theta = Math.atan2(dy, dx);
-        if (theta < 0) {
-            theta += 2 * Math.PI;
-        }
-
-        this.aim(theta);
-
+    public updatePosition(): void {
         // Move the tank
         if(this.up() && this.right()) {
             this.moveNorthEast();
@@ -172,6 +146,37 @@ export class Tank {
         // Send position to controller
         this.xPos = this.xPos;
         this.yPos = this.yPos;
+    }
+
+    public aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+        if (this.isDestroyed) {
+            return;
+        }
+
+        let dy: number;
+        let dx: number;
+
+        if (this.xPos == playerTank.xPos && this.yPos == playerTank.yPos) {
+            // Aim at the mouse
+            dx = mouseXPos - this.xPos - this.tankMidpoint;
+            dy = mouseYpos - this.yPos - this.tankMidpoint;
+        }
+
+        else {
+            // Aim at the player
+            dx = playerTank.xPos + (playerTank.size / 2) - this.xPos - this.tankMidpoint;
+            dy = playerTank.yPos + (playerTank.size / 2) - this.yPos - this.tankMidpoint;
+        }
+
+        let theta = Math.atan2(dy, dx);
+        if (theta < 0) {
+            theta += 2 * Math.PI;
+        }
+        this.aimAngle = theta;
+    }
+
+    public shoot(playerTank: Tank): void {
+        return;
     }
 
     public moveNorth(): void {
@@ -338,10 +343,6 @@ export class Tank {
         }
     }
 
-    public aim(angle: number): void {
-        this.aimAngle = angle;
-    }
-
     public up(): boolean {
         return this.keyStates.ArrowUp || this.keyStates.w;
     }
@@ -391,20 +392,31 @@ export class PlayerTank extends Tank {
             }
         });
     }
+
+    public aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+        if (this.isDestroyed) {
+            return;
+        }
+        let dy: number;
+        let dx: number;
+        dx = mouseXPos - this.xPos - this.tankMidpoint;
+        dy = mouseYpos - this.yPos - this.tankMidpoint;
+        let theta = Math.atan2(dy, dx);
+        if (theta < 0) {
+            theta += 2 * Math.PI;
+        }
+        this.aimAngle = theta;
+    }
+
+    public shoot(playerTank: Tank): void {
+        // Shoot logic is in the constructor
+        return;
+    }
 }
 
 export class EnemyTank extends Tank {
     constructor(canvas: HTMLCanvasElement, reticule: Reticule, xPos: number, yPos: number, speed: number, size: number, color: string, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[]) {
         super(canvas, reticule, xPos, yPos, speed, size, color, obstacleCanvas, ammunition)
-        setInterval(() => {
-            if (this.isDestroyed) {
-                return;
-            }
-            const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
-            if (availableAmmunitionIndex !== -1) {
-                this.ammunition[availableAmmunitionIndex] = new BasicAIAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, this.canvasWidth, this.canvasHeight, false);
-            }
-        }, 5000);
     }
 }
 
@@ -417,12 +429,102 @@ export class StationaryTank extends EnemyTank {
             new BasicAIAmmunition(0, 0, 0, 0, 0, true),
         ]
         super(canvas, new NoReticule(), xPos, yPos, fastTankSpeed, fastTankSize, fastTankColor, obstacleCanvas, ammunition);
+        setInterval(() => {
+            if (this.isDestroyed) {
+                return;
+            }
+            const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
+            if (availableAmmunitionIndex !== -1) {
+                this.ammunition[availableAmmunitionIndex] = new BasicAIAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, this.canvasWidth, this.canvasHeight, false);
+            }
+        }, 5000);
+    }
+
+    public shoot(playerTank: Tank): void {
+        return;
+    }
+
+    public aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+        if (this.isDestroyed) {
+            return;
+        }
+
+        let dy: number;
+        let dx: number;
+
+        if (this.xPos == playerTank.xPos && this.yPos == playerTank.yPos) {
+            // Aim at the mouse
+            dx = mouseXPos - this.xPos - this.tankMidpoint;
+            dy = mouseYpos - this.yPos - this.tankMidpoint;
+        }
+
+        else {
+            // Aim at the player
+            dx = playerTank.xPos + (playerTank.size / 2) - this.xPos - this.tankMidpoint;
+            dy = playerTank.yPos + (playerTank.size / 2) - this.yPos - this.tankMidpoint;
+        }
+
+        let theta = Math.atan2(dy, dx);
+        if (theta < 0) {
+            theta += 2 * Math.PI;
+        }
+        this.aimAngle = theta;
+    }
+}
+
+export class StationaryRandomAimTank extends EnemyTank {
+    public aimAngleChangeAmount: number = 0
+
+    constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas) {
+        let fastTankSpeed: number = 0;
+        let fastTankSize: number = 30;
+        let fastTankColor: string = '#ffce47';
+        let ammunition: Ammunition[] = [
+            new BasicAIAmmunition(0, 0, 0, 0, 0, true),
+        ]
+        super(canvas, new NoReticule(), xPos, yPos, fastTankSpeed, fastTankSize, fastTankColor, obstacleCanvas, ammunition);
+    }
+
+    private getAngleChangeAmount(): number {
+        let max: number = 360;
+        let min: number = -360;
+        let randomAmount: number = Math.floor(Math.random() * (max - min + 1)) + min; 
+        return randomAmount;
+    }
+
+    public shoot(playerTank: Tank): void {
+        const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
+        if (availableAmmunitionIndex !== -1) {
+            this.ammunition[availableAmmunitionIndex] = new BasicAIAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, this.canvasWidth, this.canvasHeight, true);
+            let willHitPlayerTank: boolean = this.ammunition[availableAmmunitionIndex].willHitPlayerTank(this.obstacleCanvas, playerTank);
+            if (willHitPlayerTank) {
+                this.ammunition[availableAmmunitionIndex].isDestroyed = false;
+            }
+        }
+        return;
+    }
+
+    public aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+        if (this.isDestroyed) {
+            return;
+        }
+        if (this.aimAngleChangeAmount > 0) {
+            this.aimAngle += 0.01
+            this.aimAngleChangeAmount -= 1
+        }
+        else if (this.aimAngleChangeAmount < 0) {
+            this.aimAngle -= 0.01
+            this.aimAngleChangeAmount += 1
+        }
+        else {
+            this.aimAngleChangeAmount = this.getAngleChangeAmount()
+        }
     }
 }
 
 export class DefaultPlayerTank extends PlayerTank {
     constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas) {
-        let defaultPlayerTankSpeed: number = 5;
+        let defaultPlayerTankSpeed: number = 2;
         let defaultPlayerTankSize: number = 30;
         let defaultPlayerTankColor: string = '#6384a1';
         let ammunition: Ammunition[] = [
