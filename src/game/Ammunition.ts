@@ -132,9 +132,6 @@ export class Ammunition {
         let predictedYVelocity: number = this.yVelocity;
         let predictedBounces: number = 0;
         while (predictedBounces <= this.maxBounces) {
-            if (predictedBounces == 1) {
-                console.log(1);
-            }
             predictedXPosition += predictedXVelocity;
             predictedYPosition += predictedYVelocity;
             if (predictedXPosition <= 0 || predictedXPosition > this.canvasWidth) {

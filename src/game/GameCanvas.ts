@@ -20,6 +20,9 @@ export class GameCanvas {
         this.lastRenderTime = 0;
         window.addEventListener('resize', this.resizeCanvas.bind(this));
         this.playerTank = new DefaultPlayerTank(this.gameRenderer.canvas, 200, 250, obstacleCanvas);
+    }
+
+    public start() {
         requestAnimationFrame(this.gameLoop.bind(this));
     }
 
