@@ -515,10 +515,12 @@ export class PlayerTank extends Tank {
         });
 
         canvas.addEventListener('click', (event: MouseEvent) => {
-            const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
-            if (availableAmmunitionIndex !== -1) {
-                this.tankFireAudio.play()
-                this.ammunition[availableAmmunitionIndex] = new PlayerAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, canvas.width, canvas.height, false);
+            if (!this.isDestroyed) {
+                const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
+                if (availableAmmunitionIndex !== -1) {
+                    this.tankFireAudio.play()
+                    this.ammunition[availableAmmunitionIndex] = new PlayerAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, canvas.width, canvas.height, false);
+                }
             }
         });
     }
@@ -649,26 +651,19 @@ export class StationaryRandomAimTank extends EnemyTank {
 export class SimpleMovingTank extends EnemyTank {
     public aimAngleChangeAmount: number = 0
     public navigationGrid: NavigationGrid;
-    public aggressionFactor: number = 10; // Distance tank should maintain from its target
+    public aggressionFactor: number = 15; // Distance tank should maintain from its target
     public currentNode: Node;
     public path: Node[] | null = []
     public pathRecaculationInterval: number = 60;
     public drawNavigationGrid: boolean = false;
 
     constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[], navigationGrid: NavigationGrid) {
-        let simpleMovingTankSpeed: number = 3;
+        let simpleMovingTankSpeed: number = 1.2;
         let simpleMovingTankSize: number = 30;
         let simpleMovingTankColor: string = '#fd8a8a';
         super(canvas, new NoReticule(), xPos, yPos, simpleMovingTankSpeed, simpleMovingTankSize, simpleMovingTankColor, obstacleCanvas, ammunition);
         this.navigationGrid = navigationGrid
         this.currentNode = this.navigationGrid.getNodeFromTank(this)
-    }
-
-    private getAngleChangeAmount(): number {
-        let max: number = 360;
-        let min: number = -360;
-        let randomAmount: number = Math.floor(Math.random() * (max - min + 1)) + min; 
-        return randomAmount;
     }
 
     public override draw(context: CanvasRenderingContext2D): void {
@@ -825,17 +820,16 @@ export class SimpleMovingTank extends EnemyTank {
         if (this.isDestroyed) {
             return;
         }
-        if (this.aimAngleChangeAmount > 0) {
-            this.aimAngle += 0.01
-            this.aimAngleChangeAmount -= 1
+
+        let dy: number;
+        let dx: number;
+        dx = playerTank.xPos + (playerTank.size / 2) - this.xPos - this.tankMidpoint;
+        dy = playerTank.yPos + (playerTank.size / 2) - this.yPos - this.tankMidpoint;
+        let theta = Math.atan2(dy, dx);
+        if (theta < 0) {
+            theta += 2 * Math.PI;
         }
-        else if (this.aimAngleChangeAmount < 0) {
-            this.aimAngle -= 0.01
-            this.aimAngleChangeAmount += 1
-        }
-        else {
-            this.aimAngleChangeAmount = this.getAngleChangeAmount()
-        }
+        this.aimAngle = theta;
     }
 }
 

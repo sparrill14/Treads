@@ -96,7 +96,7 @@ export class Ammunition {
             return;
         }
         if (this.xPos > playerTank.xLeft && this.xPos < playerTank.xRight && this.yPos > playerTank.yTop && this.yPos < playerTank.yBottom) {
-            // playerTank.isDestroyed = true;
+            playerTank.isDestroyed = true;
             this.isDestroyed = true;
             console.log("Player Hit!!!");
         }
@@ -160,7 +160,7 @@ export class Ammunition {
 export class PlayerAmmunition extends Ammunition {
     constructor (startX: number, startY: number, theta: number, canvasWidth: number, canvasHeight: number, isDestroyed: boolean) {
         let playerAmmunitionMaxBounces: number = 1;
-        let playerAmmunitionSpeed: number = 5;
+        let playerAmmunitionSpeed: number = 4;
         super(startX, startY, theta, playerAmmunitionSpeed, playerAmmunitionMaxBounces, canvasWidth, canvasHeight, isDestroyed);
     }
 }
@@ -168,7 +168,7 @@ export class PlayerAmmunition extends Ammunition {
 export class BasicAIAmmunition extends Ammunition {
     constructor (startX: number, startY: number, theta: number, canvasWidth: number, canvasHeight: number, isDestroyed: boolean) {
         let BasicAIAmmunitionMaxBounces: number = 0;
-        let BasicAIAmmunitionSpeed: number = 10;
+        let BasicAIAmmunitionSpeed: number = 5;
         super(startX, startY, theta, BasicAIAmmunitionSpeed, BasicAIAmmunitionMaxBounces, canvasWidth, canvasHeight, isDestroyed);
     }
 }
@@ -176,7 +176,7 @@ export class BasicAIAmmunition extends Ammunition {
 export class SuperAIAmmunition extends Ammunition {
     constructor (startX: number, startY: number, theta: number, canvasWidth: number, canvasHeight: number, isDestroyed: boolean) {
         let superAIAmmunitionMaxBounces: number = 2;
-        let superAIAmmunitionSpeed: number = 11;
+        let superAIAmmunitionSpeed: number = 7;
         super(startX, startY, theta, superAIAmmunitionSpeed, superAIAmmunitionMaxBounces, canvasWidth, canvasHeight, isDestroyed);
     }
 }
