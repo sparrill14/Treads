@@ -41,31 +41,31 @@ export class LevelSelector {
     }
 
     private createSlider(): void {
-        const margin = { top: 10, right: 10, bottom: 20, left: 10 };
-        const effectiveWidth = this.sliderWidth - margin.left - margin.right;
+        const margin: { top: number; right: number; bottom: number; left: number; } = { top: 10, right: 10, bottom: 20, left: 10 };
+        const effectiveWidth: number = this.sliderWidth - margin.left - margin.right;
     
-        const scale = d3.scaleLinear()
+        const scale: d3.ScaleLinear<number, number, never> = d3.scaleLinear()
             .domain([1, this.levels])
             .range([0, effectiveWidth])
             .clamp(true);
     
-        const svg = d3.select('#slider').append('svg')
+        const svg: d3.Selection<SVGSVGElement, unknown, HTMLElement, any> = d3.select('#slider').append('svg')
             .attr('width', this.sliderWidth)
             .attr('height', 50);
     
-        const sliderGroup = svg.append('g')
+        const sliderGroup: d3.Selection<SVGGElement, unknown, HTMLElement, any> = svg.append('g')
             .attr('transform', `translate(${margin.left}, 30)`);
     
         sliderGroup.append('g')
             .call(d3.axisBottom(scale).ticks(this.levels).tickFormat(d3.format('1')));
     
-        const handle = sliderGroup.append('circle')
+        const handle: d3.Selection<SVGCircleElement, unknown, HTMLElement, any> = sliderGroup.append('circle')
             .attr('cx', scale(this.activeLevelNumber))
             .attr('cy', -10)
             .attr('r', 10)
             .style('fill', 'red')
             .style('cursor', 'ew-resize');
-        const dragHandler = d3.drag<SVGCircleElement, unknown>()
+        const dragHandler: d3.DragBehavior<SVGCircleElement, unknown, unknown> = d3.drag<SVGCircleElement, unknown>()
             .on('drag', (event) => {
                 const x = event.x - margin.left;  // Adjusting for the left margin
                 const level = Math.round(scale.invert(x));
@@ -77,14 +77,14 @@ export class LevelSelector {
     }
 
     private createJumbotron(): void {
-        const jumbotron = d3.select('#jumbotron');
+        const jumbotron: d3.Selection<d3.BaseType, unknown, HTMLElement, any> = d3.select('#jumbotron');
         for (let i = 1; i <= this.levels; i++) {
-            const box = jumbotron.append('div')
+            const box: d3.Selection<HTMLDivElement, unknown, HTMLElement, any> = jumbotron.append('div')
                 .attr('class', 'jumbotron-box inactive')
                 .on('click', () => this.updateActiveLevel(i));
 
             // Example of how you can append an SVG to a jumbotron box.
-            const svg = box.append('svg')
+            const svg: d3.Selection<SVGSVGElement, unknown, HTMLElement, any> = box.append('svg')
                 .attr('width', '100%')
                 .attr('height', '100%');
 

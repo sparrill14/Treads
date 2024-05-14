@@ -525,7 +525,7 @@ export class PlayerTank extends Tank {
         });
     }
 
-    public aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+    public override aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
         if (this.isDestroyed) {
             return;
         }
@@ -540,7 +540,7 @@ export class PlayerTank extends Tank {
         this.aimAngle = theta;
     }
 
-    public shoot(playerTank: Tank): void {
+    public override shoot(playerTank: Tank): void {
         // Shoot logic is in the constructor
         return;
     }
@@ -572,15 +572,15 @@ export class StationaryTank extends EnemyTank {
         }, 5000);
     }
 
-    public updatePosition(playerTank: Tank): void {
+    public override updatePosition(playerTank: Tank): void {
         return; 
     }
 
-    public shoot(playerTank: Tank): void {
+    public override shoot(playerTank: Tank): void {
         return;
     }
 
-    public aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+    public override aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
         if (this.isDestroyed) {
             return;
         }
@@ -614,11 +614,11 @@ export class StationaryRandomAimTank extends EnemyTank {
         return randomAmount;
     }
 
-    public updatePosition(playerTank: Tank): void {
+    public override updatePosition(playerTank: Tank): void {
         return;
     }
 
-    public shoot(playerTank: Tank): void {
+    public override shoot(playerTank: Tank): void {
         const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
         if (availableAmmunitionIndex !== -1) {
             this.ammunition[availableAmmunitionIndex].reload(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, true, this.canvasWidth, this.canvasHeight);
@@ -630,7 +630,7 @@ export class StationaryRandomAimTank extends EnemyTank {
         return;
     }
 
-    public aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+    public override aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
         if (this.isDestroyed) {
             return;
         }
@@ -693,7 +693,7 @@ export class SimpleMovingTank extends EnemyTank {
         super.draw(context);
     }
 
-    public updatePosition(playerTank: Tank): void {
+    public override updatePosition(playerTank: Tank): void {
         this.pathRecaculationInterval -= 1;
         if (this.path == null || this.path.length == 0 || this.pathRecaculationInterval == 0) {
             this.navigationGrid.reset();
@@ -804,7 +804,7 @@ export class SimpleMovingTank extends EnemyTank {
         this.yBottom = this.yPos + this.size;
     }
 
-    public shoot(playerTank: Tank): void {
+    public override shoot(playerTank: Tank): void {
         const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
         if (availableAmmunitionIndex !== -1) {
             this.ammunition[availableAmmunitionIndex].reload(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, true, this.canvasWidth, this.canvasHeight);
@@ -816,7 +816,7 @@ export class SimpleMovingTank extends EnemyTank {
         return;
     }
 
-    public aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+    public override aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
         if (this.isDestroyed) {
             return;
         }
