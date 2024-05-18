@@ -1,15 +1,16 @@
-import { Tank, DefaultPlayerTank } from './Tank';
+import { Tank } from './Tank';
 import { GameRenderer } from './GameRenderer';
 import { ObstacleCanvas } from './ObstacleCanvas';
 
 export class GameCanvas {
     public gameRenderer: GameRenderer;
-    private playerTank: Tank;
+    private playerTank: Tank | null = null;
     private enemyTanks: Tank[] = [];
     private lastRenderTime: number;
     public obstacleCanvas: ObstacleCanvas;
     public width: number;
     public height: number;
+    public animationFrameID: number | null = null;
 
     constructor(canvasSelector: string, width: number, height: number, obstacleCanvas: ObstacleCanvas) {
         this.width = width;
@@ -19,8 +20,19 @@ export class GameCanvas {
         this.gameRenderer.initializeCanvas(this.width, this.height);
         this.lastRenderTime = 0;
         window.addEventListener('resize', this.resizeCanvas.bind(this));
-        this.playerTank = new DefaultPlayerTank(this.gameRenderer.canvas, 200, 250, obstacleCanvas);
-        requestAnimationFrame(this.gameLoop.bind(this));
+    }
+
+    public start() {
+        if (!this.animationFrameID) {
+            this.animationFrameID = requestAnimationFrame(this.gameLoop.bind(this));
+        }
+    }
+
+    public stop() {
+        if (this.animationFrameID) {
+            cancelAnimationFrame(this.animationFrameID)
+            this.animationFrameID = null;
+        }
     }
 
     private resizeCanvas(): void {
@@ -28,13 +40,20 @@ export class GameCanvas {
     }
 
     private gameLoop(timeStamp: number): void {
+        if (this.playerTank == null) {
+            return;
+        }
         const progress = timeStamp - this.lastRenderTime;
         this.gameRenderer.render(progress, this.playerTank, this.enemyTanks);
         this.lastRenderTime = timeStamp;
-        requestAnimationFrame(this.gameLoop.bind(this));
+        this.animationFrameID = requestAnimationFrame(this.gameLoop.bind(this));
     }
 
     public addEnemyTank(tank: Tank): void {
         this.enemyTanks.push(tank);
+    }
+
+    public addPlayerTank(tank: Tank): void {
+        this.playerTank = tank;
     }
 }

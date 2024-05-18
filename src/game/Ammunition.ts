@@ -1,6 +1,6 @@
 import { ObstacleCanvas } from "./ObstacleCanvas";
 import { Tank } from "./Tank";
-import tankDestroy from "../assets/audio/tankDestroy.mp3"
+import { AudioFile, AudioManager } from "./AudioManager";
 
 export class Ammunition {
     public xPos: number;
@@ -14,10 +14,9 @@ export class Ammunition {
     public canvasWidth: number;
     public canvasHeight: number;
     public isDestroyed: boolean;
+    public audioManager: AudioManager;
 
-    public tankDestroyAudio: HTMLAudioElement;
-
-    constructor (startX: number, startY: number, theta: number, speed: number, maxBounces: number, canvasWidth: number, canvasHeight: number, isDestroyed: boolean) {
+    constructor (startX: number, startY: number, theta: number, speed: number, maxBounces: number, canvasWidth: number, canvasHeight: number, isDestroyed: boolean, audioManager: AudioManager) {
         this.xPos = startX;
         this.yPos = startY;
         this.theta = theta;
@@ -29,7 +28,7 @@ export class Ammunition {
         this.canvasWidth = canvasWidth;
         this.canvasHeight = canvasHeight;
         this.isDestroyed = isDestroyed;
-        this.tankDestroyAudio = new Audio(tankDestroy)
+        this.audioManager = audioManager;
     }
 
     updatePosition (obstacleCanvas: ObstacleCanvas): void {
@@ -93,7 +92,7 @@ export class Ammunition {
             if (this.xPos > enemyTank.xLeft && this.xPos < enemyTank.xRight && this.yPos > enemyTank.yTop && this.yPos < enemyTank.yBottom) {
                 this.isDestroyed = true;
                 enemyTank.isDestroyed = true;
-                this.tankDestroyAudio.play();
+                this.audioManager.play(AudioFile.TANK_DESTROY);
                 console.log("Enemy hit!!!");
             }
         })
@@ -110,9 +109,21 @@ export class Ammunition {
         }
     }
 
+    reload (startX: number, startY: number, theta: number, isDestroyed: boolean, canvasWidth: number, canvasHeight: number, ) {
+        this.xPos = startX;
+        this.yPos = startY;
+        this.theta = theta;
+        this.isDestroyed = isDestroyed;
+        this.xVelocity = Math.cos(this.theta) * this.speed;
+        this.yVelocity = Math.sin(this.theta) * this.speed;
+        this.canvasWidth = canvasWidth;
+        this.canvasHeight = canvasHeight;
+        this.bounces = 0;
+    }
+
     draw (context: CanvasRenderingContext2D): void {
         context.beginPath();
-        context.arc(this.xPos, this.yPos, 3, 0, 2 * Math.PI);
+        context.arc(this.xPos, this.yPos, 4, 0, 2 * Math.PI);
         context.fillStyle = 'white';
         context.fill();
         context.lineWidth = 2;
@@ -154,17 +165,25 @@ export class Ammunition {
 }
 
 export class PlayerAmmunition extends Ammunition {
-    constructor (startX: number, startY: number, theta: number, canvasWidth: number, canvasHeight: number, isDestroyed: boolean) {
+    constructor (startX: number, startY: number, theta: number, canvasWidth: number, canvasHeight: number, isDestroyed: boolean, audioManager: AudioManager) {
         let playerAmmunitionMaxBounces: number = 1;
-        let playerAmmunitionSpeed: number = 5;
-        super(startX, startY, theta, playerAmmunitionSpeed, playerAmmunitionMaxBounces, canvasWidth, canvasHeight, isDestroyed);
+        let playerAmmunitionSpeed: number = 4;
+        super(startX, startY, theta, playerAmmunitionSpeed, playerAmmunitionMaxBounces, canvasWidth, canvasHeight, isDestroyed, audioManager);
     }
 }
 
 export class BasicAIAmmunition extends Ammunition {
-    constructor (startX: number, startY: number, theta: number, canvasWidth: number, canvasHeight: number, isDestroyed: boolean) {
+    constructor (startX: number, startY: number, theta: number, canvasWidth: number, canvasHeight: number, isDestroyed: boolean, audioManager: AudioManager) {
         let BasicAIAmmunitionMaxBounces: number = 0;
-        let BasicAIAmmunitionSpeed: number = 10;
-        super(startX, startY, theta, BasicAIAmmunitionSpeed, BasicAIAmmunitionMaxBounces, canvasWidth, canvasHeight, isDestroyed);
+        let BasicAIAmmunitionSpeed: number = 4;
+        super(startX, startY, theta, BasicAIAmmunitionSpeed, BasicAIAmmunitionMaxBounces, canvasWidth, canvasHeight, isDestroyed, audioManager);
+    }
+}
+
+export class SuperAIAmmunition extends Ammunition {
+    constructor (startX: number, startY: number, theta: number, canvasWidth: number, canvasHeight: number, isDestroyed: boolean, audioManager: AudioManager) {
+        let superAIAmmunitionMaxBounces: number = 2;
+        let superAIAmmunitionSpeed: number = 7;
+        super(startX, startY, theta, superAIAmmunitionSpeed, superAIAmmunitionMaxBounces, canvasWidth, canvasHeight, isDestroyed, audioManager);
     }
 }

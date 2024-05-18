@@ -2,6 +2,8 @@ import { Tank } from "./Tank";
 
 export class GameRenderer {
     private context: CanvasRenderingContext2D | null;
+    public playerWin: boolean = false;
+    public enemyWin: boolean = false;
 
     constructor(public canvas: HTMLCanvasElement) {
         const context = this.canvas.getContext('2d');
@@ -22,36 +24,60 @@ export class GameRenderer {
         }
         this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-        playerTank.updatePosition()
-        playerTank.aim(playerTank.aimXPos, playerTank.aimYPos, playerTank)
-        enemyTanks.forEach(tank => {
-            tank.updatePosition()
-            tank.aim(tank.aimXPos, tank.aimYPos, playerTank)
-            tank.shoot(playerTank)
-        });
-
-        enemyTanks.forEach(tank => {
-            tank.draw(this.context as CanvasRenderingContext2D)
-            tank.reticule.draw(this.context as CanvasRenderingContext2D, tank.xPos, tank.yPos, tank.aimXPos, tank.aimYPos);
-            tank.ammunition.forEach(ammunition => {
+        if (playerTank.isDestroyed) {
+            this.enemyWin = true;
+        }
+        else if (enemyTanks.every(tank => tank.isDestroyed)) {
+            this.playerWin = true;
+        }
+        else {
+            playerTank.updatePosition(playerTank)
+            playerTank.aim(playerTank.aimXPos, playerTank.aimYPos, playerTank)
+            
+            enemyTanks.forEach(enemyTank => {
+                enemyTank.updatePosition(playerTank)
+                enemyTank.aim(enemyTank.aimXPos, enemyTank.aimYPos, playerTank)
+                enemyTank.shoot(playerTank)
+                enemyTank.plantBomb(playerTank);
+            });
+    
+            enemyTanks.forEach(enemyTank => {
+                enemyTank.draw(this.context as CanvasRenderingContext2D)
+                enemyTank.reticule.draw(this.context as CanvasRenderingContext2D, enemyTank.xPos, enemyTank.yPos, enemyTank.aimXPos, enemyTank.aimYPos);
+                enemyTank.ammunition.forEach(ammunition => {
+                    if(ammunition.isDestroyed) {
+                        return;
+                    }
+                    ammunition.updatePosition(enemyTank.obstacleCanvas);
+                    ammunition.checkPlayerHit(playerTank);
+                    ammunition.draw(this.context as CanvasRenderingContext2D);
+                });
+                enemyTank.bombs.forEach(bomb => {
+                    if(bomb.isDestroyed && !bomb.isExploding) {
+                        return;
+                    }
+                    bomb.checkPlayerHit(playerTank);
+                    bomb.draw(this.context as CanvasRenderingContext2D);
+                });
+            });
+    
+            playerTank.draw(this.context as CanvasRenderingContext2D)
+            playerTank.reticule.draw(this.context as CanvasRenderingContext2D, playerTank.xPos, playerTank.yPos, playerTank.aimXPos, playerTank.aimYPos);
+            playerTank.ammunition.forEach(ammunition => {
                 if(ammunition.isDestroyed) {
                     return;
                 }
-                ammunition.updatePosition(tank.obstacleCanvas);
-                ammunition.checkPlayerHit(playerTank);
+                ammunition.updatePosition(playerTank.obstacleCanvas);
+                ammunition.checkEnemyHit(enemyTanks);
                 ammunition.draw(this.context as CanvasRenderingContext2D);
             });
-        });
-
-        playerTank.draw(this.context as CanvasRenderingContext2D)
-        playerTank.reticule.draw(this.context as CanvasRenderingContext2D, playerTank.xPos, playerTank.yPos, playerTank.aimXPos, playerTank.aimYPos);
-        playerTank.ammunition.forEach(ammunition => {
-            if(ammunition.isDestroyed) {
-                return;
-            }
-            ammunition.updatePosition(playerTank.obstacleCanvas);
-            ammunition.checkEnemyHit(enemyTanks);
-            ammunition.draw(this.context as CanvasRenderingContext2D);
-        });
+            playerTank.bombs.forEach(bomb => {
+                if(bomb.isDestroyed && !bomb.isExploding) {
+                    return;
+                }
+                bomb.checkEnemyHit(enemyTanks);
+                bomb.draw(this.context as CanvasRenderingContext2D);
+            });
+        }
     }
 }

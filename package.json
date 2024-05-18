@@ -6,8 +6,23 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "webpack serve --open --config webpack.dev.js",
-    "build": "webpack --config webpack.prod.js"
+    "build": "webpack --config webpack.prod.js",
+    "build:dev": "webpack --config webpack.dev.js",
+    "build:prod": "webpack --config webpack.prod.js",
+    "prebuild": "echo \"Build started ...\"",
+    "postbuild": "echo \"Build completed successfully.\""
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sparrill14/Treads.git"
+  },
+  "keywords": [
+    "game",
+    "tanks",
+    "strategy",
+    "top-down",
+    "2d"
+  ],
   "author": "Steven Parrill",
   "license": "MIT",
   "devDependencies": {
