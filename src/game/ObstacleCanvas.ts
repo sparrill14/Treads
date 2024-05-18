@@ -19,6 +19,14 @@ export class ObstacleCanvas {
         });
     }
 
+    public clearObstacles(): void {
+        const context = this.obstacleCanvas.getContext('2d');
+        if (context) {
+            context.clearRect(0, 0, this.obstacleCanvas.width, this.obstacleCanvas.height);
+        }
+        this.obstacles = [];
+    }
+
     private resizeCanvas(): void {
 
     }

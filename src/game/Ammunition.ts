@@ -45,36 +45,29 @@ export class Ammunition {
             this.bounces++;
         }
 
-        // Loop through obstacles and check for collision. Increment bounces if collision is detected. Change the velocity of the ammunition based on the angle of collision.
         obstacleCanvas.obstacles.forEach(obstacle => {
             if (this.xPos > obstacle.xLeft && this.xPos < obstacle.xRight && this.yPos > obstacle.yTop && this.yPos < obstacle.yBottom) {
               this.bounces++;
               
-              // Determine the side of the collision and respond accordingly
               const fromLeft = Math.abs(this.xPos - obstacle.xLeft);
               const fromRight = Math.abs(this.xPos - obstacle.xRight);
               const fromTop = Math.abs(this.yPos - obstacle.yTop);
               const fromBottom = Math.abs(this.yPos - obstacle.yBottom);
           
-              // Find the minimum distance to figure out the closest collision side
               const minDistance = Math.min(fromLeft, fromRight, fromTop, fromBottom);
           
               if (minDistance === fromTop) {
-                // Projectile hits obstacle from the top
-                this.yPos = obstacle.yTop - 1; // Adjust position slightly to prevent overlap
-                this.yVelocity = -this.yVelocity; // Invert Y velocity
+                this.yPos = obstacle.yTop - 1;
+                this.yVelocity = -this.yVelocity;
               } else if (minDistance === fromBottom) {
-                // Projectile hits obstacle from the bottom
-                this.yPos = obstacle.yBottom + 1; // Adjust position slightly to prevent overlap
-                this.yVelocity = -this.yVelocity; // Invert Y velocity
+                this.yPos = obstacle.yBottom + 1;
+                this.yVelocity = -this.yVelocity;
               } else if (minDistance === fromLeft) {
-                // Projectile hits obstacle from the left
-                this.xPos = obstacle.xLeft - 1; // Adjust position slightly to prevent overlap
-                this.xVelocity = -this.xVelocity; // Invert X velocity
+                this.xPos = obstacle.xLeft - 1;
+                this.xVelocity = -this.xVelocity;
               } else if (minDistance === fromRight) {
-                // Projectile hits obstacle from the right
-                this.xPos = obstacle.xRight + 1; // Adjust position slightly to prevent overlap
-                this.xVelocity = -this.xVelocity; // Invert X velocity
+                this.xPos = obstacle.xRight + 1;
+                this.xVelocity = -this.xVelocity;
               }
             }
         });
@@ -103,7 +96,7 @@ export class Ammunition {
             return;
         }
         if (this.xPos > playerTank.xLeft && this.xPos < playerTank.xRight && this.yPos > playerTank.yTop && this.yPos < playerTank.yBottom) {
-            // playerTank.isDestroyed = true;
+            playerTank.isDestroyed = true;
             this.isDestroyed = true;
             console.log("Player Hit!!!");
         }

@@ -18,6 +18,32 @@ export class GameRenderer {
         this.canvas.height = height;
     }
 
+    renderLevelOverScreen() {
+        if (!this.context) {
+            throw new Error('2d context not supported or canvas element not found.');
+        }
+
+        const message = this.playerWin ? "Win" : this.enemyWin ? "Lose" : "";
+        if (message === "") {
+            return;
+        }
+
+        const fontSize = 100;
+        this.context.font = `${fontSize}px Arial`;
+        this.context.lineWidth = 5;
+        this.context.strokeStyle = this.playerWin ? 'green' : 'red';
+        this.context.fillStyle = this.playerWin ? 'green' : 'red';
+
+        const textWidth = this.context.measureText(message).width;
+        const x = (this.canvas.width - textWidth) / 2;
+        const y = this.canvas.height / 2 + fontSize / 2;
+
+        this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.context.strokeText(message, x, y);
+        this.context.fillText(message, x, y);
+    }
+
+
     render(progress: number, playerTank: Tank, enemyTanks: Tank[]): void {
         if (!this.context) {
             throw new Error('2d context not supported or canvas element not found.');
