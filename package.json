@@ -8,11 +8,9 @@
     "start": "webpack serve --open --config webpack.dev.js",
     "build": "webpack --config webpack.prod.js",
     "build:dev": "webpack --config webpack.dev.js",
-    "build:prod": "webpack --mode production --config webpack.prod.js",
+    "build:prod": "webpack --config webpack.prod.js",
     "prebuild": "echo \"Build started ...\"",
-    "postbuild": "echo \"Build completed successfully.\"",
-    "watch": "webpack --watch",
-    "serve": "webpack-dev-server --open"
+    "postbuild": "echo \"Build completed successfully.\""
   },
   "repository": {
     "type": "git",

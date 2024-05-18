@@ -1,16 +1,16 @@
-import { Tank, DefaultPlayerTank } from './Tank';
+import { Tank } from './Tank';
 import { GameRenderer } from './GameRenderer';
 import { ObstacleCanvas } from './ObstacleCanvas';
 
 export class GameCanvas {
     public gameRenderer: GameRenderer;
-    private playerTank: Tank;
+    private playerTank: Tank | null = null;
     private enemyTanks: Tank[] = [];
     private lastRenderTime: number;
     public obstacleCanvas: ObstacleCanvas;
     public width: number;
     public height: number;
-    public animationFrameID: number | null;
+    public animationFrameID: number | null = null;
 
     constructor(canvasSelector: string, width: number, height: number, obstacleCanvas: ObstacleCanvas) {
         this.width = width;
@@ -21,7 +21,6 @@ export class GameCanvas {
         this.gameRenderer.initializeCanvas(this.width, this.height);
         this.lastRenderTime = 0;
         window.addEventListener('resize', this.resizeCanvas.bind(this));
-        this.playerTank = new DefaultPlayerTank(this.gameRenderer.canvas, 200, 250, obstacleCanvas);
     }
 
     public start() {
@@ -42,15 +41,17 @@ export class GameCanvas {
     }
 
     private gameLoop(timeStamp: number): void {
-        const progress = timeStamp - this.lastRenderTime;
-        this.gameRenderer.render(progress, this.playerTank, this.enemyTanks);
-        if (this.gameRenderer.enemyWin || this.gameRenderer.playerWin) {
-            this.stop();
-            this.obstacleCanvas.clearObstacles();
-            this.gameRenderer.renderLevelOverScreen();
+        if (this.playerTank != null) {
+            const progress = timeStamp - this.lastRenderTime;
+            this.gameRenderer.render(progress, this.playerTank, this.enemyTanks);
+            if (this.gameRenderer.enemyWin || this.gameRenderer.playerWin) {
+                this.stop();
+                this.obstacleCanvas.clearObstacles();
+                this.gameRenderer.renderLevelOverScreen();
+            }
+            this.lastRenderTime = timeStamp;
+            this.animationFrameID = requestAnimationFrame(this.gameLoop.bind(this));
         }
-        this.lastRenderTime = timeStamp;
-        this.animationFrameID = requestAnimationFrame(this.gameLoop.bind(this));
     }
 
     public addEnemyTank(tank: Tank): void {

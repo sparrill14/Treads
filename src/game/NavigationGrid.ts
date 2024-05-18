@@ -60,22 +60,17 @@ export class NavigationGrid {
         let xGridCoordinate: number = Math.floor((tank.xPos + (tank.size / 2)) / this.gridCellWidth);
         let yGridCoordinate: number = Math.floor((tank.yPos + (tank.size / 2)) / this.gridCellWidth);
 
-        // Ensure the coordinates are within the grid bounds
         xGridCoordinate = Math.max(0, Math.min(xGridCoordinate, this.gridXLength - 1));
         yGridCoordinate = Math.max(0, Math.min(yGridCoordinate, this.gridYLength - 1));
         return this.grid[xGridCoordinate][yGridCoordinate]
     }
 
-    getNodeInRadiusOfTarget(target: Node, aggressionFactor: number): Node {
-        // Iterate through the grid to find nodes within the specified radius from the target
-        const radius = aggressionFactor; // Radius of the circle based on aggression factor
+    getRandomNodeInRadiusOfTarget(target: Node, radius: number): Node {
         const candidateNodes: Node[] = [];
         for (let x = 0; x < this.gridXLength; x++) {
             for (let y = 0; y < this.gridYLength; y++) {
                 const node = this.grid[x][y];
                 const distance = Math.sqrt(Math.pow(node.x - target.x, 2) + Math.pow(node.y - target.y, 2));
-                
-                // If the node is within the radius and walkable, it's a candidate
                 if (distance <= radius + 1 && distance >= radius - 1 && node.walkable) {
                     candidateNodes.push(node);
                 }

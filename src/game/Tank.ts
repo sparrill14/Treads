@@ -2,8 +2,9 @@ import { KeyStates } from "../utils/KeyStates";
 import { Ammunition, BasicAIAmmunition, PlayerAmmunition } from "./Ammunition";
 import { ObstacleCanvas } from "./ObstacleCanvas";
 import { Reticule, AdjustingCustomColorReticule, NoReticule } from "./Reticule";
-import tankFire from "../assets/audio/tankFire.mp3"
 import { NavigationGrid, Node } from "./NavigationGrid";
+import { Bomb, PlayerBomb } from "./Bomb";
+import { AudioFile, AudioManager } from "./AudioManager";
 
 export enum Direction {
     NORTH = 1,
@@ -36,6 +37,18 @@ export class Tank {
     public lastDirectionMoved: Direction = Direction.UNKNOWN;
     public wasLastMoveBlocked: boolean = false;
     public consecutiveDirectionMoves: number = 0;
+    public audioManager: AudioManager;
+    public aimAngle: number;
+    public aimXPos: number;
+    public aimYPos: number;
+    public xOffset: number;
+    public yOffset: number;
+    public ammunition: Ammunition[] = [];
+    public maxAmmunition: number;
+    public bombs: Bomb[] = [];
+    public maxBombs: number;
+    public canvasWidth: number;
+    public canvasHeight: number;
 
     public keyStates: KeyStates = {
         ArrowUp: false,
@@ -52,18 +65,7 @@ export class Tank {
         D: false
     }
 
-    public aimAngle: number;
-    public aimXPos: number;
-    public aimYPos: number;
-    public xOffset: number;
-    public yOffset: number;
-    public ammunition: Ammunition[] = [];
-    public maxAmmunition: number;
-
-    protected canvasWidth: number;
-    protected canvasHeight: number;
-
-    constructor(canvas: HTMLCanvasElement, reticule: Reticule, xPos: number, yPos: number, speed: number, size: number, color: string, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[]) {
+    constructor(canvas: HTMLCanvasElement, reticule: Reticule, xPos: number, yPos: number, speed: number, size: number, color: string, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[], bombs: Bomb[], audioManager: AudioManager) {
         this.reticule = reticule;
         this.xPos = xPos;
         this.yPos = yPos;
@@ -79,13 +81,16 @@ export class Tank {
         this.obstacleCanvas = obstacleCanvas;
         this.tankMidpoint = this.size / 2;
         this.ammunition = ammunition;
-        this.maxAmmunition = ammunition.length
+        this.maxAmmunition = ammunition.length;
+        this.bombs = bombs;
+        this.maxBombs = bombs.length;
+        this.audioManager = audioManager;
 
         this.aimAngle = 90;
         const canvasRect: DOMRect = canvas.getBoundingClientRect();
         this.xOffset = canvasRect.left;
         this.yOffset = canvasRect.top;
-        // Set the initital awX and Y aim position to the center of the canvas
+        // Set the initital X and Y aim position to the center of the canvas
         this.aimXPos = canvas.width / 2;
         this.aimYPos = canvas.height / 2;
     }
@@ -118,6 +123,7 @@ export class Tank {
     }
 
     public updatePosition(playerTank: Tank): void {
+        // Move the tank
         if(this.up() && this.right()) {
             this.moveNorthEast();
         }
@@ -173,6 +179,19 @@ export class Tank {
     }
 
     public shoot(playerTank: Tank): void {
+        return;
+    }
+
+    public plantBomb(playerTank: Tank): void {
+        if (!this.isDestroyed) {
+            const availableBombIndex = this.bombs.findIndex(bomb => bomb.isDestroyed)
+            if (availableBombIndex !== -1) {
+                this.bombs[availableBombIndex].xPos = this.xPos + (this.size / 2);
+                this.bombs[availableBombIndex].yPos = this.yPos + (this.size / 2);
+                this.bombs[availableBombIndex].isDestroyed = false;
+                this.bombs[availableBombIndex].setFuse();
+            }
+        }
         return;
     }
 
@@ -491,15 +510,18 @@ export class Tank {
 }
 
 export class PlayerTank extends Tank {
-    public tankFireAudio: HTMLAudioElement;
-
-    constructor(canvas: HTMLCanvasElement, reticule: Reticule, xPos: number, yPos: number, speed: number, size: number, color: string, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[]) {
-        super(canvas, reticule, xPos, yPos, speed, size, color, obstacleCanvas, ammunition)
-        this.tankFireAudio = new Audio(tankFire)
+    constructor(canvas: HTMLCanvasElement, reticule: Reticule, xPos: number, yPos: number, speed: number, size: number, color: string, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[], bombs: Bomb[], audioManager: AudioManager) {
+        super(canvas, reticule, xPos, yPos, speed, size, color, obstacleCanvas, ammunition, bombs, audioManager)
 
         document.addEventListener('keydown', (event: KeyboardEvent) => {
             if (this.keyStates.hasOwnProperty(event.key)) {
                 this.keyStates[event.key] = true;
+            }
+        });
+
+        document.addEventListener('keydown', (event: KeyboardEvent) => {
+            if (event.code === 'Space') {
+                this.plantBomb(this);
             }
         });
 
@@ -515,13 +537,7 @@ export class PlayerTank extends Tank {
         });
 
         canvas.addEventListener('click', (event: MouseEvent) => {
-            if (!this.isDestroyed) {
-                const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
-                if (availableAmmunitionIndex !== -1) {
-                    this.tankFireAudio.play()
-                    this.ammunition[availableAmmunitionIndex] = new PlayerAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, canvas.width, canvas.height, false);
-                }
-            }
+            this.shoot(this);
         });
     }
 
@@ -541,42 +557,54 @@ export class PlayerTank extends Tank {
     }
 
     public override shoot(playerTank: Tank): void {
-        // Shoot logic is in the constructor
+        if (!this.isDestroyed) {
+            const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
+            if (availableAmmunitionIndex !== -1) {
+                this.audioManager.play(AudioFile.TANK_FIRE);
+                this.ammunition[availableAmmunitionIndex] = new PlayerAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, this.canvasWidth, this.canvasHeight, false, this.audioManager);
+            }
+        }
         return;
     }
 }
 
 export class EnemyTank extends Tank {
-    constructor(canvas: HTMLCanvasElement, reticule: Reticule, xPos: number, yPos: number, speed: number, size: number, color: string, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[]) {
-        super(canvas, reticule, xPos, yPos, speed, size, color, obstacleCanvas, ammunition)
+    constructor(canvas: HTMLCanvasElement, reticule: Reticule, xPos: number, yPos: number, speed: number, size: number, color: string, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[], bombs: Bomb[], audioManager: AudioManager) {
+        super(canvas, reticule, xPos, yPos, speed, size, color, obstacleCanvas, ammunition, bombs, audioManager)
     }
 }
 
 export class StationaryTank extends EnemyTank {
-    constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas) {
+    minTimeBetweenShotsMS: number = 5000;
+    canTakeShot: boolean = true;
+
+    constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas, audioManager: AudioManager) {
         let fastTankSpeed: number = 0;
         let fastTankSize: number = 30;
         let fastTankColor: string = '#5784ba';
         let ammunition: Ammunition[] = [
-            new BasicAIAmmunition(0, 0, 0, 0, 0, true),
+            new BasicAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
         ]
-        super(canvas, new NoReticule(), xPos, yPos, fastTankSpeed, fastTankSize, fastTankColor, obstacleCanvas, ammunition);
-        setInterval(() => {
-            if (this.isDestroyed) {
-                return;
-            }
-            const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
-            if (availableAmmunitionIndex !== -1) {
-                this.ammunition[availableAmmunitionIndex] = new BasicAIAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, this.canvasWidth, this.canvasHeight, false);
-            }
-        }, 5000);
+        let bombs: Bomb[] = [];
+        super(canvas, new NoReticule(), xPos, yPos, fastTankSpeed, fastTankSize, fastTankColor, obstacleCanvas, ammunition, bombs, audioManager);
     }
 
     public override updatePosition(playerTank: Tank): void {
         return; 
     }
 
-    public override shoot(playerTank: Tank): void {
+    public override shoot(): void {
+        if (!this.canTakeShot || this.isDestroyed) {
+            return;
+        }
+        const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
+        if (availableAmmunitionIndex !== -1) {
+            this.ammunition[availableAmmunitionIndex] = new BasicAIAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, this.canvasWidth, this.canvasHeight, false, this.audioManager);
+            this.canTakeShot = false;
+            setTimeout(() => {
+                this.canTakeShot = true;
+            }, this.minTimeBetweenShotsMS)
+        }
         return;
     }
 
@@ -600,11 +628,12 @@ export class StationaryTank extends EnemyTank {
 export class StationaryRandomAimTank extends EnemyTank {
     public aimAngleChangeAmount: number = 0
 
-    constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[]) {
+    constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[], audioManager: AudioManager) {
         let fastTankSpeed: number = 0;
         let fastTankSize: number = 30;
         let fastTankColor: string = '#ebe1b9';
-        super(canvas, new NoReticule(), xPos, yPos, fastTankSpeed, fastTankSize, fastTankColor, obstacleCanvas, ammunition);
+        let bombs: Bomb[] = [];
+        super(canvas, new NoReticule(), xPos, yPos, fastTankSpeed, fastTankSize, fastTankColor, obstacleCanvas, ammunition, bombs, audioManager);
     }
 
     private getAngleChangeAmount(): number {
@@ -621,7 +650,7 @@ export class StationaryRandomAimTank extends EnemyTank {
     public override shoot(playerTank: Tank): void {
         const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
         if (availableAmmunitionIndex !== -1) {
-            this.ammunition[availableAmmunitionIndex].reload(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, true, this.canvasWidth, this.canvasHeight);
+            this.ammunition[availableAmmunitionIndex] = new BasicAIAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, this.canvasWidth, this.canvasHeight, true, this.audioManager);
             let willHitPlayerTank: boolean = this.ammunition[availableAmmunitionIndex].willHitPlayerTank(this.obstacleCanvas, playerTank);
             if (willHitPlayerTank) {
                 this.ammunition[availableAmmunitionIndex].isDestroyed = false;
@@ -646,7 +675,7 @@ export class StationaryRandomAimTank extends EnemyTank {
             this.aimAngleChangeAmount = this.getAngleChangeAmount()
         }
     }
-} 
+}
 
 export class SimpleMovingTank extends EnemyTank {
     public aimAngleChangeAmount: number = 0
@@ -657,11 +686,11 @@ export class SimpleMovingTank extends EnemyTank {
     public pathRecaculationInterval: number = 60;
     public drawNavigationGrid: boolean = false;
 
-    constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[], navigationGrid: NavigationGrid) {
+    constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[], bombs: Bomb[], navigationGrid: NavigationGrid, audioManager: AudioManager) {
         let simpleMovingTankSpeed: number = 1.2;
         let simpleMovingTankSize: number = 30;
         let simpleMovingTankColor: string = '#fd8a8a';
-        super(canvas, new NoReticule(), xPos, yPos, simpleMovingTankSpeed, simpleMovingTankSize, simpleMovingTankColor, obstacleCanvas, ammunition);
+        super(canvas, new NoReticule(), xPos, yPos, simpleMovingTankSpeed, simpleMovingTankSize, simpleMovingTankColor, obstacleCanvas, ammunition, bombs, audioManager);
         this.navigationGrid = navigationGrid
         this.currentNode = this.navigationGrid.getNodeFromTank(this)
     }
@@ -699,7 +728,7 @@ export class SimpleMovingTank extends EnemyTank {
             this.navigationGrid.reset();
             let startNode: Node = this.navigationGrid.getNodeFromTank(this);
             let targetNode: Node = this.navigationGrid.getNodeFromTank(playerTank);
-            let destinationNode: Node = this.navigationGrid.getNodeInRadiusOfTarget(targetNode, this.aggressionFactor);
+            let destinationNode: Node = this.navigationGrid.getRandomNodeInRadiusOfTarget(targetNode, this.aggressionFactor);
             this.path = this.navigationGrid.aStar(startNode, destinationNode);
             this.pathRecaculationInterval = 60;
             if (this.path == null) {
@@ -714,7 +743,7 @@ export class SimpleMovingTank extends EnemyTank {
                 let randomDirection: Direction = this.getRandomDirection();
                 this.moveInCardinalDirection(randomDirection);
                 this.consecutiveDirectionMoves = 0;
-                let randomNumber: number = Math.random()
+                let randomNumber: number = Math.random();
                 if (dx === 1 && dy === 0) {
                     if (randomNumber < 0.5) {
                         this.moveSouthEast();
@@ -794,7 +823,7 @@ export class SimpleMovingTank extends EnemyTank {
             }
 
             if(this.path[0].x == this.currentNode.x && this.path[0].y == this.currentNode.y) {
-                this.path.splice(0, 1)
+                this.path.splice(0, 1);
             }
         }
 
@@ -833,18 +862,238 @@ export class SimpleMovingTank extends EnemyTank {
     }
 }
 
+export class BomberTank extends EnemyTank {
+    public aimAngleChangeAmount: number = 0
+    public navigationGrid: NavigationGrid;
+    public aggressionFactor: number = 5; // Distance tank should maintain from its target
+    public currentNode: Node;
+    public path: Node[] | null = []
+    public pathRecaculationInterval: number = 60;
+    public drawNavigationGrid: boolean = false;
+
+    public minTimeBetweenShotsMS: number = 20000;
+    public timeBetweenShotsIsElapsed: boolean = true;
+    public minTimeBetweenBombPlantsMS: number = 1000;
+    public timeBetweenPlantsIsElapsed: boolean = true;
+
+    constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[], bombs: Bomb[], navigationGrid: NavigationGrid, audioManager: AudioManager) {
+        let simpleMovingTankSpeed: number = 2;
+        let simpleMovingTankSize: number = 30;
+        let simpleMovingTankColor: string = 'yellow';
+        super(canvas, new NoReticule(), xPos, yPos, simpleMovingTankSpeed, simpleMovingTankSize, simpleMovingTankColor, obstacleCanvas, ammunition, bombs, audioManager);
+        this.navigationGrid = navigationGrid
+        this.currentNode = this.navigationGrid.getNodeFromTank(this)
+    }
+
+    public override draw(context: CanvasRenderingContext2D): void {
+        if (this.drawNavigationGrid) {
+            context.lineWidth = 1;
+            for (let i = 0; i <= this.navigationGrid.gridYLength; i++) {
+                context.fillStyle = "blue"
+                context.beginPath();
+                context.moveTo(0, i * this.navigationGrid.gridCellWidth);
+                context.lineTo(this.navigationGrid.gridXLength * this.navigationGrid.gridCellWidth, i * this.navigationGrid.gridCellWidth);
+                context.stroke();
+            }
+            for (let j = 0; j <= this.navigationGrid.gridXLength; j++) {
+                context.fillStyle = "blue"
+                context.beginPath();
+                context.moveTo(j * this.navigationGrid.gridCellWidth, 0);
+                context.lineTo(j * this.navigationGrid.gridCellWidth, this.navigationGrid.gridXLength * this.navigationGrid.gridCellWidth);
+                context.stroke();
+            }
+            context.fillStyle = this.color;
+            this.path?.forEach((value: Node, index:  number, array: Node[])=> {
+                context.beginPath();
+                context.arc(value.x * this.navigationGrid.gridCellWidth + this.navigationGrid.gridCellWidth / 2, value.y * this.navigationGrid.gridCellWidth + this.navigationGrid.gridCellWidth / 2, 5, 0, 2 * Math.PI);
+                context.fill();
+            })
+        }
+        super.draw(context);
+    }
+
+    public override updatePosition(playerTank: Tank): void {
+        this.pathRecaculationInterval -= 1;
+        if (this.path == null || this.path.length == 0 || this.pathRecaculationInterval == 0) {
+            this.navigationGrid.reset();
+            let startNode: Node = this.navigationGrid.getNodeFromTank(this);
+            let targetNode: Node = this.navigationGrid.getNodeFromTank(playerTank);
+            let destinationNode: Node = this.navigationGrid.getRandomNodeInRadiusOfTarget(targetNode, this.aggressionFactor);
+            this.path = this.navigationGrid.aStar(startNode, destinationNode);
+            this.pathRecaculationInterval = 60;
+            if (this.path == null) {
+                console.log(`Path is null`)
+            }
+        } else {
+            this.currentNode = this.navigationGrid.getNodeFromTank(this);
+            let dx = this.path[0].x - this.currentNode.x;
+            let dy = this.path[0].y - this.currentNode.y;
+
+            if (this.wasLastMoveBlocked && this.consecutiveDirectionMoves > 2) {
+                let randomDirection: Direction = this.getRandomDirection();
+                this.moveInCardinalDirection(randomDirection);
+                this.consecutiveDirectionMoves = 0;
+                let randomNumber: number = Math.random();
+                if (dx === 1 && dy === 0) {
+                    if (randomNumber < 0.5) {
+                        this.moveSouthEast();
+                    }
+                    else {
+                        this.moveNorthEast();
+                    }
+                } else if (dx === -1 && dy === 0) {
+                    if (randomNumber < 0.5) {
+                        this.moveNorthWest();
+                    }
+                    else {
+                        this.moveSouthWest();
+                    }
+                } else if (dx === 0 && dy === 1) {
+                    if (randomNumber < 0.5) {
+                        this.moveSouthEast();
+                    }
+                    else {
+                        this.moveSouthWest();
+                    }
+                } else if (dx === 0 && dy === -1) {
+                    if (randomNumber < 0.5) {
+                        this.moveNorthWest();
+                    }
+                    else {
+                        this.moveNorthEast();
+                    }
+                } else if (dx === 1 && dy === 1) {
+                    if (randomNumber < 0.5) {
+                        this.moveSouth();
+                    }
+                    else {
+                        this.moveEast();
+                    }
+                } else if (dx === 1 && dy === -1) {
+                    if (randomNumber < 0.5) {
+                        this.moveNorth();
+                    }
+                    else {
+                        this.moveEast();
+                    }
+                } else if (dx === -1 && dy === 1) {
+                    if (randomNumber < 0.5) {
+                        this.moveSouth();
+                    }
+                    else {
+                        this.moveWest();
+                    }
+                } else if (dx === -1 && dy === -1) {
+                    if (randomNumber < 0.5) {
+                        this.moveNorth();
+                    }
+                    else {
+                        this.moveWest();
+                    }
+                }
+            }
+            else {
+                if (dx === 1 && dy === 0) {
+                    this.moveEast();
+                } else if (dx === -1 && dy === 0) {
+                    this.moveWest();
+                } else if (dx === 0 && dy === 1) {
+                    this.moveSouth();
+                } else if (dx === 0 && dy === -1) {
+                    this.moveNorth();
+                } else if (dx === 1 && dy === 1) {
+                    this.moveSouthEast();
+                } else if (dx === 1 && dy === -1) {
+                    this.moveNorthEast();
+                } else if (dx === -1 && dy === 1) {
+                    this.moveSouthWest();
+                } else if (dx === -1 && dy === -1) {
+                    this.moveNorthWest();
+                }
+            }
+
+            if(this.path[0].x == this.currentNode.x && this.path[0].y == this.currentNode.y) {
+                this.path.splice(0, 1);
+            }
+        }
+
+        this.xLeft = this.xPos;
+        this.xRight = this.xPos + this.size;
+        this.yTop = this.yPos;
+        this.yBottom = this.yPos + this.size;
+    }
+
+    public override plantBomb(playerTank: Tank): void {
+        if (this.timeBetweenPlantsIsElapsed && !this.isDestroyed) {
+            const availableBombIndex = this.bombs.findIndex(bomb => bomb.isDestroyed)
+            if (availableBombIndex !== -1) {
+                this.bombs[availableBombIndex].xPos = this.xPos + (this.size / 2);
+                this.bombs[availableBombIndex].yPos = this.yPos + (this.size / 2);
+                let willHitPlayerTank: boolean = this.bombs[availableBombIndex].isPointInsideBlastRadius(playerTank.xPos + playerTank.tankMidpoint, playerTank.yPos + playerTank.tankMidpoint)
+                if (willHitPlayerTank) {
+                    this.bombs[availableBombIndex].isDestroyed = false;
+                    this.bombs[availableBombIndex].setFuse();
+                    this.timeBetweenPlantsIsElapsed = false;
+                    setTimeout(() => {
+                        this.timeBetweenPlantsIsElapsed = true;
+                    }, this.minTimeBetweenBombPlantsMS)
+                }
+            }
+        }
+        return;
+    }
+
+    public override shoot(playerTank: Tank): void {
+        if (this.timeBetweenShotsIsElapsed && !this.isDestroyed) {
+            const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
+            if (availableAmmunitionIndex !== -1) {
+                this.ammunition[availableAmmunitionIndex].reload(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, true, this.canvasWidth, this.canvasHeight);
+                let willHitPlayerTank: boolean = this.ammunition[availableAmmunitionIndex].willHitPlayerTank(this.obstacleCanvas, playerTank);
+                if (willHitPlayerTank) {
+                    this.ammunition[availableAmmunitionIndex].isDestroyed = false;
+                    this.timeBetweenShotsIsElapsed = false;
+                    setTimeout(() => {
+                        this.timeBetweenShotsIsElapsed = true;
+                    }, this.minTimeBetweenShotsMS)
+                }
+            }
+        }
+        return;
+    }
+
+    public override aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+        if (this.isDestroyed) {
+            return;
+        }
+
+        let dy: number;
+        let dx: number;
+        dx = playerTank.xPos + (playerTank.size / 2) - this.xPos - this.tankMidpoint;
+        dy = playerTank.yPos + (playerTank.size / 2) - this.yPos - this.tankMidpoint;
+        let theta = Math.atan2(dy, dx);
+        if (theta < 0) {
+            theta += 2 * Math.PI;
+        }
+        this.aimAngle = theta;
+    }
+}
+
 export class DefaultPlayerTank extends PlayerTank {
-    constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas) {
+    constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas, audioManager: AudioManager) {
         let defaultPlayerTankSpeed: number = 2;
         let defaultPlayerTankSize: number = 30;
         let defaultPlayerTankColor: string = '#6384a1';
         let ammunition: Ammunition[] = [
-            new PlayerAmmunition(0, 0, 0, 0, 0, true),
-            new PlayerAmmunition(0, 0, 0, 0, 0, true),
-            new PlayerAmmunition(0, 0, 0, 0, 0, true),
-            new PlayerAmmunition(0, 0, 0, 0, 0, true),
-            new PlayerAmmunition(0, 0, 0, 0, 0, true),
+            new PlayerAmmunition(0, 0, 0, 0, 0, true, audioManager),
+            new PlayerAmmunition(0, 0, 0, 0, 0, true, audioManager),
+            new PlayerAmmunition(0, 0, 0, 0, 0, true, audioManager),
+            new PlayerAmmunition(0, 0, 0, 0, 0, true, audioManager),
+            new PlayerAmmunition(0, 0, 0, 0, 0, true, audioManager),
         ]
-        super(canvas, new AdjustingCustomColorReticule(defaultPlayerTankSize, defaultPlayerTankColor, canvas.width), xPos, yPos, defaultPlayerTankSpeed, defaultPlayerTankSize, defaultPlayerTankColor, obstacleCanvas, ammunition);
+        let bombs: Bomb[] = [
+            new PlayerBomb(0, 0, true, audioManager),
+            new PlayerBomb(0, 0, true, audioManager)
+        ];
+        super(canvas, new AdjustingCustomColorReticule(defaultPlayerTankSize, defaultPlayerTankColor, canvas.width), xPos, yPos, defaultPlayerTankSpeed, defaultPlayerTankSize, defaultPlayerTankColor, obstacleCanvas, ammunition, bombs, audioManager);
     }
 }

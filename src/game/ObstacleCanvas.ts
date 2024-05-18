@@ -27,7 +27,7 @@ export class ObstacleCanvas {
         this.obstacles = [];
     }
 
-    public resizeCanvas(): void {
+    private resizeCanvas(): void {
 
     }
 }

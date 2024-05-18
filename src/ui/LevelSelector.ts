@@ -1,40 +1,50 @@
 import * as d3 from 'd3';
-import { Level, Level1, Level2, Level3, Level4, Level5 } from '../game/Level';
+import { Level, Level1, Level2, Level3, Level4, Level5, Level6 } from '../game/Level';
+import { AudioManager } from '../game/AudioManager';
 
 export class LevelSelector {
     private levels: number;
     private activeLevelNumber: number;
-    private activeLevel: Level
+    private activeLevel: Level;
     private sliderWidth: number = Math.min(window.innerWidth * 0.8, 600); // Responsive width
+    private audioManager: AudioManager;
 
     constructor(levels: number) {
         this.levels = levels;
+        this.audioManager = new AudioManager();
+        let audioPromise: Promise<void[]> = this.audioManager.loadAllAudio();
+        audioPromise.then((): void => {
+            this.audioManager.playBackgroundMusic();
+        })
         this.activeLevelNumber = 1;
-        this.activeLevel = new Level1()
+        this.activeLevel = new Level1(this.audioManager);
         this.createSlider();
         this.createJumbotron();
     }
 
     public startActiveLevel() {
-        this.activeLevel.stop()
+        this.activeLevel.stop();
         switch (this.activeLevelNumber) {
             case 1:
-                this.activeLevel = new Level1()
+                this.activeLevel = new Level1(this.audioManager);
                 break;
             case 2:
-                this.activeLevel = new Level2()
+                this.activeLevel = new Level2(this.audioManager);
                 break;
             case 3:
-                this.activeLevel = new Level3()
+                this.activeLevel = new Level3(this.audioManager);
                 break;
             case 4:
-                this.activeLevel = new Level4()
+                this.activeLevel = new Level4(this.audioManager);
                 break;
             case 5:
-                this.activeLevel = new Level5()
+                this.activeLevel = new Level5(this.audioManager);
+                break;
+            case 6:
+                this.activeLevel = new Level6(this.audioManager);
                 break;
             default:
-                this.activeLevel = new Level1()
+                this.activeLevel = new Level1(this.audioManager);
                 break;
         }
         this.activeLevel.start();
