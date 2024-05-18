@@ -52,12 +52,9 @@ export class AdjustingCustomColorReticule extends Reticule {
     }
 
     override draw(context: CanvasRenderingContext2D, tankXPosition: number, tankYPosition: number, mouseXPosition: number, mouseYPosition: number): void {
-        // Calculate distance between tank and mouse
         const xDist = mouseXPosition - tankXPosition;
         const yDist = mouseYPosition - tankYPosition;
         const distance = Math.sqrt(Math.pow(xDist, 2) + Math.pow(yDist, 2));
-
-        // map distance / maxReticuleLength to the range [1, 10] and [10, 1]
         const distanceToMaxDistanceRatio = distance / this.maxReticuleLength;
         const distanceToMaxDistanceRatioInverse = 1 - distanceToMaxDistanceRatio;
         let dashLength = distanceToMaxDistanceRatio * 10 + 2;
@@ -73,17 +70,12 @@ export class AdjustingCustomColorReticule extends Reticule {
             context.stroke();
 
             context.setLineDash([]);
-            // Define the length of the "X" arms
-            let xLength = 10; // This is the half length of each arm of the "X"
-
-            // Draw the "X" at the mouse position
-            // Line 1 of the "X"
+            let xLength = 10;
             context.beginPath();
             context.moveTo(mouseXPosition - xLength, mouseYPosition - xLength);
             context.lineTo(mouseXPosition + xLength, mouseYPosition + xLength);
             context.stroke();
 
-            // Line 2 of the "X"
             context.beginPath();
             context.moveTo(mouseXPosition - xLength, mouseYPosition + xLength);
             context.lineTo(mouseXPosition + xLength, mouseYPosition - xLength);

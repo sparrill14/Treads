@@ -1,6 +1,7 @@
 # Treads
 
 A top down game of mini tanks coded in pure Typscript
+Try it out here: https://sparrill14.github.io/
 
 ## Table of Contents
 

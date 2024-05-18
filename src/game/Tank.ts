@@ -58,7 +58,11 @@ export class Tank {
         w: false,
         a: false,
         s: false,
-        d: false
+        d: false,
+        W: false,
+        A: false,
+        S: false,
+        D: false
     }
 
     constructor(canvas: HTMLCanvasElement, reticule: Reticule, xPos: number, yPos: number, speed: number, size: number, color: string, obstacleCanvas: ObstacleCanvas, ammunition: Ammunition[], bombs: Bomb[], audioManager: AudioManager) {
@@ -96,23 +100,19 @@ export class Tank {
             return;
         }
 
-        // Tank body
         context.fillStyle = this.color;
         context.fillRect(this.xPos, this.yPos, this.size, this.size);
 
-        // Tank outline
         context.setLineDash([]);
         context.lineJoin = 'bevel'
         context.strokeStyle = 'black';
         context.lineWidth = 2;
         context.strokeRect(this.xPos, this.yPos, this.size, this.size);
 
-        // Tank turret
         context.beginPath();
         context.arc(this.xPos + this.tankMidpoint, this.yPos + this.tankMidpoint, this.size / 3, 0, this.twoPi);
         context.stroke();
 
-        // Tank gun barrell
         const endX = this.xPos + this.tankMidpoint + (Math.cos(this.aimAngle) * this.size);
         const endY = this.yPos + this.tankMidpoint + (Math.sin(this.aimAngle) * this.size);
         context.beginPath();
@@ -160,10 +160,6 @@ export class Tank {
         this.xRight = this.xPos + this.size;
         this.yTop = this.yPos;
         this.yBottom = this.yPos + this.size;
-
-        // Send position to controller
-        this.xPos = this.xPos;
-        this.yPos = this.yPos;
     }
 
     public aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
@@ -173,19 +169,8 @@ export class Tank {
 
         let dy: number;
         let dx: number;
-
-        if (this.xPos == playerTank.xPos && this.yPos == playerTank.yPos) {
-            // Aim at the mouse
-            dx = mouseXPos - this.xPos - this.tankMidpoint;
-            dy = mouseYpos - this.yPos - this.tankMidpoint;
-        }
-
-        else {
-            // Aim at the player
-            dx = playerTank.xPos + (playerTank.size / 2) - this.xPos - this.tankMidpoint;
-            dy = playerTank.yPos + (playerTank.size / 2) - this.yPos - this.tankMidpoint;
-        }
-
+        dx = mouseXPos - this.xPos - this.tankMidpoint;
+        dy = mouseYpos - this.yPos - this.tankMidpoint;
         let theta = Math.atan2(dy, dx);
         if (theta < 0) {
             theta += 2 * Math.PI;
@@ -267,7 +252,13 @@ export class Tank {
     }
 
     public moveNorth(): void {
-        // Loop through all obstacles and check if the tank will collide with any of them. Set the tank y position accordingly.
+        if (this.lastDirectionMoved == Direction.NORTH) {
+            this.consecutiveDirectionMoves += 1;
+        }
+        else {
+            this.consecutiveDirectionMoves = 0;
+        }
+        this.lastDirectionMoved = Direction.NORTH
         let blocked: boolean = false;
         for (let i = 0; i < this.obstacleCanvas.obstacles.length; i++) {
             const obstacle = this.obstacleCanvas.obstacles[i];
@@ -275,15 +266,25 @@ export class Tank {
                 obstacle.xLeft < this.xPos + this.size && this.xPos < obstacle.xRight) {
                 this.yPos = obstacle.yBottom;
                 blocked = true;
+                break;
             }
         }
-
         if (!blocked) {
             this.yPos = Math.max(this.yPos - this.speed, 0);
+        }
+        else {
+            this.wasLastMoveBlocked = true;
         }
     }
 
     public moveSouth(): void {
+        if (this.lastDirectionMoved == Direction.SOUTH) {
+            this.consecutiveDirectionMoves += 1;
+        }
+        else {
+            this.consecutiveDirectionMoves = 0;
+        }
+        this.lastDirectionMoved = Direction.SOUTH
         let blocked: boolean = false;
         for (let i = 0; i < this.obstacleCanvas.obstacles.length; i++) {
             const obstacle = this.obstacleCanvas.obstacles[i];
@@ -291,14 +292,25 @@ export class Tank {
                 obstacle.xLeft < this.xPos + this.size && this.xPos < obstacle.xRight) {
                 this.yPos = obstacle.yTop - this.size;
                 blocked = true;
+                break;
             }
         }
         if (!blocked) {
             this.yPos = Math.min(this.yPos + this.speed, this.canvasHeight - this.size);
         }
+        else {
+            this.wasLastMoveBlocked = true;
+        }
     }
 
     public moveWest(): void {
+        if (this.lastDirectionMoved == Direction.WEST) {
+            this.consecutiveDirectionMoves += 1;
+        }
+        else {
+            this.consecutiveDirectionMoves = 0;
+        }
+        this.lastDirectionMoved = Direction.WEST
         let blocked: boolean = false;
         for (let i = 0; i < this.obstacleCanvas.obstacles.length; i++) {
             const obstacle = this.obstacleCanvas.obstacles[i];
@@ -306,14 +318,25 @@ export class Tank {
                 obstacle.yTop < this.yPos + this.size && this.yPos < obstacle.yBottom) {
                 this.xPos = obstacle.xRight;
                 blocked = true;
+                break;
             }
         }
         if (!blocked) {
             this.xPos = Math.max(this.xPos - this.speed, 0);
         }
+        else {
+            this.wasLastMoveBlocked = true;
+        }
     }
 
     public moveEast(): void {
+        if (this.lastDirectionMoved == Direction.EAST) {
+            this.consecutiveDirectionMoves += 1;
+        }
+        else {
+            this.consecutiveDirectionMoves = 0;
+        }
+        this.lastDirectionMoved = Direction.EAST
         let blocked: boolean = false;
         for (let i = 0; i < this.obstacleCanvas.obstacles.length; i++) {
             const obstacle = this.obstacleCanvas.obstacles[i];
@@ -321,58 +344,78 @@ export class Tank {
                 obstacle.yTop < this.yPos + this.size && this.yPos < obstacle.yBottom) {
                 this.xPos = obstacle.xLeft - this.size;
                 blocked = true;
+                break;
             }
         }
         if (!blocked) {
             this.xPos = Math.min(this.xPos + this.speed, this.canvasWidth - this.size);
         }
+        else {
+            this.wasLastMoveBlocked = true;
+        }
     }
 
     public moveNorthEast(): void {
-        // Loop through all obstacles to check the north and east directions and set the tank position accordingly.
+        if (this.lastDirectionMoved == Direction.NORTHEAST) {
+            this.consecutiveDirectionMoves += 1;
+        }
+        else {
+            this.consecutiveDirectionMoves = 0;
+        }
+        this.lastDirectionMoved = Direction.NORTHEAST
         let blockedNorth: boolean = false;
         let blockedEast: boolean = false;
         for (let i = 0; i < this.obstacleCanvas.obstacles.length; i++) {
             const obstacle = this.obstacleCanvas.obstacles[i];
-            if (this.yPos - this.speed < obstacle.yTop + obstacle.height && this.yPos > obstacle.yTop &&
+            if (!blockedNorth && this.yPos - this.speed < obstacle.yTop + obstacle.height && this.yPos > obstacle.yTop &&
                 obstacle.xLeft < this.xPos + this.size && this.xPos < obstacle.xRight) {
                 this.yPos = obstacle.yBottom;
                 blockedNorth = true;
             }
-            if (this.xPos + this.speed + this.size > obstacle.xLeft && this.xPos < obstacle.xLeft + obstacle.width &&
+            if (!blockedEast && this.xPos + this.speed + this.size > obstacle.xLeft && this.xPos < obstacle.xLeft + obstacle.width &&
                 obstacle.yTop < this.yPos + this.size && this.yPos < obstacle.yBottom) {
                 this.xPos = obstacle.xLeft - this.size;
                 blockedEast = true;
             }
         }
-
+        if (blockedNorth && blockedEast) {
+            this.wasLastMoveBlocked = true;
+        }
         if (!blockedNorth) {
             this.yPos = Math.max(this.yPos - this.speed, 0);
         }
-
         if (!blockedEast) {
             this.xPos = Math.min(this.xPos + this.speed, this.canvasWidth - this.size);
         }
     }
 
     public moveNorthWest(): void {
+        if (this.lastDirectionMoved == Direction.NORTHWEST) {
+            this.consecutiveDirectionMoves += 1;
+        }
+        else {
+            this.consecutiveDirectionMoves = 0;
+        }
+        this.lastDirectionMoved = Direction.NORTHWEST
         let blockedNorth: boolean = false;
         let blockedWest: boolean = false;
 
         for (let i = 0; i < this.obstacleCanvas.obstacles.length; i++) {
             const obstacle = this.obstacleCanvas.obstacles[i];
-            if (this.yPos - this.speed < obstacle.yTop + obstacle.height && this.yPos > obstacle.yTop &&
+            if (!blockedNorth && this.yPos - this.speed < obstacle.yTop + obstacle.height && this.yPos > obstacle.yTop &&
                 obstacle.xLeft < this.xPos + this.size && this.xPos < obstacle.xRight) {
                 this.yPos = obstacle.yBottom;
                 blockedNorth = true;
             }
-            if (this.xPos - this.speed < obstacle.xRight && this.xPos > obstacle.xLeft &&
+            if (!blockedWest && this.xPos - this.speed < obstacle.xRight && this.xPos > obstacle.xLeft &&
                 obstacle.yTop < this.yPos + this.size && this.yPos < obstacle.yBottom) {
                 this.xPos = obstacle.xRight;
                 blockedWest = true;
             }
         }
-
+        if (blockedNorth && blockedWest) {
+            this.wasLastMoveBlocked = true;
+        }
         if (!blockedNorth) {
             this.yPos = Math.max(this.yPos - this.speed, 0);
         }
@@ -382,22 +425,31 @@ export class Tank {
     }
 
     public moveSouthEast(): void {
+        if (this.lastDirectionMoved == Direction.SOUTHEAST) {
+            this.consecutiveDirectionMoves += 1;
+        }
+        else {
+            this.consecutiveDirectionMoves = 0;
+        }
+        this.lastDirectionMoved = Direction.SOUTHEAST
         let blockedSouth: boolean = false;
         let blockedEast: boolean = false;
         for (let i = 0; i < this.obstacleCanvas.obstacles.length; i++) {
             const obstacle = this.obstacleCanvas.obstacles[i];
-            if (this.yPos + this.speed + this.size > obstacle.yTop && this.yPos < obstacle.yTop + obstacle.height &&
+            if (!blockedSouth && this.yPos + this.speed + this.size > obstacle.yTop && this.yPos < obstacle.yTop + obstacle.height &&
                 obstacle.xLeft < this.xPos + this.size && this.xPos < obstacle.xRight) {
                 this.yPos = obstacle.yTop - this.size;
                 blockedSouth = true;
             }
-            if (this.xPos + this.speed + this.size > obstacle.xLeft && this.xPos < obstacle.xLeft + obstacle.width &&
+            if (!blockedEast && this.xPos + this.speed + this.size > obstacle.xLeft && this.xPos < obstacle.xLeft + obstacle.width &&
                 obstacle.yTop < this.yPos + this.size && this.yPos < obstacle.yBottom) {
                 this.xPos = obstacle.xLeft - this.size;
                 blockedEast = true;
             }
         }
-
+        if (blockedSouth && blockedEast) {
+            this.wasLastMoveBlocked = true;
+        }
         if (!blockedSouth) {
             this.yPos = Math.min(this.yPos + this.speed, this.canvasHeight - this.size);
         }
@@ -407,20 +459,30 @@ export class Tank {
     }
 
     public moveSouthWest(): void {
+        if (this.lastDirectionMoved == Direction.SOUTHWEST) {
+            this.consecutiveDirectionMoves += 1;
+        }
+        else {
+            this.consecutiveDirectionMoves = 0;
+        }
+        this.lastDirectionMoved = Direction.SOUTHWEST
         let blockedSouth: boolean = false;
         let blockedWest: boolean = false;
         for (let i = 0; i < this.obstacleCanvas.obstacles.length; i++) {
             const obstacle = this.obstacleCanvas.obstacles[i];
-            if (this.yPos + this.speed + this.size > obstacle.yTop && this.yPos < obstacle.yTop + obstacle.height &&
+            if (!blockedSouth && this.yPos + this.speed + this.size > obstacle.yTop && this.yPos < obstacle.yTop + obstacle.height &&
                 obstacle.xLeft < this.xPos + this.size && this.xPos < obstacle.xRight) {
                 this.yPos = obstacle.yTop - this.size;
                 blockedSouth = true;
             }
-            if (this.xPos - this.speed < obstacle.xRight && this.xPos > obstacle.xLeft &&
+            if (!blockedWest && this.xPos - this.speed < obstacle.xRight && this.xPos > obstacle.xLeft &&
                 obstacle.yTop < this.yPos + this.size && this.yPos < obstacle.yBottom) {
                 this.xPos = obstacle.xRight;
                 blockedWest = true;
             }
+        }
+        if (blockedSouth && blockedWest) {
+            this.wasLastMoveBlocked = true;
         }
         if (!blockedSouth) {
             this.yPos = Math.min(this.yPos + this.speed, this.canvasHeight - this.size);
@@ -431,19 +493,19 @@ export class Tank {
     }
 
     public up(): boolean {
-        return this.keyStates.ArrowUp || this.keyStates.w;
+        return this.keyStates.ArrowUp || this.keyStates.w || this.keyStates.W;
     }
 
     public down(): boolean {
-        return this.keyStates.ArrowDown || this.keyStates.s;
+        return this.keyStates.ArrowDown || this.keyStates.s || this.keyStates.S;
     }
 
     public left(): boolean {
-        return this.keyStates.ArrowLeft || this.keyStates.a;
+        return this.keyStates.ArrowLeft || this.keyStates.a || this.keyStates.A;
     }
 
     public right(): boolean {
-        return this.keyStates.ArrowRight || this.keyStates.d;
+        return this.keyStates.ArrowRight || this.keyStates.d || this.keyStates.D;
     }
 }
 
@@ -479,7 +541,7 @@ export class PlayerTank extends Tank {
         });
     }
 
-    public aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+    public override aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
         if (this.isDestroyed) {
             return;
         }
@@ -519,7 +581,7 @@ export class StationaryTank extends EnemyTank {
     constructor(canvas: HTMLCanvasElement, xPos: number, yPos: number, obstacleCanvas: ObstacleCanvas, audioManager: AudioManager) {
         let fastTankSpeed: number = 0;
         let fastTankSize: number = 30;
-        let fastTankColor: string = '#935217';
+        let fastTankColor: string = '#5784ba';
         let ammunition: Ammunition[] = [
             new BasicAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
         ]
@@ -546,26 +608,15 @@ export class StationaryTank extends EnemyTank {
         return;
     }
 
-    public aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+    public override aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
         if (this.isDestroyed) {
             return;
         }
 
         let dy: number;
         let dx: number;
-
-        if (this.xPos == playerTank.xPos && this.yPos == playerTank.yPos) {
-            // Aim at the mouse
-            dx = mouseXPos - this.xPos - this.tankMidpoint;
-            dy = mouseYpos - this.yPos - this.tankMidpoint;
-        }
-
-        else {
-            // Aim at the player
-            dx = playerTank.xPos + (playerTank.size / 2) - this.xPos - this.tankMidpoint;
-            dy = playerTank.yPos + (playerTank.size / 2) - this.yPos - this.tankMidpoint;
-        }
-
+        dx = playerTank.xPos + (playerTank.size / 2) - this.xPos - this.tankMidpoint;
+        dy = playerTank.yPos + (playerTank.size / 2) - this.yPos - this.tankMidpoint;
         let theta = Math.atan2(dy, dx);
         if (theta < 0) {
             theta += 2 * Math.PI;
@@ -592,7 +643,11 @@ export class StationaryRandomAimTank extends EnemyTank {
         return randomAmount;
     }
 
-    public shoot(playerTank: Tank): void {
+    public override updatePosition(playerTank: Tank): void {
+        return;
+    }
+
+    public override shoot(playerTank: Tank): void {
         const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
         if (availableAmmunitionIndex !== -1) {
             this.ammunition[availableAmmunitionIndex] = new BasicAIAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, this.canvasWidth, this.canvasHeight, true, this.audioManager);
@@ -604,7 +659,7 @@ export class StationaryRandomAimTank extends EnemyTank {
         return;
     }
 
-    public aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+    public override aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
         if (this.isDestroyed) {
             return;
         }

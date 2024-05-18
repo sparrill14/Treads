@@ -59,13 +59,21 @@ export class Ammunition {
               if (minDistance === fromTop) {
                 this.yPos = obstacle.yTop - 1;
                 this.yVelocity = -this.yVelocity;
+                this.yPos = obstacle.yTop - 1;
+                this.yVelocity = -this.yVelocity;
               } else if (minDistance === fromBottom) {
+                this.yPos = obstacle.yBottom + 1;
+                this.yVelocity = -this.yVelocity;
                 this.yPos = obstacle.yBottom + 1;
                 this.yVelocity = -this.yVelocity;
               } else if (minDistance === fromLeft) {
                 this.xPos = obstacle.xLeft - 1;
                 this.xVelocity = -this.xVelocity;
+                this.xPos = obstacle.xLeft - 1;
+                this.xVelocity = -this.xVelocity;
               } else if (minDistance === fromRight) {
+                this.xPos = obstacle.xRight + 1;
+                this.xVelocity = -this.xVelocity;
                 this.xPos = obstacle.xRight + 1;
                 this.xVelocity = -this.xVelocity;
               }
@@ -97,6 +105,7 @@ export class Ammunition {
         }
         if (this.xPos > playerTank.xLeft && this.xPos < playerTank.xRight && this.yPos > playerTank.yTop && this.yPos < playerTank.yBottom) {
             playerTank.isDestroyed = true;
+            playerTank.isDestroyed = true;
             this.isDestroyed = true;
             console.log("Player Hit!!!");
         }
@@ -125,26 +134,26 @@ export class Ammunition {
         context.closePath();
     }
 
-    willHitPlayerTank(obstacleCanvas: ObstacleCanvas, playerTank: Tank, ): boolean {
+    willHitPlayerTank(obstacleCanvas: ObstacleCanvas, playerTank: Tank): boolean {
         let predictedXPosition: number = this.xPos;
         let predictedYPosition: number = this.yPos;
         let predictedXVelocity: number = this.xVelocity;
         let predictedYVelocity: number = this.yVelocity;
-        let bounces: number = 0;
-        while (bounces <= this.maxBounces) {
-            predictedXPosition += this.xVelocity;
-            predictedYPosition += this.yVelocity;
+        let predictedBounces: number = 0;
+        while (predictedBounces <= this.maxBounces) {
+            predictedXPosition += predictedXVelocity;
+            predictedYPosition += predictedYVelocity;
             if (predictedXPosition <= 0 || predictedXPosition > this.canvasWidth) {
                 predictedXVelocity = -predictedXVelocity;
-                bounces++;
+                predictedBounces++;
             }
             if (predictedYPosition <= 0 || predictedYPosition > this.canvasHeight) {
                 predictedYVelocity = -predictedYVelocity;
-                bounces++;
+                predictedBounces++;
             }
             obstacleCanvas.obstacles.forEach(obstacle => {
                 if (predictedXPosition > obstacle.xLeft && predictedXPosition < obstacle.xRight && predictedYPosition > obstacle.yTop && predictedYPosition < obstacle.yBottom) {
-                    bounces++;
+                    predictedBounces++;
                     predictedXVelocity = -predictedXVelocity;
                     predictedYVelocity = -predictedYVelocity;
                 }

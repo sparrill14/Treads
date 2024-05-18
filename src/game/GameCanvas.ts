@@ -16,6 +16,7 @@ export class GameCanvas {
         this.width = width;
         this.height = height;
         this.obstacleCanvas = obstacleCanvas;
+        this.animationFrameID = null;
         this.gameRenderer = new GameRenderer(document.querySelector(canvasSelector) as HTMLCanvasElement);
         this.gameRenderer.initializeCanvas(this.width, this.height);
         this.lastRenderTime = 0;

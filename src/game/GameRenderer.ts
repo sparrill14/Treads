@@ -1,9 +1,10 @@
 import { Tank } from "./Tank";
 
 export class GameRenderer {
-    private context: CanvasRenderingContext2D | null;
     public playerWin: boolean = false;
     public enemyWin: boolean = false;
+
+    private context: CanvasRenderingContext2D | null;
 
     constructor(public canvas: HTMLCanvasElement) {
         const context = this.canvas.getContext('2d');
