@@ -1,0 +1,36 @@
+name: publish-to-github-pages
+run-name: ${{ github.actor }} triggered ${{ github.event_name }} Workflow ${{ github.workflow }} Run# ${{ github.run_number }} Attempt# ${{ github.run_attempt }}
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+jobs:
+  publish-website:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out latest code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.10.0'
+      - name: Install Dependancies
+        run: npm install
+      - name: Build Project
+        run: npm run build
+      - name: get-npm-version
+        id: package-version
+        uses: martinbeentjes/npm-get-version-action@v1.3.1
+      - name: Deploy
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          deploy_key: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          publish_dir: ./dist
+          external_repository: sparrill14/sparrill14.github.io
+          publish_branch: main
+          user_name: 'sparrill14'
+          user_email: 'sparrill14@gmail.com'
+          commit_message: 'Automatically update to V${{ steps.package-version.outputs.current-version}}'
