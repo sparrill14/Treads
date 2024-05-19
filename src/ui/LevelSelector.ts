@@ -1,4 +1,5 @@
 import * as d3 from 'd3';
+import packageJson from '../../package.json';
 import { Level, Level1, Level2, Level3, Level4, Level5, Level6 } from '../game/Level';
 import { AudioManager } from '../game/AudioManager';
 
@@ -18,8 +19,16 @@ export class LevelSelector {
         })
         this.activeLevelNumber = 1;
         this.activeLevel = new Level1(this.audioManager);
+        this.setHeader();
         this.createSlider();
         this.createJumbotron();
+    }
+
+    public setHeader() {
+        let header: HTMLElement | null = document.getElementById('main-header')
+        if (header) {
+            header.textContent = `Treads V${packageJson.version}`
+        }
     }
 
     public startActiveLevel() {

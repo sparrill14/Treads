@@ -650,7 +650,7 @@ export class StationaryRandomAimTank extends EnemyTank {
     public override shoot(playerTank: Tank): void {
         const availableAmmunitionIndex = this.ammunition.findIndex(ammunition => ammunition.isDestroyed)
         if (availableAmmunitionIndex !== -1) {
-            this.ammunition[availableAmmunitionIndex] = new BasicAIAmmunition(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, this.canvasWidth, this.canvasHeight, true, this.audioManager);
+            this.ammunition[availableAmmunitionIndex].reload(this.xPos + (this.size / 2), this.yPos + (this.size / 2), this.aimAngle, true, this.canvasWidth, this.canvasHeight);
             let willHitPlayerTank: boolean = this.ammunition[availableAmmunitionIndex].willHitPlayerTank(this.obstacleCanvas, playerTank);
             if (willHitPlayerTank) {
                 this.ammunition[availableAmmunitionIndex].isDestroyed = false;

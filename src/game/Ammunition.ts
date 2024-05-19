@@ -48,32 +48,22 @@ export class Ammunition {
         obstacleCanvas.obstacles.forEach(obstacle => {
             if (this.xPos > obstacle.xLeft && this.xPos < obstacle.xRight && this.yPos > obstacle.yTop && this.yPos < obstacle.yBottom) {
               this.bounces++;
-              
               const fromLeft = Math.abs(this.xPos - obstacle.xLeft);
               const fromRight = Math.abs(this.xPos - obstacle.xRight);
               const fromTop = Math.abs(this.yPos - obstacle.yTop);
               const fromBottom = Math.abs(this.yPos - obstacle.yBottom);
-          
               const minDistance = Math.min(fromLeft, fromRight, fromTop, fromBottom);
           
               if (minDistance === fromTop) {
                 this.yPos = obstacle.yTop - 1;
                 this.yVelocity = -this.yVelocity;
-                this.yPos = obstacle.yTop - 1;
-                this.yVelocity = -this.yVelocity;
               } else if (minDistance === fromBottom) {
-                this.yPos = obstacle.yBottom + 1;
-                this.yVelocity = -this.yVelocity;
                 this.yPos = obstacle.yBottom + 1;
                 this.yVelocity = -this.yVelocity;
               } else if (minDistance === fromLeft) {
                 this.xPos = obstacle.xLeft - 1;
                 this.xVelocity = -this.xVelocity;
-                this.xPos = obstacle.xLeft - 1;
-                this.xVelocity = -this.xVelocity;
               } else if (minDistance === fromRight) {
-                this.xPos = obstacle.xRight + 1;
-                this.xVelocity = -this.xVelocity;
                 this.xPos = obstacle.xRight + 1;
                 this.xVelocity = -this.xVelocity;
               }
@@ -185,7 +175,7 @@ export class BasicAIAmmunition extends Ammunition {
 export class SuperAIAmmunition extends Ammunition {
     constructor (startX: number, startY: number, theta: number, canvasWidth: number, canvasHeight: number, isDestroyed: boolean, audioManager: AudioManager) {
         let superAIAmmunitionMaxBounces: number = 2;
-        let superAIAmmunitionSpeed: number = 7;
+        let superAIAmmunitionSpeed: number = 6;
         super(startX, startY, theta, superAIAmmunitionSpeed, superAIAmmunitionMaxBounces, canvasWidth, canvasHeight, isDestroyed, audioManager);
     }
 }
