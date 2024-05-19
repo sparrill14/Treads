@@ -110,6 +110,7 @@ export class LevelSelector {
 
 	private createJumbotron(): void {
 		const jumbotron: d3.Selection<d3.BaseType, unknown, HTMLElement, any> = d3.select('#jumbotron');
+		const colorScale = d3.scaleLinear<string>().domain([1, this.levels]).range(['lightblue', 'lightcoral']);
 		for (let i = 1; i <= this.levels; i++) {
 			const box: d3.Selection<HTMLDivElement, unknown, HTMLElement, any> = jumbotron
 				.append('div')
@@ -126,7 +127,7 @@ export class LevelSelector {
 				.append('rect') // Placeholder for actual SVG content.
 				.attr('width', '100%')
 				.attr('height', '100%')
-				.attr('fill', 'transparent');
+				.attr('fill', colorScale(i));
 			svg
 				.append('text')
 				.attr('x', '50%')

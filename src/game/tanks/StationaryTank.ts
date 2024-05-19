@@ -1,6 +1,7 @@
 import { Ammunition, BasicAIAmmunition } from '../Ammunition';
 import { AudioManager } from '../AudioManager';
 import { Bomb } from '../Bomb';
+import { NavigationGrid } from '../NavigationGrid';
 import { ObstacleCanvas } from '../ObstacleCanvas';
 import { NoReticule } from '../Reticule';
 import { EnemyTank } from './EnemyTank';
@@ -17,22 +18,26 @@ export class StationaryTank extends EnemyTank {
 		obstacleCanvas: ObstacleCanvas,
 		audioManager: AudioManager
 	) {
-		const fastTankSpeed = 0;
-		const fastTankSize = 30;
-		const fastTankColor = '#5784ba';
+		const stationaryTankSpeed = 0;
+		const stationaryTankSize = 30;
+		const stationaryTankAggressionFactor = 0;
+		const stationaryTankColor = '#5784ba';
 		const ammunition: Ammunition[] = [new BasicAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
 		const bombs: Bomb[] = [];
+		const navigationGrid: NavigationGrid = new NavigationGrid();
 		super(
 			canvas,
 			new NoReticule(),
 			xPos,
 			yPos,
-			fastTankSpeed,
-			fastTankSize,
-			fastTankColor,
+			stationaryTankSpeed,
+			stationaryTankSize,
+			stationaryTankAggressionFactor,
+			stationaryTankColor,
 			obstacleCanvas,
 			ammunition,
 			bombs,
+			navigationGrid,
 			audioManager
 		);
 	}

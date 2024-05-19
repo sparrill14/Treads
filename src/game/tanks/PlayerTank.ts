@@ -1,3 +1,4 @@
+import { KeyStates } from '../../utils/KeyStates';
 import { Ammunition, PlayerAmmunition } from '../Ammunition';
 import { AudioFile, AudioManager } from '../AudioManager';
 import { Bomb, PlayerBomb } from '../Bomb';
@@ -6,6 +7,21 @@ import { AdjustingCustomColorReticule, Reticule } from '../Reticule';
 import { Tank } from './Tank';
 
 export class PlayerTank extends Tank {
+	public keyStates: KeyStates = {
+		ArrowUp: false,
+		ArrowDown: false,
+		ArrowLeft: false,
+		ArrowRight: false,
+		w: false,
+		a: false,
+		s: false,
+		d: false,
+		W: false,
+		A: false,
+		S: false,
+		D: false,
+	};
+
 	constructor(
 		canvas: HTMLCanvasElement,
 		reticule: Reticule,
@@ -49,6 +65,45 @@ export class PlayerTank extends Tank {
 		});
 	}
 
+	public override updatePosition(playerTank: Tank): void {
+		// Move the tank
+		if (this.up() && this.right()) {
+			this.moveNorthEast();
+		} else if (this.up() && this.left()) {
+			this.moveNorthWest();
+		} else if (this.down() && this.right()) {
+			this.moveSouthEast();
+		} else if (this.down() && this.left()) {
+			this.moveSouthWest();
+		} else if (this.up()) {
+			this.moveNorth();
+		} else if (this.down()) {
+			this.moveSouth();
+		} else if (this.left()) {
+			this.moveWest();
+		} else if (this.right()) {
+			this.moveEast();
+		}
+
+		this.xLeft = this.xPos;
+		this.xRight = this.xPos + this.size;
+		this.yTop = this.yPos;
+		this.yBottom = this.yPos + this.size;
+	}
+
+	public override plantBomb(playerTank: Tank): void {
+		if (!this.isDestroyed) {
+			const availableBombIndex = this.bombs.findIndex((bomb) => bomb.isDestroyed);
+			if (availableBombIndex !== -1) {
+				this.bombs[availableBombIndex].xPos = this.xPos + this.size / 2;
+				this.bombs[availableBombIndex].yPos = this.yPos + this.size / 2;
+				this.bombs[availableBombIndex].isDestroyed = false;
+				this.bombs[availableBombIndex].setFuse();
+			}
+		}
+		return;
+	}
+
 	public override aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
 		if (this.isDestroyed) {
 			return;
@@ -79,6 +134,22 @@ export class PlayerTank extends Tank {
 			}
 		}
 		return;
+	}
+
+	public up(): boolean {
+		return this.keyStates.ArrowUp || this.keyStates.w || this.keyStates.W;
+	}
+
+	public down(): boolean {
+		return this.keyStates.ArrowDown || this.keyStates.s || this.keyStates.S;
+	}
+
+	public left(): boolean {
+		return this.keyStates.ArrowLeft || this.keyStates.a || this.keyStates.A;
+	}
+
+	public right(): boolean {
+		return this.keyStates.ArrowRight || this.keyStates.d || this.keyStates.D;
 	}
 }
 
