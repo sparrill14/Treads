@@ -1,16 +1,16 @@
-const path = require('path');
-const common = require('./webpack.common.js');
-const TerserPlugin = require("terser-webpack-plugin");
+import { resolve } from 'path';
+import TerserPlugin from "terser-webpack-plugin";
+import common from './webpack.common.js';
 
-const CssMinimizerPlugin = require("css-minimizer-webpack-plugin");
-const { merge } = require('webpack-merge');
+import CssMinimizerPlugin from "css-minimizer-webpack-plugin";
+import { merge } from 'webpack-merge';
 
-module.exports = merge(common, {
+export default merge(common, {
     mode: 'production',
     devtool: 'source-map',
     output: {
         filename: '[name].[contenthash].bundle.js',
-        path: path.resolve(__dirname, 'dist'),
+        path: resolve(__dirname, 'dist'),
         clean: true
     },
     optimization: {
