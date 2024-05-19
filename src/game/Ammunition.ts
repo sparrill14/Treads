@@ -102,7 +102,7 @@ export class Ammunition {
 				this.yPos < enemyTank.yBottom
 			) {
 				this.isDestroyed = true;
-				enemyTank.isDestroyed = true;
+				enemyTank.destroy();
 				this.audioManager.play(AudioFile.TANK_DESTROY);
 				console.log('Enemy hit!!!');
 			}
@@ -119,8 +119,7 @@ export class Ammunition {
 			this.yPos > playerTank.yTop &&
 			this.yPos < playerTank.yBottom
 		) {
-			playerTank.isDestroyed = true;
-			playerTank.isDestroyed = true;
+			playerTank.destroy();
 			this.isDestroyed = true;
 			console.log('Player Hit!!!');
 		}

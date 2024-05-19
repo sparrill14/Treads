@@ -42,11 +42,6 @@ export class GameCanvas {
 		if (this.playerTank != null) {
 			const progress = timeStamp - this.lastRenderTime;
 			this.gameRenderer.render(progress, this.playerTank, this.enemyTanks);
-			if (this.gameRenderer.enemyWin || this.gameRenderer.playerWin) {
-				this.stop();
-				this.obstacleCanvas.clearObstacles();
-				this.gameRenderer.renderLevelOverScreen();
-			}
 			this.lastRenderTime = timeStamp;
 			this.animationFrameID = requestAnimationFrame(this.gameLoop.bind(this));
 		}

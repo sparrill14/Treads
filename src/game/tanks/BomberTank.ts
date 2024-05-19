@@ -46,7 +46,7 @@ export class BomberTank extends EnemyTank {
 
 	public override plantBomb(playerTank: Tank): void {
 		if (this.timeBetweenPlantsIsElapsed && !this.isDestroyed) {
-			const availableBombIndex = this.bombs.findIndex((bomb) => bomb.isDestroyed);
+			const availableBombIndex = this.bombs.findIndex((bomb) => bomb.isDestroyed && !bomb.isExploding);
 			if (availableBombIndex !== -1) {
 				this.bombs[availableBombIndex].xPos = this.xPos + this.size / 2;
 				this.bombs[availableBombIndex].yPos = this.yPos + this.size / 2;
@@ -58,7 +58,7 @@ export class BomberTank extends EnemyTank {
 					this.bombs[availableBombIndex].isDestroyed = false;
 					this.bombs[availableBombIndex].setFuse();
 					this.timeBetweenPlantsIsElapsed = false;
-					setTimeout(() => {
+					setTimeout((): void => {
 						this.timeBetweenPlantsIsElapsed = true;
 					}, this.minTimeBetweenBombPlantsMS);
 				}
