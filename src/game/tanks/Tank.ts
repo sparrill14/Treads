@@ -1,6 +1,7 @@
 import { Ammunition } from '../Ammunition';
 import { AudioManager } from '../AudioManager';
 import { Bomb } from '../Bomb';
+import { BombFragment } from '../BombFragment';
 import { ObstacleCanvas } from '../ObstacleCanvas';
 import { Reticule } from '../Reticule';
 
@@ -30,6 +31,7 @@ export class Tank {
 	public reticule: Reticule;
 	public gunBarrellWidth = 7;
 	public isDestroyed = false;
+	public isExploding = false;
 	public obstacleCanvas: ObstacleCanvas;
 	public twoPi: number = 2 * Math.PI;
 	public lastDirectionMoved: Direction = Direction.UNKNOWN;
@@ -47,6 +49,7 @@ export class Tank {
 	public maxBombs: number;
 	public canvasWidth: number;
 	public canvasHeight: number;
+	private fragments: BombFragment[];
 
 	constructor(
 		canvas: HTMLCanvasElement,
@@ -88,33 +91,91 @@ export class Tank {
 		// Set the initital X and Y aim position to the center of the canvas
 		this.aimXPos = canvas.width / 2;
 		this.aimYPos = canvas.height / 2;
+
+		this.fragments = [];
 	}
 
 	public draw(context: CanvasRenderingContext2D): void {
 		if (this.isDestroyed) {
-			return;
+			if (this.isExploding) {
+				this.updateExplosion(context);
+			}
+			context.strokeStyle = this.color;
+			context.lineWidth = 5;
+			context.setLineDash([]);
+			const xLength = 10;
+			context.beginPath();
+			context.moveTo(this.xPos + this.tankMidpoint - xLength, this.yPos + this.tankMidpoint - xLength);
+			context.lineTo(this.xPos + this.tankMidpoint + xLength, this.yPos + this.tankMidpoint + xLength);
+			context.stroke();
+
+			context.beginPath();
+			context.moveTo(this.xPos + this.tankMidpoint - xLength, this.yPos + this.tankMidpoint + xLength);
+			context.lineTo(this.xPos + this.tankMidpoint + xLength, this.yPos + this.tankMidpoint - xLength);
+			context.stroke();
+		} else {
+			context.fillStyle = this.color;
+			context.fillRect(this.xPos, this.yPos, this.size, this.size);
+
+			context.setLineDash([]);
+			context.lineJoin = 'bevel';
+			context.strokeStyle = 'black';
+			context.lineWidth = 2;
+			context.strokeRect(this.xPos, this.yPos, this.size, this.size);
+
+			context.beginPath();
+			context.arc(this.xPos + this.tankMidpoint, this.yPos + this.tankMidpoint, this.size / 3, 0, this.twoPi);
+			context.stroke();
+
+			const endX = this.xPos + this.tankMidpoint + Math.cos(this.aimAngle) * this.size;
+			const endY = this.yPos + this.tankMidpoint + Math.sin(this.aimAngle) * this.size;
+			context.beginPath();
+			context.moveTo(this.xPos + this.tankMidpoint, this.yPos + this.tankMidpoint);
+			context.lineTo(endX, endY);
+			context.lineWidth = this.gunBarrellWidth;
+			context.stroke();
 		}
+	}
 
-		context.fillStyle = this.color;
-		context.fillRect(this.xPos, this.yPos, this.size, this.size);
+	public destroy(): void {
+		this.isDestroyed = true;
+		this.isExploding = true;
+		this.createFragments();
+		setTimeout((): void => {
+			this.isExploding = false;
+		}, 1000);
+	}
 
-		context.setLineDash([]);
-		context.lineJoin = 'bevel';
-		context.strokeStyle = 'black';
-		context.lineWidth = 2;
-		context.strokeRect(this.xPos, this.yPos, this.size, this.size);
+	createFragments(): void {
+		const fragmentCount = 50;
+		for (let i = 0; i < fragmentCount; i++) {
+			const angle = Math.random() * 2 * Math.PI;
+			const speed = Math.random() * 5 + 2;
+			const velocityX = Math.cos(angle) * speed;
+			const velocityY = Math.sin(angle) * speed;
+			const grayValue = Math.floor(Math.random() * 256);
+			const alphaValue = Math.random() * 0.5 + 0.5;
+			const fragmentColor = `rgba(${grayValue}, ${grayValue}, ${grayValue}, ${alphaValue})`;
+			const fragment = new BombFragment(
+				this.xPos + this.tankMidpoint,
+				this.yPos + this.tankMidpoint,
+				Math.random() * 2 + 1,
+				fragmentColor,
+				velocityX,
+				velocityY,
+				10
+			);
+			this.fragments.push(fragment);
+		}
+	}
 
-		context.beginPath();
-		context.arc(this.xPos + this.tankMidpoint, this.yPos + this.tankMidpoint, this.size / 3, 0, this.twoPi);
-		context.stroke();
+	updateExplosion(context: CanvasRenderingContext2D): void {
+		this.fragments.forEach((particle) => {
+			particle.update();
+			particle.draw(context);
+		});
 
-		const endX = this.xPos + this.tankMidpoint + Math.cos(this.aimAngle) * this.size;
-		const endY = this.yPos + this.tankMidpoint + Math.sin(this.aimAngle) * this.size;
-		context.beginPath();
-		context.moveTo(this.xPos + this.tankMidpoint, this.yPos + this.tankMidpoint);
-		context.lineTo(endX, endY);
-		context.lineWidth = this.gunBarrellWidth;
-		context.stroke();
+		this.fragments = this.fragments.filter((particle) => particle.life > 0);
 	}
 
 	public updatePosition(playerTank: Tank): void {
@@ -147,6 +208,9 @@ export class Tank {
 	}
 
 	public moveInCardinalDirection(direction: Direction): void {
+		if (this.isDestroyed) {
+			return;
+		}
 		switch (direction) {
 			case Direction.NORTH: {
 				this.moveNorth();
@@ -190,6 +254,9 @@ export class Tank {
 	}
 
 	public moveNorth(): void {
+		if (this.isDestroyed) {
+			return;
+		}
 		if (this.lastDirectionMoved == Direction.NORTH) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -217,6 +284,9 @@ export class Tank {
 	}
 
 	public moveSouth(): void {
+		if (this.isDestroyed) {
+			return;
+		}
 		if (this.lastDirectionMoved == Direction.SOUTH) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -244,6 +314,9 @@ export class Tank {
 	}
 
 	public moveWest(): void {
+		if (this.isDestroyed) {
+			return;
+		}
 		if (this.lastDirectionMoved == Direction.WEST) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -271,6 +344,9 @@ export class Tank {
 	}
 
 	public moveEast(): void {
+		if (this.isDestroyed) {
+			return;
+		}
 		if (this.lastDirectionMoved == Direction.EAST) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -298,6 +374,9 @@ export class Tank {
 	}
 
 	public moveNorthEast(): void {
+		if (this.isDestroyed) {
+			return;
+		}
 		if (this.lastDirectionMoved == Direction.NORTHEAST) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -340,6 +419,9 @@ export class Tank {
 	}
 
 	public moveNorthWest(): void {
+		if (this.isDestroyed) {
+			return;
+		}
 		if (this.lastDirectionMoved == Direction.NORTHWEST) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -382,6 +464,9 @@ export class Tank {
 	}
 
 	public moveSouthEast(): void {
+		if (this.isDestroyed) {
+			return;
+		}
 		if (this.lastDirectionMoved == Direction.SOUTHEAST) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -424,6 +509,9 @@ export class Tank {
 	}
 
 	public moveSouthWest(): void {
+		if (this.isDestroyed) {
+			return;
+		}
 		if (this.lastDirectionMoved == Direction.SOUTHWEST) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
