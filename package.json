@@ -1,8 +1,22 @@
 {
   "name": "treads",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "A top down game of mini tanks",
-  "private": true,
+  "keywords": [
+    "game",
+    "tanks",
+    "strategy",
+    "top-down",
+    "2d",
+    "typescript",
+    "webpack"
+  ],
+  "homepage": "https://github.com/sparrill14/treads#readme",
+  "bugs": {
+    "url": "https://github.com/sparrill14/treads/issues"
+  },
+  "license": "MIT",
+  "author": "Steven Parrill <sparrill14@gmail.com> (https://github.com/sparrill14)",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "webpack serve --open --config webpack.dev.js",
@@ -16,19 +30,6 @@
     "type": "git",
     "url": "git+https://github.com/sparrill14/Treads.git"
   },
-  "keywords": [
-    "game",
-    "tanks",
-    "strategy",
-    "top-down",
-    "2d"
-  ],
-  "author": "Steven Parrill",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/sparrill14/treads/issues"
-  },
-  "homepage": "https://github.com/sparrill14/treads#readme",
   "devDependencies": {
     "@eslint/js": "^9.3.0",
     "@types/eslint__js": "^8.42.3",
