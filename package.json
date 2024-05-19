@@ -1,7 +1,6 @@
 {
   "name": "treads",
-  "version": "1.4.0",
-  "type": "module",
+  "version": "1.4.1",
   "description": "A top down game of mini tanks",
   "private": true,
   "scripts": {
