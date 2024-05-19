@@ -1,3 +1,1 @@
-export type KeyStates = {
-    [key: string]: boolean;
-}
+export type KeyStates = Record<string, boolean>;
