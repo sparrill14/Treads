@@ -142,8 +142,8 @@ export class Bomb {
 	}
 
 	createFragments(): void {
-		const fargmentCount = 50;
-		for (let i = 0; i < fargmentCount; i++) {
+		const fragmentCount = 50;
+		for (let i = 0; i < fragmentCount; i++) {
 			const angle = Math.random() * 2 * Math.PI;
 			const speed = Math.random() * 5 + 2;
 			const velocityX = Math.cos(angle) * speed;
@@ -212,5 +212,33 @@ export class SuperBomb extends Bomb {
 	constructor(startX: number, startY: number, isDestroyed: boolean, audioManager: AudioManager) {
 		const superBombBlastRadius = 20;
 		super(startX, startY, superBombBlastRadius, isDestroyed, audioManager);
+	}
+}
+
+export class LoveBomb extends Bomb {
+	constructor(startX: number, startY: number, isDestroyed: boolean, audioManager: AudioManager) {
+		const loveBombBlastRadius = 100;
+		super(startX, startY, loveBombBlastRadius, isDestroyed, audioManager);
+	}
+
+	override draw(context: CanvasRenderingContext2D): void {
+		if (this.isExploding) {
+			this.drawExplosion(context);
+			return;
+		}
+		context.save();
+		context.translate(this.xPos, this.yPos);
+		context.scale(1, 1.3);
+		context.beginPath();
+		context.moveTo(0, 0);
+		context.bezierCurveTo(12, -12, 24, 0, 0, 24);
+		context.bezierCurveTo(-24, 0, -12, -12, 0, 0);
+		context.fillStyle = this.shouldFlashRed ? 'red' : '#FFC2D1';
+		context.fill();
+		context.lineWidth = 3;
+		context.strokeStyle = 'black';
+		context.stroke();
+		context.closePath();
+		context.restore();
 	}
 }

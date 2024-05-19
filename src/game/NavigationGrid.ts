@@ -23,8 +23,16 @@ export class NavigationGrid {
 	public gridXLength: number;
 	public gridYLength: number;
 	public path: Node[] = [];
+	public stationary: boolean;
 
-	constructor(gameCanvas: GameCanvas, obstacleCanvas: ObstacleCanvas) {
+	constructor(gameCanvas?: GameCanvas, obstacleCanvas?: ObstacleCanvas, stationary: boolean = true) {
+		if (!gameCanvas || !obstacleCanvas || stationary) {
+			this.gridXLength = 0;
+			this.gridYLength = 0;
+			this.stationary = true;
+			return;
+		}
+		this.stationary = false;
 		this.gridXLength = Math.floor(gameCanvas.width / this.gridCellWidth);
 		this.gridYLength = Math.floor(gameCanvas.height / this.gridCellWidth);
 		for (let x = 0; x < this.gridXLength; x++) {
@@ -54,6 +62,9 @@ export class NavigationGrid {
 	}
 
 	getNodeFromTank(tank: Tank): Node {
+		if (this.stationary) {
+			return new Node(0, 0);
+		}
 		let xGridCoordinate: number = Math.floor((tank.xPos + tank.size / 2) / this.gridCellWidth);
 		let yGridCoordinate: number = Math.floor((tank.yPos + tank.size / 2) / this.gridCellWidth);
 
