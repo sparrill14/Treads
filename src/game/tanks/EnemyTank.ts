@@ -74,7 +74,7 @@ export class EnemyTank extends Tank {
 		super.draw(context);
 	}
 
-	public override updatePosition(playerTank: Tank): void {
+	public override updatePosition(playerTank: Tank, enemyTanks: Tank[], ammunition: Ammunition[], bombs: Bomb[]): void {
 		this.pathRecaculationInterval -= 1;
 		if (this.path == null || this.path.length == 0 || this.pathRecaculationInterval == 0) {
 			this.navigationGrid.reset();

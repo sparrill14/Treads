@@ -189,7 +189,7 @@ export class Tank {
 		this.fragments = this.fragments.filter((particle) => particle.life > 0);
 	}
 
-	public updatePosition(playerTank: Tank): void {
+	public updatePosition(playerTank: Tank, enemyTanks: Tank[], ammunition: Ammunition[], bombs: Bomb[]): void {
 		return;
 	}
 

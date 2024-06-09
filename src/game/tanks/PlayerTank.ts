@@ -63,7 +63,7 @@ export class PlayerTank extends Tank {
 		});
 	}
 
-	public override updatePosition(playerTank: Tank): void {
+	public override updatePosition(playerTank: Tank, enemyTanks: Tank[], ammunition: Ammunition[], bombs: Bomb[]): void {
 		// Move the tank
 		if (this.up() && this.right()) {
 			this.moveNorthEast();
