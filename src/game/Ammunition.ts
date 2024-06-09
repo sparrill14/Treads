@@ -1,10 +1,11 @@
 import { AudioFile, AudioManager } from './AudioManager';
+import { Bomb } from './Bomb';
 import { ObstacleCanvas } from './ObstacleCanvas';
 import { Tank } from './tanks/Tank';
 
 export class Ammunition {
-	public xPos: number;
-	public yPos: number;
+	public xPosition: number;
+	public yPosition: number;
 	public xVelocity: number;
 	public yVelocity: number;
 	public theta: number;
@@ -15,6 +16,7 @@ export class Ammunition {
 	public canvasHeight: number;
 	public isDestroyed: boolean;
 	public audioManager: AudioManager;
+	public radius: number = 4;
 
 	constructor(
 		startX: number,
@@ -27,8 +29,8 @@ export class Ammunition {
 		isDestroyed: boolean,
 		audioManager: AudioManager
 	) {
-		this.xPos = startX;
-		this.yPos = startY;
+		this.xPosition = startX;
+		this.yPosition = startY;
 		this.theta = theta;
 		this.speed = speed;
 		this.xVelocity = Math.cos(this.theta) * this.speed;
@@ -42,44 +44,44 @@ export class Ammunition {
 	}
 
 	updatePosition(obstacleCanvas: ObstacleCanvas): void {
-		this.xPos += this.xVelocity;
-		this.yPos += this.yVelocity;
+		this.xPosition += this.xVelocity;
+		this.yPosition += this.yVelocity;
 
-		if (this.xPos <= 0 || this.xPos > this.canvasWidth) {
+		if (this.xPosition <= 0 || this.xPosition > this.canvasWidth) {
 			this.xVelocity = -this.xVelocity;
 			this.bounces++;
 		}
 
-		if (this.yPos <= 0 || this.yPos > this.canvasHeight) {
+		if (this.yPosition <= 0 || this.yPosition > this.canvasHeight) {
 			this.yVelocity = -this.yVelocity;
 			this.bounces++;
 		}
 
 		obstacleCanvas.obstacles.forEach((obstacle) => {
 			if (
-				this.xPos > obstacle.xLeft &&
-				this.xPos < obstacle.xRight &&
-				this.yPos > obstacle.yTop &&
-				this.yPos < obstacle.yBottom
+				this.xPosition > obstacle.xLeft &&
+				this.xPosition < obstacle.xRight &&
+				this.yPosition > obstacle.yTop &&
+				this.yPosition < obstacle.yBottom
 			) {
 				this.bounces++;
-				const fromLeft = Math.abs(this.xPos - obstacle.xLeft);
-				const fromRight = Math.abs(this.xPos - obstacle.xRight);
-				const fromTop = Math.abs(this.yPos - obstacle.yTop);
-				const fromBottom = Math.abs(this.yPos - obstacle.yBottom);
+				const fromLeft = Math.abs(this.xPosition - obstacle.xLeft);
+				const fromRight = Math.abs(this.xPosition - obstacle.xRight);
+				const fromTop = Math.abs(this.yPosition - obstacle.yTop);
+				const fromBottom = Math.abs(this.yPosition - obstacle.yBottom);
 				const minDistance = Math.min(fromLeft, fromRight, fromTop, fromBottom);
 
 				if (minDistance === fromTop) {
-					this.yPos = obstacle.yTop - 1;
+					this.yPosition = obstacle.yTop - 1;
 					this.yVelocity = -this.yVelocity;
 				} else if (minDistance === fromBottom) {
-					this.yPos = obstacle.yBottom + 1;
+					this.yPosition = obstacle.yBottom + 1;
 					this.yVelocity = -this.yVelocity;
 				} else if (minDistance === fromLeft) {
-					this.xPos = obstacle.xLeft - 1;
+					this.xPosition = obstacle.xLeft - 1;
 					this.xVelocity = -this.xVelocity;
 				} else if (minDistance === fromRight) {
-					this.xPos = obstacle.xRight + 1;
+					this.xPosition = obstacle.xRight + 1;
 					this.xVelocity = -this.xVelocity;
 				}
 			}
@@ -96,10 +98,10 @@ export class Ammunition {
 				return;
 			}
 			if (
-				this.xPos > enemyTank.xLeft &&
-				this.xPos < enemyTank.xRight &&
-				this.yPos > enemyTank.yTop &&
-				this.yPos < enemyTank.yBottom
+				this.xPosition > enemyTank.xLeft &&
+				this.xPosition < enemyTank.xRight &&
+				this.yPosition > enemyTank.yTop &&
+				this.yPosition < enemyTank.yBottom
 			) {
 				this.isDestroyed = true;
 				enemyTank.destroy();
@@ -114,14 +116,42 @@ export class Ammunition {
 			return;
 		}
 		if (
-			this.xPos > playerTank.xLeft &&
-			this.xPos < playerTank.xRight &&
-			this.yPos > playerTank.yTop &&
-			this.yPos < playerTank.yBottom
+			this.xPosition > playerTank.xLeft &&
+			this.xPosition < playerTank.xRight &&
+			this.yPosition > playerTank.yTop &&
+			this.yPosition < playerTank.yBottom
 		) {
 			playerTank.destroy();
 			this.isDestroyed = true;
 			console.log('Player Hit!!!');
+		}
+	}
+
+	checkAmmunitionCollision(ammunitions: Ammunition[]): void {
+		for (const ammunition of ammunitions) {
+			if (ammunition !== this && !ammunition.isDestroyed) {
+				const dx = this.xPosition - ammunition.xPosition;
+				const dy = this.yPosition - ammunition.yPosition;
+				const distance = Math.sqrt(dx * dx + dy * dy);
+				if (distance < this.radius + ammunition.radius) {
+					this.isDestroyed = true;
+					ammunition.isDestroyed = true;
+				}
+			}
+		}
+	}
+
+	checkBombCollision(bombs: Bomb[]): void {
+		for (const bomb of bombs) {
+			if (!bomb.isDestroyed) {
+				const dx = this.xPosition - bomb.xPosition;
+				const dy = this.yPosition - bomb.yPosition;
+				const distance = Math.sqrt(dx * dx + dy * dy);
+				if (distance < this.radius + bomb.radius) {
+					this.isDestroyed = true;
+					bomb.destroy();
+				}
+			}
 		}
 	}
 
@@ -133,8 +163,8 @@ export class Ammunition {
 		canvasWidth: number,
 		canvasHeight: number
 	) {
-		this.xPos = startX;
-		this.yPos = startY;
+		this.xPosition = startX;
+		this.yPosition = startY;
 		this.theta = theta;
 		this.isDestroyed = isDestroyed;
 		this.xVelocity = Math.cos(this.theta) * this.speed;
@@ -146,7 +176,7 @@ export class Ammunition {
 
 	draw(context: CanvasRenderingContext2D): void {
 		context.beginPath();
-		context.arc(this.xPos, this.yPos, 4, 0, 2 * Math.PI);
+		context.arc(this.xPosition, this.yPosition, this.radius, 0, 2 * Math.PI);
 		context.fillStyle = 'white';
 		context.fill();
 		context.lineWidth = 2;
@@ -156,8 +186,8 @@ export class Ammunition {
 	}
 
 	willHitPlayerTank(obstacleCanvas: ObstacleCanvas, playerTank: Tank): boolean {
-		let predictedXPosition: number = this.xPos;
-		let predictedYPosition: number = this.yPos;
+		let predictedXPosition: number = this.xPosition;
+		let predictedYPosition: number = this.yPosition;
 		let predictedXVelocity: number = this.xVelocity;
 		let predictedYVelocity: number = this.yVelocity;
 		let predictedBounces = 0;
@@ -233,7 +263,7 @@ export class BasicAIAmmunition extends Ammunition {
 		isDestroyed: boolean,
 		audioManager: AudioManager
 	) {
-		const BasicAIAmmunitionMaxBounces = 0;
+		const BasicAIAmmunitionMaxBounces = 1;
 		const BasicAIAmmunitionSpeed = 4;
 		super(
 			startX,

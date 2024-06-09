@@ -25,8 +25,8 @@ export class PlayerTank extends Tank {
 	constructor(
 		canvas: HTMLCanvasElement,
 		reticule: Reticule,
-		xPos: number,
-		yPos: number,
+		xPosition: number,
+		yPosition: number,
 		speed: number,
 		size: number,
 		color: string,
@@ -35,7 +35,7 @@ export class PlayerTank extends Tank {
 		bombs: Bomb[],
 		audioManager: AudioManager
 	) {
-		super(canvas, reticule, xPos, yPos, speed, size, color, obstacleCanvas, ammunition, bombs, audioManager);
+		super(canvas, reticule, xPosition, yPosition, speed, size, color, obstacleCanvas, ammunition, bombs, audioManager);
 
 		document.addEventListener('keydown', (event: KeyboardEvent) => {
 			if (this.keyStates.hasOwnProperty(event.key)) {
@@ -85,18 +85,18 @@ export class PlayerTank extends Tank {
 			this.moveEast();
 		}
 
-		this.xLeft = this.xPos;
-		this.xRight = this.xPos + this.size;
-		this.yTop = this.yPos;
-		this.yBottom = this.yPos + this.size;
+		this.xLeft = this.xPosition;
+		this.xRight = this.xPosition + this.size;
+		this.yTop = this.yPosition;
+		this.yBottom = this.yPosition + this.size;
 	}
 
 	public override plantBomb(playerTank: Tank): void {
 		if (!this.isDestroyed) {
 			const availableBombIndex = this.bombs.findIndex((bomb) => bomb.isDestroyed);
 			if (availableBombIndex !== -1) {
-				this.bombs[availableBombIndex].xPos = this.xPos + this.size / 2;
-				this.bombs[availableBombIndex].yPos = this.yPos + this.size / 2;
+				this.bombs[availableBombIndex].xPosition = this.xPosition + this.size / 2;
+				this.bombs[availableBombIndex].yPosition = this.yPosition + this.size / 2;
 				this.bombs[availableBombIndex].isDestroyed = false;
 				this.bombs[availableBombIndex].setFuse();
 			}
@@ -108,8 +108,8 @@ export class PlayerTank extends Tank {
 		if (this.isDestroyed) {
 			return;
 		}
-		const dx: number = mouseXPos - this.xPos - this.tankMidpoint;
-		const dy: number = mouseYpos - this.yPos - this.tankMidpoint;
+		const dx: number = mouseXPos - this.xPosition - this.tankMidpoint;
+		const dy: number = mouseYpos - this.yPosition - this.tankMidpoint;
 		let theta = Math.atan2(dy, dx);
 		if (theta < 0) {
 			theta += 2 * Math.PI;
@@ -123,8 +123,8 @@ export class PlayerTank extends Tank {
 			if (availableAmmunitionIndex !== -1) {
 				this.audioManager.play(AudioFile.TANK_FIRE);
 				this.ammunition[availableAmmunitionIndex] = new PlayerAmmunition(
-					this.xPos + this.size / 2,
-					this.yPos + this.size / 2,
+					this.gunBarrellEndX,
+					this.gunBarrellEndY,
 					this.aimAngle,
 					this.canvasWidth,
 					this.canvasHeight,
@@ -163,7 +163,7 @@ export class DefaultPlayerTank extends PlayerTank {
 	) {
 		const defaultPlayerTankSpeed = 2;
 		const defaultPlayerTankSize = 30;
-		const defaultPlayerTankColor = '#6384a1';
+		const defaultPlayerTankColor = '#4f6d7a';
 		const ammunition: Ammunition[] = [
 			new PlayerAmmunition(0, 0, 0, 0, 0, true, audioManager),
 			new PlayerAmmunition(0, 0, 0, 0, 0, true, audioManager),

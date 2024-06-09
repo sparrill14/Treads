@@ -65,8 +65,8 @@ export class NavigationGrid {
 		if (this.stationary) {
 			return new Node(0, 0);
 		}
-		let xGridCoordinate: number = Math.floor((tank.xPos + tank.size / 2) / this.gridCellWidth);
-		let yGridCoordinate: number = Math.floor((tank.yPos + tank.size / 2) / this.gridCellWidth);
+		let xGridCoordinate: number = Math.floor((tank.xPosition + tank.size / 2) / this.gridCellWidth);
+		let yGridCoordinate: number = Math.floor((tank.yPosition + tank.size / 2) / this.gridCellWidth);
 
 		xGridCoordinate = Math.max(0, Math.min(xGridCoordinate, this.gridXLength - 1));
 		yGridCoordinate = Math.max(0, Math.min(yGridCoordinate, this.gridYLength - 1));
@@ -137,10 +137,8 @@ export class NavigationGrid {
 				if (dx === 0 && dy === 0) {
 					continue;
 				}
-
 				const x = node.x + dx;
 				const y = node.y + dy;
-
 				if (x >= 0 && y >= 0 && x < this.gridXLength && y < this.gridYLength && this.grid[x][y].walkable) {
 					neighbors.push(this.grid[x][y]);
 				}

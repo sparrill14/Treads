@@ -1,3 +1,4 @@
+import { PastelColorPalette } from '../../ui/PastelColorPalette';
 import { Ammunition } from '../Ammunition';
 import { AudioManager } from '../AudioManager';
 import { Bomb } from '../Bomb';
@@ -9,14 +10,14 @@ import { Tank } from './Tank';
 
 export class SuperBomberMovingTank extends EnemyTank {
 	public minTimeBetweenShotsMS = 1000;
-	public timeBetweenShotsIsElapsed = true;
+	public timeBetweenShotsIsElapsed = false;
 	public minTimeBetweenBombPlantsMS = 1000;
 	public timeBetweenPlantsIsElapsed = true;
 
 	constructor(
 		canvas: HTMLCanvasElement,
-		xPos: number,
-		yPos: number,
+		xPosition: number,
+		yPosition: number,
 		obstacleCanvas: ObstacleCanvas,
 		ammunition: Ammunition[],
 		bombs: Bomb[],
@@ -26,12 +27,12 @@ export class SuperBomberMovingTank extends EnemyTank {
 		const superBomberMovingTankSpeed = 2.2;
 		const superBomberMovingTankSize = 30;
 		const superBomberMovingTankAggressionFactor = 5;
-		const superBomberMovingTankColor = 'pink';
+		const superBomberMovingTankColor = PastelColorPalette.BLUSH_PINK;
 		super(
 			canvas,
 			new NoReticule(),
-			xPos,
-			yPos,
+			xPosition,
+			yPosition,
 			superBomberMovingTankSpeed,
 			superBomberMovingTankSize,
 			superBomberMovingTankAggressionFactor,
@@ -42,17 +43,20 @@ export class SuperBomberMovingTank extends EnemyTank {
 			navigationGrid,
 			audioManager
 		);
+		setTimeout(() => {
+			this.timeBetweenShotsIsElapsed = true;
+		}, 1000);
 	}
 
 	public override plantBomb(playerTank: Tank): void {
 		if (this.timeBetweenPlantsIsElapsed && !this.isDestroyed) {
 			const availableBombIndex = this.bombs.findIndex((bomb) => bomb.isDestroyed);
 			if (availableBombIndex !== -1) {
-				this.bombs[availableBombIndex].xPos = this.xPos + this.size / 2;
-				this.bombs[availableBombIndex].yPos = this.yPos + this.size / 2;
+				this.bombs[availableBombIndex].xPosition = this.xPosition + this.size / 2;
+				this.bombs[availableBombIndex].yPosition = this.yPosition + this.size / 2;
 				const willHitPlayerTank: boolean = this.bombs[availableBombIndex].isPointInsideBlastRadius(
-					playerTank.xPos + playerTank.tankMidpoint,
-					playerTank.yPos + playerTank.tankMidpoint
+					playerTank.xPosition + playerTank.tankMidpoint,
+					playerTank.yPosition + playerTank.tankMidpoint
 				);
 				if (willHitPlayerTank) {
 					this.bombs[availableBombIndex].isDestroyed = false;
@@ -72,8 +76,8 @@ export class SuperBomberMovingTank extends EnemyTank {
 			const availableAmmunitionIndex = this.ammunition.findIndex((ammunition) => ammunition.isDestroyed);
 			if (availableAmmunitionIndex !== -1) {
 				this.ammunition[availableAmmunitionIndex].reload(
-					this.xPos + this.size / 2,
-					this.yPos + this.size / 2,
+					this.gunBarrellEndX,
+					this.gunBarrellEndY,
 					this.aimAngle,
 					true,
 					this.canvasWidth,
@@ -100,8 +104,8 @@ export class SuperBomberMovingTank extends EnemyTank {
 			return;
 		}
 
-		const dx: number = playerTank.xPos + playerTank.size / 2 - this.xPos - this.tankMidpoint;
-		const dy: number = playerTank.yPos + playerTank.size / 2 - this.yPos - this.tankMidpoint;
+		const dx: number = playerTank.xPosition + playerTank.size / 2 - this.xPosition - this.tankMidpoint;
+		const dy: number = playerTank.yPosition + playerTank.size / 2 - this.yPosition - this.tankMidpoint;
 		let theta = Math.atan2(dy, dx);
 		if (theta < 0) {
 			theta += 2 * Math.PI;

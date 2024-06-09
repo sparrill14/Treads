@@ -6,7 +6,14 @@ module.exports = {
     plugins: [
         new HtmlWebpackPlugin({
             title: 'Treads',
-            template: './src/index.html'
+            template: './src/index.html',
+            favicon: './src/assets/icons/favicon.ico',
+            scriptLoading: 'module',
+            meta: {
+                description: 'Treads',
+                charset: 'UTF-8',
+                viewport: 'width=device-width, initial-scale=1, shrink-to-fit=no'
+            }
         }),
         new MiniCssExtractPlugin({
             filename: "[name].css",
@@ -48,7 +55,7 @@ module.exports = {
                         loader: 'file-loader',
                         options: {
                             name: '[name].ico',
-                            outputPath: 'assets',
+                            outputPath: 'assets/icons',
                         },
                     },
                 ],

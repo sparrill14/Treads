@@ -18,7 +18,7 @@ export class Obstacle {
 	draw(context: CanvasRenderingContext2D): void {
 		context.beginPath();
 		context.rect(this.xLeft, this.yTop, this.width, this.height);
-		context.fillStyle = 'black';
+		context.fillStyle = '#1d1c1a';
 		context.fill();
 	}
 }

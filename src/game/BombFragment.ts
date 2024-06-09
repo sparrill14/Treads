@@ -1,12 +1,13 @@
 export class BombFragment {
-	public x: number;
-	public y: number;
-	public fragmentRadius: number;
-	public fragmentColor: string;
-	public velocityX: number;
-	public velocityY: number;
-	public blastRadius: number;
 	public life: number;
+
+	private x: number;
+	private y: number;
+	private fragmentRadius: number;
+	private fragmentColor: string;
+	private velocityX: number;
+	private velocityY: number;
+	private blastRadius: number;
 
 	constructor(x: number, y: number, radius: number, color: string, velocityX: number, velocityY: number, life: number) {
 		this.x = x;

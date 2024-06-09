@@ -287,12 +287,8 @@ export class Level7 extends Level {
 			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
 			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
 			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
 		];
 		const basicAmmo2: Ammunition[] = [
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
 			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
 			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
 			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
@@ -301,31 +297,11 @@ export class Level7 extends Level {
 			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
 			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
 			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
 		];
 
-		const basicBombs: Bomb[] = [
-			new LoveBomb(0, 0, true, audioManager),
-			new LoveBomb(0, 0, true, audioManager),
-			new LoveBomb(0, 0, true, audioManager),
-			new LoveBomb(0, 0, true, audioManager),
-			new LoveBomb(0, 0, true, audioManager),
-		];
-		const basicBombs2: Bomb[] = [
-			new LoveBomb(0, 0, true, audioManager),
-			new LoveBomb(0, 0, true, audioManager),
-			new LoveBomb(0, 0, true, audioManager),
-			new LoveBomb(0, 0, true, audioManager),
-			new LoveBomb(0, 0, true, audioManager),
-		];
-		const basicBombs3: Bomb[] = [
-			new LoveBomb(0, 0, true, audioManager),
-			new LoveBomb(0, 0, true, audioManager),
-			new LoveBomb(0, 0, true, audioManager),
-			new LoveBomb(0, 0, true, audioManager),
-			new LoveBomb(0, 0, true, audioManager),
-		];
+		const basicBombs: Bomb[] = [new LoveBomb(0, 0, true, audioManager), new LoveBomb(0, 0, true, audioManager)];
+		const basicBombs2: Bomb[] = [new LoveBomb(0, 0, true, audioManager), new LoveBomb(0, 0, true, audioManager)];
+		const basicBombs3: Bomb[] = [new LoveBomb(0, 0, true, audioManager), new LoveBomb(0, 0, true, audioManager)];
 
 		const navigationGrid: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
 		const navigationGrid2: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
