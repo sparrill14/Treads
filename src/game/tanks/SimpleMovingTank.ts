@@ -1,3 +1,4 @@
+import { PastelColorPalette } from '../../ui/PastelColorPalette';
 import { Ammunition } from '../Ammunition';
 import { AudioManager } from '../AudioManager';
 import { Bomb } from '../Bomb';
@@ -10,8 +11,8 @@ import { Tank } from './Tank';
 export class SimpleMovingTank extends EnemyTank {
 	constructor(
 		canvas: HTMLCanvasElement,
-		xPos: number,
-		yPos: number,
+		xPosition: number,
+		yPosition: number,
 		obstacleCanvas: ObstacleCanvas,
 		ammunition: Ammunition[],
 		bombs: Bomb[],
@@ -21,12 +22,12 @@ export class SimpleMovingTank extends EnemyTank {
 		const simpleMovingTankSpeed = 1.2;
 		const simpleMovingTankSize = 30;
 		const simpleMovingTankAggressionFactor = 15;
-		const simpleMovingTankColor = '#fd8a8a';
+		const simpleMovingTankColor = PastelColorPalette.CORAL_ORANGE;
 		super(
 			canvas,
 			new NoReticule(),
-			xPos,
-			yPos,
+			xPosition,
+			yPosition,
 			simpleMovingTankSpeed,
 			simpleMovingTankSize,
 			simpleMovingTankAggressionFactor,
@@ -43,8 +44,8 @@ export class SimpleMovingTank extends EnemyTank {
 		const availableAmmunitionIndex = this.ammunition.findIndex((ammunition) => ammunition.isDestroyed);
 		if (availableAmmunitionIndex !== -1) {
 			this.ammunition[availableAmmunitionIndex].reload(
-				this.xPos + this.size / 2,
-				this.yPos + this.size / 2,
+				this.gunBarrellEndX,
+				this.gunBarrellEndY,
 				this.aimAngle,
 				true,
 				this.canvasWidth,
@@ -66,8 +67,8 @@ export class SimpleMovingTank extends EnemyTank {
 			return;
 		}
 
-		const dx: number = playerTank.xPos + playerTank.size / 2 - this.xPos - this.tankMidpoint;
-		const dy: number = playerTank.yPos + playerTank.size / 2 - this.yPos - this.tankMidpoint;
+		const dx: number = playerTank.xPosition + playerTank.size / 2 - this.xPosition - this.tankMidpoint;
+		const dy: number = playerTank.yPosition + playerTank.size / 2 - this.yPosition - this.tankMidpoint;
 		let theta = Math.atan2(dy, dx);
 		if (theta < 0) {
 			theta += 2 * Math.PI;

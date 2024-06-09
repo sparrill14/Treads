@@ -18,8 +18,8 @@ export enum Direction {
 }
 
 export class Tank {
-	public xPos: number;
-	public yPos: number;
+	public xPosition: number;
+	public yPosition: number;
 	public xLeft: number;
 	public xRight: number;
 	public yTop: number;
@@ -43,6 +43,8 @@ export class Tank {
 	public aimYPos: number;
 	public xOffset: number;
 	public yOffset: number;
+	public gunBarrellEndX: number;
+	public gunBarrellEndY: number;
 	public ammunition: Ammunition[] = [];
 	public maxAmmunition: number;
 	public bombs: Bomb[] = [];
@@ -54,8 +56,8 @@ export class Tank {
 	constructor(
 		canvas: HTMLCanvasElement,
 		reticule: Reticule,
-		xPos: number,
-		yPos: number,
+		xPosition: number,
+		yPosition: number,
 		speed: number,
 		size: number,
 		color: string,
@@ -65,12 +67,12 @@ export class Tank {
 		audioManager: AudioManager
 	) {
 		this.reticule = reticule;
-		this.xPos = xPos;
-		this.yPos = yPos;
-		this.xLeft = xPos;
-		this.xRight = xPos + size;
-		this.yTop = yPos;
-		this.yBottom = yPos + size;
+		this.xPosition = xPosition;
+		this.yPosition = yPosition;
+		this.xLeft = xPosition;
+		this.xRight = xPosition + size;
+		this.yTop = yPosition;
+		this.yBottom = yPosition + size;
 		this.speed = speed;
 		this.size = size;
 		this.color = color;
@@ -83,14 +85,23 @@ export class Tank {
 		this.bombs = bombs;
 		this.maxBombs = bombs.length;
 		this.audioManager = audioManager;
-
-		this.aimAngle = 90;
 		const canvasRect: DOMRect = canvas.getBoundingClientRect();
 		this.xOffset = canvasRect.left;
 		this.yOffset = canvasRect.top;
 		// Set the initital X and Y aim position to the center of the canvas
 		this.aimXPos = canvas.width / 2;
 		this.aimYPos = canvas.height / 2;
+
+		const dx: number = this.aimXPos - this.xPosition - this.tankMidpoint;
+		const dy: number = this.aimYPos - this.yPosition - this.tankMidpoint;
+		let theta = Math.atan2(dy, dx);
+		if (theta < 0) {
+			theta += 2 * Math.PI;
+		}
+		this.aimAngle = theta;
+
+		this.gunBarrellEndX = this.xPosition + this.tankMidpoint + Math.cos(this.aimAngle) * this.size;
+		this.gunBarrellEndY = this.yPosition + this.tankMidpoint + Math.sin(this.aimAngle) * this.size;
 
 		this.fragments = [];
 	}
@@ -103,35 +114,35 @@ export class Tank {
 			context.strokeStyle = this.color;
 			context.lineWidth = 5;
 			context.setLineDash([]);
-			const xLength = 10;
+			const xLength = 12;
 			context.beginPath();
-			context.moveTo(this.xPos + this.tankMidpoint - xLength, this.yPos + this.tankMidpoint - xLength);
-			context.lineTo(this.xPos + this.tankMidpoint + xLength, this.yPos + this.tankMidpoint + xLength);
+			context.moveTo(this.xPosition + this.tankMidpoint - xLength, this.yPosition + this.tankMidpoint - xLength);
+			context.lineTo(this.xPosition + this.tankMidpoint + xLength, this.yPosition + this.tankMidpoint + xLength);
 			context.stroke();
 
 			context.beginPath();
-			context.moveTo(this.xPos + this.tankMidpoint - xLength, this.yPos + this.tankMidpoint + xLength);
-			context.lineTo(this.xPos + this.tankMidpoint + xLength, this.yPos + this.tankMidpoint - xLength);
+			context.moveTo(this.xPosition + this.tankMidpoint - xLength, this.yPosition + this.tankMidpoint + xLength);
+			context.lineTo(this.xPosition + this.tankMidpoint + xLength, this.yPosition + this.tankMidpoint - xLength);
 			context.stroke();
 		} else {
 			context.fillStyle = this.color;
-			context.fillRect(this.xPos, this.yPos, this.size, this.size);
+			context.fillRect(this.xPosition, this.yPosition, this.size, this.size);
 
 			context.setLineDash([]);
 			context.lineJoin = 'bevel';
 			context.strokeStyle = 'black';
 			context.lineWidth = 2;
-			context.strokeRect(this.xPos, this.yPos, this.size, this.size);
+			context.strokeRect(this.xPosition, this.yPosition, this.size, this.size);
 
 			context.beginPath();
-			context.arc(this.xPos + this.tankMidpoint, this.yPos + this.tankMidpoint, this.size / 3, 0, this.twoPi);
+			context.arc(this.xPosition + this.tankMidpoint, this.yPosition + this.tankMidpoint, this.size / 3, 0, this.twoPi);
 			context.stroke();
 
-			const endX = this.xPos + this.tankMidpoint + Math.cos(this.aimAngle) * this.size;
-			const endY = this.yPos + this.tankMidpoint + Math.sin(this.aimAngle) * this.size;
+			this.gunBarrellEndX = this.xPosition + this.tankMidpoint + Math.cos(this.aimAngle) * this.size;
+			this.gunBarrellEndY = this.yPosition + this.tankMidpoint + Math.sin(this.aimAngle) * this.size;
 			context.beginPath();
-			context.moveTo(this.xPos + this.tankMidpoint, this.yPos + this.tankMidpoint);
-			context.lineTo(endX, endY);
+			context.moveTo(this.xPosition + this.tankMidpoint, this.yPosition + this.tankMidpoint);
+			context.lineTo(this.gunBarrellEndX, this.gunBarrellEndY);
 			context.lineWidth = this.gunBarrellWidth;
 			context.stroke();
 		}
@@ -157,8 +168,8 @@ export class Tank {
 			const alphaValue = Math.random() * 0.5 + 0.5;
 			const fragmentColor = `rgba(${grayValue}, ${grayValue}, ${grayValue}, ${alphaValue})`;
 			const fragment = new BombFragment(
-				this.xPos + this.tankMidpoint,
-				this.yPos + this.tankMidpoint,
+				this.xPosition + this.tankMidpoint,
+				this.yPosition + this.tankMidpoint,
 				Math.random() * 2 + 1,
 				fragmentColor,
 				velocityX,
@@ -266,18 +277,18 @@ export class Tank {
 		let blocked = false;
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
-				this.yPos - this.speed < obstacle.yTop + obstacle.height &&
-				this.yPos > obstacle.yTop &&
-				obstacle.xLeft < this.xPos + this.size &&
-				this.xPos < obstacle.xRight
+				this.yPosition - this.speed < obstacle.yTop + obstacle.height &&
+				this.yPosition > obstacle.yTop &&
+				obstacle.xLeft < this.xPosition + this.size &&
+				this.xPosition < obstacle.xRight
 			) {
-				this.yPos = obstacle.yBottom;
+				this.yPosition = obstacle.yBottom;
 				blocked = true;
 				break;
 			}
 		}
 		if (!blocked) {
-			this.yPos = Math.max(this.yPos - this.speed, 0);
+			this.yPosition = Math.max(this.yPosition - this.speed, 0);
 		} else {
 			this.wasLastMoveBlocked = true;
 		}
@@ -296,18 +307,18 @@ export class Tank {
 		let blocked = false;
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
-				this.yPos + this.speed + this.size > obstacle.yTop &&
-				this.yPos < obstacle.yTop + obstacle.height &&
-				obstacle.xLeft < this.xPos + this.size &&
-				this.xPos < obstacle.xRight
+				this.yPosition + this.speed + this.size > obstacle.yTop &&
+				this.yPosition < obstacle.yTop + obstacle.height &&
+				obstacle.xLeft < this.xPosition + this.size &&
+				this.xPosition < obstacle.xRight
 			) {
-				this.yPos = obstacle.yTop - this.size;
+				this.yPosition = obstacle.yTop - this.size;
 				blocked = true;
 				break;
 			}
 		}
 		if (!blocked) {
-			this.yPos = Math.min(this.yPos + this.speed, this.canvasHeight - this.size);
+			this.yPosition = Math.min(this.yPosition + this.speed, this.canvasHeight - this.size);
 		} else {
 			this.wasLastMoveBlocked = true;
 		}
@@ -326,18 +337,18 @@ export class Tank {
 		let blocked = false;
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
-				this.xPos - this.speed < obstacle.xRight &&
-				this.xPos > obstacle.xLeft &&
-				obstacle.yTop < this.yPos + this.size &&
-				this.yPos < obstacle.yBottom
+				this.xPosition - this.speed < obstacle.xRight &&
+				this.xPosition > obstacle.xLeft &&
+				obstacle.yTop < this.yPosition + this.size &&
+				this.yPosition < obstacle.yBottom
 			) {
-				this.xPos = obstacle.xRight;
+				this.xPosition = obstacle.xRight;
 				blocked = true;
 				break;
 			}
 		}
 		if (!blocked) {
-			this.xPos = Math.max(this.xPos - this.speed, 0);
+			this.xPosition = Math.max(this.xPosition - this.speed, 0);
 		} else {
 			this.wasLastMoveBlocked = true;
 		}
@@ -356,18 +367,18 @@ export class Tank {
 		let blocked = false;
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
-				this.xPos + this.speed + this.size > obstacle.xLeft &&
-				this.xPos < obstacle.xLeft + obstacle.width &&
-				obstacle.yTop < this.yPos + this.size &&
-				this.yPos < obstacle.yBottom
+				this.xPosition + this.speed + this.size > obstacle.xLeft &&
+				this.xPosition < obstacle.xLeft + obstacle.width &&
+				obstacle.yTop < this.yPosition + this.size &&
+				this.yPosition < obstacle.yBottom
 			) {
-				this.xPos = obstacle.xLeft - this.size;
+				this.xPosition = obstacle.xLeft - this.size;
 				blocked = true;
 				break;
 			}
 		}
 		if (!blocked) {
-			this.xPos = Math.min(this.xPos + this.speed, this.canvasWidth - this.size);
+			this.xPosition = Math.min(this.xPosition + this.speed, this.canvasWidth - this.size);
 		} else {
 			this.wasLastMoveBlocked = true;
 		}
@@ -388,22 +399,22 @@ export class Tank {
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
 				!blockedNorth &&
-				this.yPos - this.speed < obstacle.yTop + obstacle.height &&
-				this.yPos > obstacle.yTop &&
-				obstacle.xLeft < this.xPos + this.size &&
-				this.xPos < obstacle.xRight
+				this.yPosition - this.speed < obstacle.yTop + obstacle.height &&
+				this.yPosition > obstacle.yTop &&
+				obstacle.xLeft < this.xPosition + this.size &&
+				this.xPosition < obstacle.xRight
 			) {
-				this.yPos = obstacle.yBottom;
+				this.yPosition = obstacle.yBottom;
 				blockedNorth = true;
 			}
 			if (
 				!blockedEast &&
-				this.xPos + this.speed + this.size > obstacle.xLeft &&
-				this.xPos < obstacle.xLeft + obstacle.width &&
-				obstacle.yTop < this.yPos + this.size &&
-				this.yPos < obstacle.yBottom
+				this.xPosition + this.speed + this.size > obstacle.xLeft &&
+				this.xPosition < obstacle.xLeft + obstacle.width &&
+				obstacle.yTop < this.yPosition + this.size &&
+				this.yPosition < obstacle.yBottom
 			) {
-				this.xPos = obstacle.xLeft - this.size;
+				this.xPosition = obstacle.xLeft - this.size;
 				blockedEast = true;
 			}
 		}
@@ -411,10 +422,10 @@ export class Tank {
 			this.wasLastMoveBlocked = true;
 		}
 		if (!blockedNorth) {
-			this.yPos = Math.max(this.yPos - this.speed, 0);
+			this.yPosition = Math.max(this.yPosition - this.speed, 0);
 		}
 		if (!blockedEast) {
-			this.xPos = Math.min(this.xPos + this.speed, this.canvasWidth - this.size);
+			this.xPosition = Math.min(this.xPosition + this.speed, this.canvasWidth - this.size);
 		}
 	}
 
@@ -433,22 +444,22 @@ export class Tank {
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
 				!blockedNorth &&
-				this.yPos - this.speed < obstacle.yTop + obstacle.height &&
-				this.yPos > obstacle.yTop &&
-				obstacle.xLeft < this.xPos + this.size &&
-				this.xPos < obstacle.xRight
+				this.yPosition - this.speed < obstacle.yTop + obstacle.height &&
+				this.yPosition > obstacle.yTop &&
+				obstacle.xLeft < this.xPosition + this.size &&
+				this.xPosition < obstacle.xRight
 			) {
-				this.yPos = obstacle.yBottom;
+				this.yPosition = obstacle.yBottom;
 				blockedNorth = true;
 			}
 			if (
 				!blockedWest &&
-				this.xPos - this.speed < obstacle.xRight &&
-				this.xPos > obstacle.xLeft &&
-				obstacle.yTop < this.yPos + this.size &&
-				this.yPos < obstacle.yBottom
+				this.xPosition - this.speed < obstacle.xRight &&
+				this.xPosition > obstacle.xLeft &&
+				obstacle.yTop < this.yPosition + this.size &&
+				this.yPosition < obstacle.yBottom
 			) {
-				this.xPos = obstacle.xRight;
+				this.xPosition = obstacle.xRight;
 				blockedWest = true;
 			}
 		}
@@ -456,10 +467,10 @@ export class Tank {
 			this.wasLastMoveBlocked = true;
 		}
 		if (!blockedNorth) {
-			this.yPos = Math.max(this.yPos - this.speed, 0);
+			this.yPosition = Math.max(this.yPosition - this.speed, 0);
 		}
 		if (!blockedWest) {
-			this.xPos = Math.max(this.xPos - this.speed, 0);
+			this.xPosition = Math.max(this.xPosition - this.speed, 0);
 		}
 	}
 
@@ -478,22 +489,22 @@ export class Tank {
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
 				!blockedSouth &&
-				this.yPos + this.speed + this.size > obstacle.yTop &&
-				this.yPos < obstacle.yTop + obstacle.height &&
-				obstacle.xLeft < this.xPos + this.size &&
-				this.xPos < obstacle.xRight
+				this.yPosition + this.speed + this.size > obstacle.yTop &&
+				this.yPosition < obstacle.yTop + obstacle.height &&
+				obstacle.xLeft < this.xPosition + this.size &&
+				this.xPosition < obstacle.xRight
 			) {
-				this.yPos = obstacle.yTop - this.size;
+				this.yPosition = obstacle.yTop - this.size;
 				blockedSouth = true;
 			}
 			if (
 				!blockedEast &&
-				this.xPos + this.speed + this.size > obstacle.xLeft &&
-				this.xPos < obstacle.xLeft + obstacle.width &&
-				obstacle.yTop < this.yPos + this.size &&
-				this.yPos < obstacle.yBottom
+				this.xPosition + this.speed + this.size > obstacle.xLeft &&
+				this.xPosition < obstacle.xLeft + obstacle.width &&
+				obstacle.yTop < this.yPosition + this.size &&
+				this.yPosition < obstacle.yBottom
 			) {
-				this.xPos = obstacle.xLeft - this.size;
+				this.xPosition = obstacle.xLeft - this.size;
 				blockedEast = true;
 			}
 		}
@@ -501,10 +512,10 @@ export class Tank {
 			this.wasLastMoveBlocked = true;
 		}
 		if (!blockedSouth) {
-			this.yPos = Math.min(this.yPos + this.speed, this.canvasHeight - this.size);
+			this.yPosition = Math.min(this.yPosition + this.speed, this.canvasHeight - this.size);
 		}
 		if (!blockedEast) {
-			this.xPos = Math.min(this.xPos + this.speed, this.canvasWidth - this.size);
+			this.xPosition = Math.min(this.xPosition + this.speed, this.canvasWidth - this.size);
 		}
 	}
 
@@ -523,22 +534,22 @@ export class Tank {
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
 				!blockedSouth &&
-				this.yPos + this.speed + this.size > obstacle.yTop &&
-				this.yPos < obstacle.yTop + obstacle.height &&
-				obstacle.xLeft < this.xPos + this.size &&
-				this.xPos < obstacle.xRight
+				this.yPosition + this.speed + this.size > obstacle.yTop &&
+				this.yPosition < obstacle.yTop + obstacle.height &&
+				obstacle.xLeft < this.xPosition + this.size &&
+				this.xPosition < obstacle.xRight
 			) {
-				this.yPos = obstacle.yTop - this.size;
+				this.yPosition = obstacle.yTop - this.size;
 				blockedSouth = true;
 			}
 			if (
 				!blockedWest &&
-				this.xPos - this.speed < obstacle.xRight &&
-				this.xPos > obstacle.xLeft &&
-				obstacle.yTop < this.yPos + this.size &&
-				this.yPos < obstacle.yBottom
+				this.xPosition - this.speed < obstacle.xRight &&
+				this.xPosition > obstacle.xLeft &&
+				obstacle.yTop < this.yPosition + this.size &&
+				this.yPosition < obstacle.yBottom
 			) {
-				this.xPos = obstacle.xRight;
+				this.xPosition = obstacle.xRight;
 				blockedWest = true;
 			}
 		}
@@ -546,10 +557,10 @@ export class Tank {
 			this.wasLastMoveBlocked = true;
 		}
 		if (!blockedSouth) {
-			this.yPos = Math.min(this.yPos + this.speed, this.canvasHeight - this.size);
+			this.yPosition = Math.min(this.yPosition + this.speed, this.canvasHeight - this.size);
 		}
 		if (!blockedWest) {
-			this.xPos = Math.max(this.xPos - this.speed, 0);
+			this.xPosition = Math.max(this.xPosition - this.speed, 0);
 		}
 	}
 }

@@ -1,3 +1,4 @@
+import { PastelColorPalette } from '../../ui/PastelColorPalette';
 import { Ammunition } from '../Ammunition';
 import { AudioManager } from '../AudioManager';
 import { Bomb } from '../Bomb';
@@ -12,8 +13,8 @@ export class StationaryRandomAimTank extends EnemyTank {
 
 	constructor(
 		canvas: HTMLCanvasElement,
-		xPos: number,
-		yPos: number,
+		xPosition: number,
+		yPosition: number,
 		obstacleCanvas: ObstacleCanvas,
 		ammunition: Ammunition[],
 		audioManager: AudioManager
@@ -21,14 +22,14 @@ export class StationaryRandomAimTank extends EnemyTank {
 		const stationaryRandomAimTankSpeed = 0;
 		const stationaryRandomAimTankSize = 30;
 		const stationaryRandomAimTankAggressionFactor = 0;
-		const fastTankColor = '#ebe1b9';
+		const fastTankColor = PastelColorPalette.BABY_BLUE;
 		const bombs: Bomb[] = [];
 		const navigationGrid: NavigationGrid = new NavigationGrid();
 		super(
 			canvas,
 			new NoReticule(),
-			xPos,
-			yPos,
+			xPosition,
+			yPosition,
 			stationaryRandomAimTankSpeed,
 			stationaryRandomAimTankSize,
 			stationaryRandomAimTankAggressionFactor,
@@ -56,8 +57,8 @@ export class StationaryRandomAimTank extends EnemyTank {
 		const availableAmmunitionIndex = this.ammunition.findIndex((ammunition) => ammunition.isDestroyed);
 		if (availableAmmunitionIndex !== -1) {
 			this.ammunition[availableAmmunitionIndex].reload(
-				this.xPos + this.size / 2,
-				this.yPos + this.size / 2,
+				this.gunBarrellEndX,
+				this.gunBarrellEndY,
 				this.aimAngle,
 				true,
 				this.canvasWidth,

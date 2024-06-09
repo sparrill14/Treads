@@ -17,8 +17,8 @@ export class EnemyTank extends Tank {
 	constructor(
 		canvas: HTMLCanvasElement,
 		reticule: Reticule,
-		xPos: number,
-		yPos: number,
+		xPosition: number,
+		yPosition: number,
 		speed: number,
 		size: number,
 		aggressionFactor: number,
@@ -29,7 +29,7 @@ export class EnemyTank extends Tank {
 		navigationGrid: NavigationGrid,
 		audioManager: AudioManager
 	) {
-		super(canvas, reticule, xPos, yPos, speed, size, color, obstacleCanvas, ammunition, bombs, audioManager);
+		super(canvas, reticule, xPosition, yPosition, speed, size, color, obstacleCanvas, ammunition, bombs, audioManager);
 		this.aggressionFactor = aggressionFactor;
 		this.navigationGrid = navigationGrid;
 		this.currentNode = this.navigationGrid.getNodeFromTank(this);
@@ -173,9 +173,9 @@ export class EnemyTank extends Tank {
 			}
 		}
 
-		this.xLeft = this.xPos;
-		this.xRight = this.xPos + this.size;
-		this.yTop = this.yPos;
-		this.yBottom = this.yPos + this.size;
+		this.xLeft = this.xPosition;
+		this.xRight = this.xPosition + this.size;
+		this.yTop = this.yPosition;
+		this.yBottom = this.yPosition + this.size;
 	}
 }

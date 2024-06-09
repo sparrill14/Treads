@@ -19,7 +19,7 @@ indent_size = 2
 
 # JavaScript-specific settings
 [*.{js,ts}]
-quote_type = double
+quote_type = single
 continuation_indent_size = 2
 curly_bracket_next_line = false
 indent_brace_style = BSD

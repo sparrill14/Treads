@@ -1,3 +1,4 @@
+import { PastelColorPalette } from '../../ui/PastelColorPalette';
 import { Ammunition, BasicAIAmmunition } from '../Ammunition';
 import { AudioManager } from '../AudioManager';
 import { Bomb } from '../Bomb';
@@ -9,27 +10,27 @@ import { Tank } from './Tank';
 
 export class StationaryTank extends EnemyTank {
 	minTimeBetweenShotsMS = 5000;
-	canTakeShot = true;
+	timeBetweenShotsIsElapsed = false;
 
 	constructor(
 		canvas: HTMLCanvasElement,
-		xPos: number,
-		yPos: number,
+		xPosition: number,
+		yPosition: number,
 		obstacleCanvas: ObstacleCanvas,
 		audioManager: AudioManager
 	) {
 		const stationaryTankSpeed = 0;
 		const stationaryTankSize = 30;
 		const stationaryTankAggressionFactor = 0;
-		const stationaryTankColor = '#5784ba';
+		const stationaryTankColor = PastelColorPalette.PALE_GRAY;
 		const ammunition: Ammunition[] = [new BasicAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
 		const bombs: Bomb[] = [];
 		const navigationGrid: NavigationGrid = new NavigationGrid();
 		super(
 			canvas,
 			new NoReticule(),
-			xPos,
-			yPos,
+			xPosition,
+			yPosition,
 			stationaryTankSpeed,
 			stationaryTankSize,
 			stationaryTankAggressionFactor,
@@ -40,31 +41,40 @@ export class StationaryTank extends EnemyTank {
 			navigationGrid,
 			audioManager
 		);
+		setTimeout(() => {
+			this.timeBetweenShotsIsElapsed = true;
+		}, 1000);
 	}
 
 	public override updatePosition(playerTank: Tank): void {
 		return;
 	}
 
-	public override shoot(): void {
-		if (!this.canTakeShot || this.isDestroyed) {
+	public override shoot(playerTank: Tank): void {
+		if (!this.timeBetweenShotsIsElapsed || this.isDestroyed) {
 			return;
 		}
 		const availableAmmunitionIndex = this.ammunition.findIndex((ammunition) => ammunition.isDestroyed);
 		if (availableAmmunitionIndex !== -1) {
-			this.ammunition[availableAmmunitionIndex] = new BasicAIAmmunition(
-				this.xPos + this.size / 2,
-				this.yPos + this.size / 2,
+			this.ammunition[availableAmmunitionIndex].reload(
+				this.gunBarrellEndX,
+				this.gunBarrellEndY,
 				this.aimAngle,
+				true,
 				this.canvasWidth,
-				this.canvasHeight,
-				false,
-				this.audioManager
+				this.canvasHeight
 			);
-			this.canTakeShot = false;
-			setTimeout(() => {
-				this.canTakeShot = true;
-			}, this.minTimeBetweenShotsMS);
+			const willHitPlayerTank: boolean = this.ammunition[availableAmmunitionIndex].willHitPlayerTank(
+				this.obstacleCanvas,
+				playerTank
+			);
+			if (willHitPlayerTank) {
+				this.ammunition[availableAmmunitionIndex].isDestroyed = false;
+				this.timeBetweenShotsIsElapsed = false;
+				setTimeout(() => {
+					this.timeBetweenShotsIsElapsed = true;
+				}, this.minTimeBetweenShotsMS);
+			}
 		}
 		return;
 	}
@@ -74,8 +84,8 @@ export class StationaryTank extends EnemyTank {
 			return;
 		}
 
-		const dx: number = playerTank.xPos + playerTank.size / 2 - this.xPos - this.tankMidpoint;
-		const dy: number = playerTank.yPos + playerTank.size / 2 - this.yPos - this.tankMidpoint;
+		const dx: number = playerTank.xPosition + playerTank.size / 2 - this.xPosition - this.tankMidpoint;
+		const dy: number = playerTank.yPosition + playerTank.size / 2 - this.yPosition - this.tankMidpoint;
 		let theta = Math.atan2(dy, dx);
 		if (theta < 0) {
 			theta += 2 * Math.PI;

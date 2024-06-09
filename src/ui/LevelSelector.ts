@@ -4,14 +4,14 @@ import { AudioManager } from '../game/AudioManager';
 import { Level, Level1, Level2, Level3, Level4, Level5, Level6, Level7 } from '../game/Level';
 
 export class LevelSelector {
-	private levels: number;
+	private numLevels: number;
 	private activeLevelNumber: number;
 	private activeLevel: Level;
 	private sliderWidth: number = Math.min(window.innerWidth * 0.8, 600); // Responsive width
 	private audioManager: AudioManager;
 
 	constructor(levels: number) {
-		this.levels = levels;
+		this.numLevels = levels;
 		this.audioManager = new AudioManager();
 		const audioPromise: Promise<void[]> = this.audioManager.loadAllAudio();
 		audioPromise.then((): void => {
@@ -73,7 +73,7 @@ export class LevelSelector {
 
 		const scale: d3.ScaleLinear<number, number, never> = d3
 			.scaleLinear()
-			.domain([1, this.levels])
+			.domain([1, this.numLevels])
 			.range([0, effectiveWidth])
 			.clamp(true);
 
@@ -87,7 +87,7 @@ export class LevelSelector {
 			.append('g')
 			.attr('transform', `translate(${margin.left}, 30)`);
 
-		sliderGroup.append('g').call(d3.axisBottom(scale).ticks(this.levels).tickFormat(d3.format('1')));
+		sliderGroup.append('g').call(d3.axisBottom(scale).ticks(this.numLevels).tickFormat(d3.format('1')));
 
 		const handle: d3.Selection<SVGCircleElement, unknown, HTMLElement, any> = sliderGroup
 			.append('circle')
@@ -110,8 +110,8 @@ export class LevelSelector {
 
 	private createJumbotron(): void {
 		const jumbotron: d3.Selection<d3.BaseType, unknown, HTMLElement, any> = d3.select('#jumbotron');
-		const colorScale = d3.scaleLinear<string>().domain([1, this.levels]).range(['lightblue', 'lightcoral']);
-		for (let i = 1; i <= this.levels; i++) {
+		const colorScale = d3.scaleLinear<string>().domain([1, this.numLevels]).range(['lightblue', 'lightcoral']);
+		for (let i = 1; i <= this.numLevels; i++) {
 			const box: d3.Selection<HTMLDivElement, unknown, HTMLElement, any> = jumbotron
 				.append('div')
 				.attr('class', 'jumbotron-box inactive')
@@ -136,7 +136,6 @@ export class LevelSelector {
 				.attr('text-anchor', 'middle')
 				.text(`Level ${i}`);
 		}
-
 		this.updateActiveLevel(this.activeLevelNumber);
 	}
 
@@ -149,7 +148,7 @@ export class LevelSelector {
 			'cx',
 			d3
 				.scaleLinear()
-				.domain([1, this.levels])
+				.domain([1, this.numLevels])
 				.range([0, this.sliderWidth - 20])(level)
 		);
 		this.startActiveLevel();
