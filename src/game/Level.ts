@@ -103,15 +103,14 @@ export class Level2 extends Level {
 
 export class Level3 extends Level {
 	constructor(audioManager: AudioManager) {
-		const obs: Obstacle = new Obstacle(100, 100, 200, 100);
-		const obs2: Obstacle = new Obstacle(550, 200, 30, 200);
-		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs, obs2]);
+		const obs: Obstacle = new Obstacle(700, 150, 30, 250);
+		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs]);
 		super(obstacleCanvas, audioManager);
 		const superAmmo: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
 		const aiTank = new StationaryRandomAimTank(
 			this.gameCanvas.gameRenderer.canvas,
-			800,
-			300,
+			900,
+			250,
 			obstacleCanvas,
 			superAmmo,
 			audioManager
