@@ -1,7 +1,7 @@
 import * as d3 from 'd3';
 import packageJson from '../../package.json';
 import { AudioManager } from '../game/AudioManager';
-import { Level, Level1, Level2, Level3, Level4, Level5, Level6, Level7 } from '../game/Level';
+import { Level, Level1, Level2, Level3, Level4, Level5, Level6, Level7, Level8 } from '../game/Level';
 
 export class LevelSelector {
 	private numLevels: number;
@@ -54,6 +54,9 @@ export class LevelSelector {
 				break;
 			case 7:
 				this.activeLevel = new Level7(this.audioManager);
+				break;
+			case 8:
+				this.activeLevel = new Level8(this.audioManager);
 				break;
 			default:
 				this.activeLevel = new Level1(this.audioManager);

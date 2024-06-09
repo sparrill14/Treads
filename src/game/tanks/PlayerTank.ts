@@ -42,25 +42,21 @@ export class PlayerTank extends Tank {
 				this.keyStates[event.key] = true;
 			}
 		});
-
 		document.addEventListener('keydown', (event: KeyboardEvent) => {
 			if (event.code === 'Space') {
 				this.plantBomb(this);
 			}
 		});
-
 		document.addEventListener('keyup', (event: KeyboardEvent) => {
 			if (this.keyStates.hasOwnProperty(event.key)) {
 				this.keyStates[event.key] = false;
 			}
 		});
-
-		canvas.addEventListener('mousemove', (event: MouseEvent) => {
+		document.addEventListener('mousemove', (event: MouseEvent) => {
 			this.aimXPos = event.clientX - this.xOffset;
 			this.aimYPos = event.clientY - this.yOffset;
 		});
-
-		canvas.addEventListener('click', (event: MouseEvent) => {
+		document.addEventListener('click', (event: MouseEvent) => {
 			this.shoot(this);
 		});
 	}
