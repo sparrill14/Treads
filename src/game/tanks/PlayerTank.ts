@@ -57,7 +57,9 @@ export class PlayerTank extends Tank {
 			this.aimYPos = event.clientY - this.yOffset;
 		});
 		document.addEventListener('click', (event: MouseEvent) => {
-			this.shoot(this);
+			if (canvas.contains(event.target as Node)) {
+				this.shoot(this);
+			}
 		});
 	}
 
@@ -168,9 +170,14 @@ export class DefaultPlayerTank extends PlayerTank {
 			new PlayerAmmunition(0, 0, 0, 0, 0, true, audioManager),
 		];
 		const bombs: Bomb[] = [new PlayerBomb(0, 0, true, audioManager), new PlayerBomb(0, 0, true, audioManager)];
+		const rect: DOMRect = canvas.getBoundingClientRect();
+		const viewportWidth: number = window.innerWidth;
+		const distanceFromLeft: number = rect.left;
+		const distanceFromRight: number = viewportWidth - rect.right;
+		const maxReticuleLength: number = canvas.width + Math.max(distanceFromLeft, distanceFromRight);
 		super(
 			canvas,
-			new AdjustingCustomColorReticule(defaultPlayerTankSize, defaultPlayerTankColor, canvas.width),
+			new AdjustingCustomColorReticule(defaultPlayerTankSize, defaultPlayerTankColor, maxReticuleLength),
 			xPos,
 			yPos,
 			defaultPlayerTankSpeed,

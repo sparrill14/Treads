@@ -82,7 +82,7 @@ export class AdjustingCustomColorReticule extends Reticule {
 			context.stroke();
 
 			context.setLineDash([]);
-			const xLength = 10;
+			const xLength = 8;
 			context.beginPath();
 			context.moveTo(mouseXPosition - xLength, mouseYPosition - xLength);
 			context.lineTo(mouseXPosition + xLength, mouseYPosition + xLength);
