@@ -1,3 +1,5 @@
+import { Ammunition } from './Ammunition';
+import { Bomb } from './Bomb';
 import { Tank } from './tanks/Tank';
 
 export class GameRenderer {
@@ -58,12 +60,17 @@ export class GameRenderer {
 		if (this.enemyWin || this.playerWin) {
 			this.renderLevelOverScreen();
 		}
-		playerTank.updatePosition(playerTank);
+		const allAmmunition: Ammunition[] = [
+			...enemyTanks.flatMap((enemyTank) => enemyTank.ammunition),
+			...playerTank.ammunition,
+		];
+		const allBombs: Bomb[] = [...enemyTanks.flatMap((enemyTank) => enemyTank.bombs), ...playerTank.bombs];
+		playerTank.updatePosition(playerTank, enemyTanks, allAmmunition, allBombs);
 		playerTank.aim(playerTank.aimXPos, playerTank.aimYPos, playerTank);
 
 		enemyTanks.forEach((enemyTank) => {
 			if (!enemyTank.isDestroyed) {
-				enemyTank.updatePosition(playerTank);
+				enemyTank.updatePosition(playerTank, enemyTanks, allAmmunition, allBombs);
 				enemyTank.aim(enemyTank.aimXPos, enemyTank.aimYPos, playerTank);
 				enemyTank.shoot(playerTank);
 				enemyTank.plantBomb(playerTank);
@@ -75,10 +82,7 @@ export class GameRenderer {
 				if (ammunition.isDestroyed) {
 					return;
 				}
-				ammunition.checkAmmunitionCollision([
-					...enemyTanks.flatMap((enemyTank) => enemyTank.ammunition),
-					...playerTank.ammunition,
-				]);
+				ammunition.checkAmmunitionCollision(allAmmunition);
 				ammunition.checkBombCollision([...playerTank.bombs]);
 				ammunition.updatePosition(enemyTank.obstacleCanvas);
 				ammunition.checkPlayerHit(playerTank);
@@ -107,11 +111,8 @@ export class GameRenderer {
 			if (ammunition.isDestroyed) {
 				return;
 			}
-			ammunition.checkAmmunitionCollision([
-				...enemyTanks.flatMap((enemyTank) => enemyTank.ammunition),
-				...playerTank.ammunition,
-			]);
-			ammunition.checkBombCollision([...enemyTanks.flatMap((enemyTank) => enemyTank.bombs), ...playerTank.bombs]);
+			ammunition.checkAmmunitionCollision(allAmmunition);
+			ammunition.checkBombCollision(allBombs);
 			ammunition.updatePosition(playerTank.obstacleCanvas);
 			ammunition.checkEnemyHit(enemyTanks);
 			ammunition.checkPlayerHit(playerTank);

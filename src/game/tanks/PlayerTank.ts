@@ -42,30 +42,28 @@ export class PlayerTank extends Tank {
 				this.keyStates[event.key] = true;
 			}
 		});
-
 		document.addEventListener('keydown', (event: KeyboardEvent) => {
 			if (event.code === 'Space') {
 				this.plantBomb(this);
 			}
 		});
-
 		document.addEventListener('keyup', (event: KeyboardEvent) => {
 			if (this.keyStates.hasOwnProperty(event.key)) {
 				this.keyStates[event.key] = false;
 			}
 		});
-
-		canvas.addEventListener('mousemove', (event: MouseEvent) => {
+		document.addEventListener('mousemove', (event: MouseEvent) => {
 			this.aimXPos = event.clientX - this.xOffset;
 			this.aimYPos = event.clientY - this.yOffset;
 		});
-
-		canvas.addEventListener('click', (event: MouseEvent) => {
-			this.shoot(this);
+		document.addEventListener('click', (event: MouseEvent) => {
+			if (canvas.contains(event.target as Node)) {
+				this.shoot(this);
+			}
 		});
 	}
 
-	public override updatePosition(playerTank: Tank): void {
+	public override updatePosition(playerTank: Tank, enemyTanks: Tank[], ammunition: Ammunition[], bombs: Bomb[]): void {
 		// Move the tank
 		if (this.up() && this.right()) {
 			this.moveNorthEast();
@@ -172,9 +170,14 @@ export class DefaultPlayerTank extends PlayerTank {
 			new PlayerAmmunition(0, 0, 0, 0, 0, true, audioManager),
 		];
 		const bombs: Bomb[] = [new PlayerBomb(0, 0, true, audioManager), new PlayerBomb(0, 0, true, audioManager)];
+		const rect: DOMRect = canvas.getBoundingClientRect();
+		const viewportWidth: number = window.innerWidth;
+		const distanceFromLeft: number = rect.left;
+		const distanceFromRight: number = viewportWidth - rect.right;
+		const maxReticuleLength: number = canvas.width + Math.max(distanceFromLeft, distanceFromRight);
 		super(
 			canvas,
-			new AdjustingCustomColorReticule(defaultPlayerTankSize, defaultPlayerTankColor, canvas.width),
+			new AdjustingCustomColorReticule(defaultPlayerTankSize, defaultPlayerTankColor, maxReticuleLength),
 			xPos,
 			yPos,
 			defaultPlayerTankSpeed,

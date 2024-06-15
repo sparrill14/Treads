@@ -103,15 +103,14 @@ export class Level2 extends Level {
 
 export class Level3 extends Level {
 	constructor(audioManager: AudioManager) {
-		const obs: Obstacle = new Obstacle(100, 100, 200, 100);
-		const obs2: Obstacle = new Obstacle(550, 200, 30, 200);
-		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs, obs2]);
+		const obs: Obstacle = new Obstacle(700, 150, 30, 250);
+		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs]);
 		super(obstacleCanvas, audioManager);
 		const superAmmo: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
 		const aiTank = new StationaryRandomAimTank(
 			this.gameCanvas.gameRenderer.canvas,
-			800,
-			300,
+			900,
+			250,
 			obstacleCanvas,
 			superAmmo,
 			audioManager
@@ -345,6 +344,83 @@ export class Level7 extends Level {
 			this.gameCanvas.gameRenderer.canvas,
 			200,
 			250,
+			obstacleCanvas,
+			audioManager
+		);
+		this.gameCanvas.addPlayerTank(playerTank);
+	}
+}
+
+export class Level8 extends Level {
+	constructor(audioManager: AudioManager) {
+		const obs1: Obstacle = new Obstacle(0, 120, 400, 50);
+		const obs2: Obstacle = new Obstacle(600, 120, 400, 50);
+
+		const obs3: Obstacle = new Obstacle(0, 330, 400, 50);
+		const obs4: Obstacle = new Obstacle(600, 330, 400, 50);
+		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs1, obs2, obs3, obs4]);
+		super(obstacleCanvas, audioManager);
+
+		const superAmmo1: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
+		const aiTank1 = new StationaryRandomAimTank(
+			this.gameCanvas.gameRenderer.canvas,
+			900,
+			50,
+			obstacleCanvas,
+			superAmmo1,
+			audioManager
+		);
+
+		const superAmmo2: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
+		const aiTank2 = new StationaryRandomAimTank(
+			this.gameCanvas.gameRenderer.canvas,
+			900,
+			250,
+			obstacleCanvas,
+			superAmmo2,
+			audioManager
+		);
+
+		const superAmmo3: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
+		const aiTank3 = new StationaryRandomAimTank(
+			this.gameCanvas.gameRenderer.canvas,
+			900,
+			430,
+			obstacleCanvas,
+			superAmmo3,
+			audioManager
+		);
+
+		const superAmmo4: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
+		const aiTank4 = new StationaryRandomAimTank(
+			this.gameCanvas.gameRenderer.canvas,
+			100,
+			50,
+			obstacleCanvas,
+			superAmmo4,
+			audioManager
+		);
+
+		const superAmmo5: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
+		const aiTank5 = new StationaryRandomAimTank(
+			this.gameCanvas.gameRenderer.canvas,
+			100,
+			250,
+			obstacleCanvas,
+			superAmmo5,
+			audioManager
+		);
+
+		this.gameCanvas.addEnemyTank(aiTank1);
+		this.gameCanvas.addEnemyTank(aiTank2);
+		this.gameCanvas.addEnemyTank(aiTank3);
+		this.gameCanvas.addEnemyTank(aiTank4);
+		this.gameCanvas.addEnemyTank(aiTank5);
+
+		const playerTank = new DefaultPlayerTank(
+			this.gameCanvas.gameRenderer.canvas,
+			100,
+			430,
 			obstacleCanvas,
 			audioManager
 		);
