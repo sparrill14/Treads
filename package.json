@@ -1,6 +1,6 @@
 {
   "name": "treads",
-  "version": "1.4.6",
+  "version": "1.5.0",
   "description": "A top down game of mini tanks",
   "keywords": [
     "game",
@@ -18,7 +18,6 @@
   "license": "MIT",
   "author": "Steven Parrill <sparrill14@gmail.com> (https://github.com/sparrill14)",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "webpack serve --open --config webpack.dev.js",
     "build": "webpack --config webpack.prod.js",
     "build:dev": "webpack --config webpack.dev.js",
