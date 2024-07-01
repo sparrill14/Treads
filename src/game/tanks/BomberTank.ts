@@ -2,9 +2,9 @@ import { PastelColorPalette } from '../../ui/PastelColorPalette';
 import { Ammunition } from '../Ammunition';
 import { AudioManager } from '../AudioManager';
 import { Bomb } from '../Bomb';
-import { NavigationGrid } from '../NavigationGrid';
 import { ObstacleCanvas } from '../ObstacleCanvas';
 import { NoReticule } from '../Reticule';
+import { Navigator } from '../navigation/Navigator';
 import { EnemyTank } from './EnemyTank';
 import { Tank } from './Tank';
 
@@ -21,7 +21,7 @@ export class BomberTank extends EnemyTank {
 		obstacleCanvas: ObstacleCanvas,
 		ammunition: Ammunition[],
 		bombs: Bomb[],
-		navigationGrid: NavigationGrid,
+		navigator: Navigator,
 		audioManager: AudioManager
 	) {
 		const bomberTankSpeed = 2;
@@ -40,8 +40,8 @@ export class BomberTank extends EnemyTank {
 			obstacleCanvas,
 			ammunition,
 			bombs,
-			navigationGrid,
-			audioManager
+			audioManager,
+			navigator
 		);
 	}
 

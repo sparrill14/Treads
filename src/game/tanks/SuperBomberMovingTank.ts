@@ -2,7 +2,7 @@ import { PastelColorPalette } from '../../ui/PastelColorPalette';
 import { Ammunition } from '../Ammunition';
 import { AudioManager } from '../AudioManager';
 import { Bomb } from '../Bomb';
-import { NavigationGrid } from '../NavigationGrid';
+import { Navigator } from '../navigation/Navigator';
 import { ObstacleCanvas } from '../ObstacleCanvas';
 import { NoReticule } from '../Reticule';
 import { EnemyTank } from './EnemyTank';
@@ -21,7 +21,7 @@ export class SuperBomberMovingTank extends EnemyTank {
 		obstacleCanvas: ObstacleCanvas,
 		ammunition: Ammunition[],
 		bombs: Bomb[],
-		navigationGrid: NavigationGrid,
+		navigator: Navigator,
 		audioManager: AudioManager
 	) {
 		const superBomberMovingTankSpeed = 2.2;
@@ -40,8 +40,8 @@ export class SuperBomberMovingTank extends EnemyTank {
 			obstacleCanvas,
 			ammunition,
 			bombs,
-			navigationGrid,
-			audioManager
+			audioManager,
+			navigator
 		);
 		setTimeout(() => {
 			this.timeBetweenShotsIsElapsed = true;

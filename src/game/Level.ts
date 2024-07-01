@@ -2,9 +2,13 @@ import { Ammunition, BasicAIAmmunition, SuperAIAmmunition } from './Ammunition';
 import { AudioManager } from './AudioManager';
 import { BasicBomb, Bomb, LoveBomb } from './Bomb';
 import { GameCanvas } from './GameCanvas';
-import { NavigationGrid } from './NavigationGrid';
 import { Obstacle } from './Obstacle';
 import { ObstacleCanvas } from './ObstacleCanvas';
+import { AStarNavigator } from './navigation/AStarNavigator';
+import { NavigationGrid } from './navigation/NavigationGrid';
+import { Navigator } from './navigation/Navigator';
+import { SimpleNavigator } from './navigation/SimpleNavigator';
+import { SimplePathfinder } from './navigation/SimplePathFinder';
 import { BomberTank } from './tanks/BomberTank';
 import { DefaultPlayerTank } from './tanks/PlayerTank';
 import { SimpleMovingTank } from './tanks/SimpleMovingTank';
@@ -136,7 +140,8 @@ export class Level4 extends Level {
 		super(obstacleCanvas, audioManager);
 		const basicAmmo: Ammunition[] = [new BasicAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
 		const basicBomb: Bomb[] = [];
-		const navigationGrid: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
+		const simplePathFinder: SimplePathfinder = new SimplePathfinder(this.gameCanvas, this.obstacleCanvas, false);
+		const navigator: Navigator = new SimpleNavigator(simplePathFinder);
 		const aiTank = new SimpleMovingTank(
 			this.gameCanvas.gameRenderer.canvas,
 			900,
@@ -144,7 +149,7 @@ export class Level4 extends Level {
 			obstacleCanvas,
 			basicAmmo,
 			basicBomb,
-			navigationGrid,
+			navigator,
 			audioManager
 		);
 		this.gameCanvas.addEnemyTank(aiTank);
@@ -171,6 +176,7 @@ export class Level5 extends Level {
 		const superAmmo: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
 		const basicBomb: Bomb[] = [];
 		const navigationGrid: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
+		const navigator: Navigator = new AStarNavigator(navigationGrid);
 		const aiTank3 = new SimpleMovingTank(
 			this.gameCanvas.gameRenderer.canvas,
 			800,
@@ -178,7 +184,7 @@ export class Level5 extends Level {
 			obstacleCanvas,
 			basicAmmo,
 			basicBomb,
-			navigationGrid,
+			navigator,
 			audioManager
 		);
 		const aiTank = new StationaryRandomAimTank(
@@ -231,6 +237,9 @@ export class Level6 extends Level {
 		const navigationGrid: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
 		const navigationGrid2: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
 		const navigationGrid3: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
+		const navigator1: Navigator = new AStarNavigator(navigationGrid);
+		const navigator2: Navigator = new AStarNavigator(navigationGrid2);
+		const navigator3: Navigator = new AStarNavigator(navigationGrid3);
 		const aiTank = new BomberTank(
 			this.gameCanvas.gameRenderer.canvas,
 			800,
@@ -238,7 +247,7 @@ export class Level6 extends Level {
 			obstacleCanvas,
 			[new BasicAIAmmunition(0, 0, 0, 0, 0, true, audioManager)],
 			basicBombs,
-			navigationGrid,
+			navigator1,
 			audioManager
 		);
 		const aiTank2 = new BomberTank(
@@ -248,7 +257,7 @@ export class Level6 extends Level {
 			obstacleCanvas,
 			[new BasicAIAmmunition(0, 0, 0, 0, 0, true, audioManager)],
 			basicBombs2,
-			navigationGrid2,
+			navigator2,
 			audioManager
 		);
 		const aiTank3 = new BomberTank(
@@ -258,7 +267,7 @@ export class Level6 extends Level {
 			obstacleCanvas,
 			[new BasicAIAmmunition(0, 0, 0, 0, 0, true, audioManager)],
 			basicBombs3,
-			navigationGrid3,
+			navigator3,
 			audioManager
 		);
 
@@ -305,6 +314,12 @@ export class Level7 extends Level {
 		const navigationGrid: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
 		const navigationGrid2: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
 		const navigationGrid3: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
+		const navigator1: Navigator = new AStarNavigator(navigationGrid);
+		navigator1.aggressionFactor = 5;
+		const navigator2: Navigator = new AStarNavigator(navigationGrid2);
+		navigator2.aggressionFactor = 10;
+		const navigator3: Navigator = new AStarNavigator(navigationGrid3);
+		navigator3.aggressionFactor = 15;
 		const aiTank = new SuperBomberMovingTank(
 			this.gameCanvas.gameRenderer.canvas,
 			800,
@@ -312,7 +327,7 @@ export class Level7 extends Level {
 			obstacleCanvas,
 			basicAmmo,
 			basicBombs,
-			navigationGrid,
+			navigator1,
 			audioManager
 		);
 		const aiTank2 = new SuperBomberMovingTank(
@@ -322,7 +337,7 @@ export class Level7 extends Level {
 			obstacleCanvas,
 			basicAmmo2,
 			basicBombs2,
-			navigationGrid2,
+			navigator2,
 			audioManager
 		);
 		const aiTank3 = new SuperBomberMovingTank(
@@ -332,7 +347,7 @@ export class Level7 extends Level {
 			obstacleCanvas,
 			basicAmmo3,
 			basicBombs3,
-			navigationGrid3,
+			navigator3,
 			audioManager
 		);
 
