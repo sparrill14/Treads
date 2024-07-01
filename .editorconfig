@@ -1,27 +1,56 @@
-# Editor config
-# http://EditorConfig.org
+# EditorConfig is awesome: http://EditorConfig.org
 
 # This EditorConfig overrides any parent EditorConfigs
 root = true
 
 # Default rules applied to all file types
 [*]
-
-# No trailing spaces, newline at EOF
 charset = utf-8
+end_of_line = lf
 trim_trailing_whitespace = true
 insert_final_newline = true
-end_of_line = lf
-
-# 2 space indentation
 indent_style = space
 indent_size = 2
+max_line_length = 80
+tab_width = 2
+quote_type = double
 
-# JavaScript-specific settings
+# JavaScript and TypeScript-specific settings
 [*.{js,ts}]
 quote_type = single
+indent_size = 2
 continuation_indent_size = 2
 curly_bracket_next_line = false
 indent_brace_style = BSD
 spaces_around_operators = true
 spaces_around_brackets = none
+max_line_length = 100
+
+# JSON-specific settings
+[*.json]
+indent_style = space
+indent_size = 2
+quote_type = double
+
+# Markdown-specific settings
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = off
+quote_type = double
+
+# YAML-specific settings
+[*.yaml,*.yml]
+indent_style = space
+indent_size = 2
+
+# HTML-specific settings
+[*.html]
+indent_style = space
+indent_size = 2
+max_line_length = 120
+
+# Python-specific settings
+[*.py]
+indent_style = space
+indent_size = 4
+max_line_length = 79
