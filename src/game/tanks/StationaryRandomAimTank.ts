@@ -2,9 +2,10 @@ import { PastelColorPalette } from '../../ui/PastelColorPalette';
 import { Ammunition } from '../Ammunition';
 import { AudioManager } from '../AudioManager';
 import { Bomb } from '../Bomb';
-import { NavigationGrid } from '../NavigationGrid';
 import { ObstacleCanvas } from '../ObstacleCanvas';
 import { NoReticule } from '../Reticule';
+import { Navigator } from '../navigation/Navigator';
+import { StationaryNavigator } from '../navigation/StationaryNavigator';
 import { EnemyTank } from './EnemyTank';
 import { Tank } from './Tank';
 
@@ -24,7 +25,7 @@ export class StationaryRandomAimTank extends EnemyTank {
 		const stationaryRandomAimTankAggressionFactor = 0;
 		const fastTankColor = PastelColorPalette.BABY_BLUE;
 		const bombs: Bomb[] = [];
-		const navigationGrid: NavigationGrid = new NavigationGrid();
+		const navigator: Navigator = new StationaryNavigator();
 		super(
 			canvas,
 			new NoReticule(),
@@ -37,8 +38,8 @@ export class StationaryRandomAimTank extends EnemyTank {
 			obstacleCanvas,
 			ammunition,
 			bombs,
-			navigationGrid,
-			audioManager
+			audioManager,
+			navigator
 		);
 	}
 

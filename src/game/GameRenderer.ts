@@ -65,12 +65,12 @@ export class GameRenderer {
 			...playerTank.ammunition,
 		];
 		const allBombs: Bomb[] = [...enemyTanks.flatMap((enemyTank) => enemyTank.bombs), ...playerTank.bombs];
-		playerTank.updatePosition(playerTank, enemyTanks, allAmmunition, allBombs);
+		playerTank.updatePosition(playerTank, playerTank, enemyTanks, allAmmunition, allBombs);
 		playerTank.aim(playerTank.aimXPos, playerTank.aimYPos, playerTank);
 
 		enemyTanks.forEach((enemyTank) => {
 			if (!enemyTank.isDestroyed) {
-				enemyTank.updatePosition(playerTank, enemyTanks, allAmmunition, allBombs);
+				enemyTank.updatePosition(enemyTank, playerTank, enemyTanks, allAmmunition, allBombs);
 				enemyTank.aim(enemyTank.aimXPos, enemyTank.aimYPos, playerTank);
 				enemyTank.shoot(playerTank);
 				enemyTank.plantBomb(playerTank);

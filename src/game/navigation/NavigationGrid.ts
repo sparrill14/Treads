@@ -1,21 +1,7 @@
-import { GameCanvas } from './GameCanvas';
-import { ObstacleCanvas } from './ObstacleCanvas';
-import { Tank } from './tanks/Tank';
-
-export class Node {
-	public x: number;
-	public y: number;
-	public g = 0;
-	public h = 0;
-	public f = 0;
-	public walkable = true;
-	public parent: Node | null = null;
-
-	constructor(x: number, y: number) {
-		this.x = x;
-		this.y = y;
-	}
-}
+import { GameCanvas } from '../GameCanvas';
+import { Node } from '../Node';
+import { ObstacleCanvas } from '../ObstacleCanvas';
+import { Tank } from '../tanks/Tank';
 
 export class NavigationGrid {
 	public grid: Node[][] = [];
@@ -24,8 +10,15 @@ export class NavigationGrid {
 	public gridYLength: number;
 	public path: Node[] = [];
 	public stationary: boolean;
+	public color: string;
 
-	constructor(gameCanvas?: GameCanvas, obstacleCanvas?: ObstacleCanvas, stationary: boolean = true) {
+	constructor(
+		gameCanvas?: GameCanvas,
+		obstacleCanvas?: ObstacleCanvas,
+		stationary: boolean = true,
+		color: string = 'gray'
+	) {
+		this.color = color;
 		if (!gameCanvas || !obstacleCanvas || stationary) {
 			this.gridXLength = 0;
 			this.gridYLength = 0;
@@ -50,7 +43,37 @@ export class NavigationGrid {
 		}
 	}
 
-	reset(): void {
+	public draw(context: CanvasRenderingContext2D): void {
+		context.lineWidth = 1;
+		for (let i = 0; i <= this.gridYLength; i++) {
+			context.fillStyle = 'blue';
+			context.beginPath();
+			context.moveTo(0, i * this.gridCellWidth);
+			context.lineTo(this.gridXLength * this.gridCellWidth, i * this.gridCellWidth);
+			context.stroke();
+		}
+		for (let j = 0; j <= this.gridXLength; j++) {
+			context.fillStyle = 'blue';
+			context.beginPath();
+			context.moveTo(j * this.gridCellWidth, 0);
+			context.lineTo(j * this.gridCellWidth, this.gridXLength * this.gridCellWidth);
+			context.stroke();
+		}
+		context.fillStyle = this.color;
+		this.path?.forEach((value: Node, index: number, array: Node[]) => {
+			context.beginPath();
+			context.arc(
+				value.x * this.gridCellWidth + this.gridCellWidth / 2,
+				value.y * this.gridCellWidth + this.gridCellWidth / 2,
+				5,
+				0,
+				2 * Math.PI
+			);
+			context.fill();
+		});
+	}
+
+	public reset(): void {
 		for (let x = 0; x < this.gridXLength; x++) {
 			for (let y = 0; y < this.gridYLength; y++) {
 				this.grid[x][y].f = 0;
@@ -62,12 +85,8 @@ export class NavigationGrid {
 	}
 
 	getNodeFromTank(tank: Tank): Node {
-		if (this.stationary) {
-			return new Node(0, 0);
-		}
 		let xGridCoordinate: number = Math.floor((tank.xPosition + tank.size / 2) / this.gridCellWidth);
 		let yGridCoordinate: number = Math.floor((tank.yPosition + tank.size / 2) / this.gridCellWidth);
-
 		xGridCoordinate = Math.max(0, Math.min(xGridCoordinate, this.gridXLength - 1));
 		yGridCoordinate = Math.max(0, Math.min(yGridCoordinate, this.gridYLength - 1));
 		return this.grid[xGridCoordinate][yGridCoordinate];

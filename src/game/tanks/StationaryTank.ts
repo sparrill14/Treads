@@ -2,9 +2,10 @@ import { PastelColorPalette } from '../../ui/PastelColorPalette';
 import { Ammunition, BasicAIAmmunition } from '../Ammunition';
 import { AudioManager } from '../AudioManager';
 import { Bomb } from '../Bomb';
-import { NavigationGrid } from '../NavigationGrid';
 import { ObstacleCanvas } from '../ObstacleCanvas';
 import { NoReticule } from '../Reticule';
+import { Navigator } from '../navigation/Navigator';
+import { StationaryNavigator } from '../navigation/StationaryNavigator';
 import { EnemyTank } from './EnemyTank';
 import { Tank } from './Tank';
 
@@ -25,7 +26,7 @@ export class StationaryTank extends EnemyTank {
 		const stationaryTankColor = PastelColorPalette.PALE_GRAY;
 		const ammunition: Ammunition[] = [new BasicAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
 		const bombs: Bomb[] = [];
-		const navigationGrid: NavigationGrid = new NavigationGrid();
+		const navigator: Navigator = new StationaryNavigator();
 		super(
 			canvas,
 			new NoReticule(),
@@ -38,8 +39,8 @@ export class StationaryTank extends EnemyTank {
 			obstacleCanvas,
 			ammunition,
 			bombs,
-			navigationGrid,
-			audioManager
+			audioManager,
+			navigator
 		);
 		setTimeout(() => {
 			this.timeBetweenShotsIsElapsed = true;
