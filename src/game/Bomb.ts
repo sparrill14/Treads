@@ -17,6 +17,7 @@ export class Bomb {
 
 	private fragments: BombFragment[];
 	private fragmentColorScale = d3.scaleLinear<string>().domain([0, 0.5, 1]).range(['red', 'yellow', 'orange']);
+	private fuseTimeoutId: number | null = null;
 
 	constructor(startX: number, startY: number, blastRadius: number, isDestroyed: boolean, audioManager: AudioManager) {
 		this.xPosition = startX;
@@ -38,6 +39,10 @@ export class Bomb {
 		this.createFragments();
 		this.audioManager.play(AudioFile.BOMB_EXPLODE);
 		this.isExploding = true;
+		if (this.fuseTimeoutId !== null) {
+			clearTimeout(this.fuseTimeoutId);
+			this.fuseTimeoutId = null;
+		}
 		setTimeout((): void => {
 			this.isExploding = false;
 			this.isDestroyed = true;
@@ -49,17 +54,15 @@ export class Bomb {
 			if (enemyTank.isDestroyed) {
 				return;
 			}
-			if (this.isExploding) {
-				if (
-					this.isExploding &&
-					this.isPointInsideBlastRadius(
-						enemyTank.xPosition + enemyTank.tankMidpoint,
-						enemyTank.yPosition + enemyTank.tankMidpoint
-					)
-				) {
-					enemyTank.destroy();
-					console.log('Enemy hit with bomb!!!');
-				}
+			if (
+				this.isExploding &&
+				this.isPointInsideBlastRadius(
+					enemyTank.xPosition + enemyTank.tankMidpoint,
+					enemyTank.yPosition + enemyTank.tankMidpoint
+				)
+			) {
+				enemyTank.destroy();
+				console.log('Enemy hit with bomb!!!');
 			}
 		});
 	}
@@ -87,7 +90,7 @@ export class Bomb {
 		}
 		this.fuseStartTime = performance.now();
 		this.animateFuse();
-		setTimeout((): void => {
+		this.fuseTimeoutId = window.setTimeout((): void => {
 			this.destroy();
 		}, this.blastDelayMS);
 	}
