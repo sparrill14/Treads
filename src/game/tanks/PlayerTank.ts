@@ -99,11 +99,10 @@ export class PlayerTank extends Tank {
 		if (this.isDestroyed) {
 			return;
 		}
-		const availableBombIndex = this.bombs.findIndex((bomb) => bomb.isDestroyed && !bomb.isExploding);
+		const availableBombIndex = this.bombs.findIndex((bomb) => bomb.isDestroyed && !bomb.isExploding());
 		if (availableBombIndex !== -1) {
 			this.bombs[availableBombIndex].xPosition = this.xPosition + this.size / 2;
 			this.bombs[availableBombIndex].yPosition = this.yPosition + this.size / 2;
-			this.bombs[availableBombIndex].isDestroyed = false;
 			this.bombs[availableBombIndex].setFuse();
 		}
 	}

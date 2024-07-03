@@ -1,4 +1,5 @@
 import * as d3 from 'd3';
+import { PastelColorPalette } from '../ui/PastelColorPalette';
 import { AudioFile, AudioManager } from './AudioManager';
 import { Bomb } from './Bomb';
 import { BombFragment } from './BombFragment';
@@ -22,7 +23,10 @@ export class Ammunition {
 	public radius: number = 4;
 	public fragmentationRadius: number = 10;
 	private fragments: BombFragment[] = [];
-	private fragmentColorScale = d3.scaleLinear<string>().domain([0, 0.5, 1]).range(['black', 'gray', 'white']);
+	private fragmentColorScale = d3
+		.scaleLinear<string>()
+		.domain([0, 0.5, 1])
+		.range([PastelColorPalette.PALE_BLACK, PastelColorPalette.PALE_GRAY, PastelColorPalette.WHITE_SMOKE]);
 
 	constructor(
 		startX: number,
@@ -165,7 +169,7 @@ export class Ammunition {
 
 	checkBombCollision(bombs: Bomb[]): void {
 		for (const bomb of bombs) {
-			if (!bomb.isDestroyed && !bomb.isExploding) {
+			if (!bomb.isDestroyed && !bomb.isExploding()) {
 				const dx = this.xPosition - bomb.xPosition;
 				const dy = this.yPosition - bomb.yPosition;
 				const distance = Math.sqrt(dx * dx + dy * dy);

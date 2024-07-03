@@ -89,7 +89,7 @@ export class GameRenderer {
 				ammunition.draw(this.context as CanvasRenderingContext2D);
 			});
 			enemyTank.bombs.forEach((bomb) => {
-				if (bomb.isDestroyed && !bomb.isExploding) {
+				if (bomb.isDestroyed && !bomb.isExploding()) {
 					return;
 				}
 				bomb.checkPlayerHit(playerTank);
@@ -119,7 +119,7 @@ export class GameRenderer {
 			ammunition.draw(this.context as CanvasRenderingContext2D);
 		});
 		playerTank.bombs.forEach((bomb) => {
-			if (bomb.isDestroyed && !bomb.isExploding) {
+			if (bomb.isDestroyed && !bomb.isExploding()) {
 				return;
 			}
 			bomb.checkEnemyHit(enemyTanks);

@@ -9,13 +9,12 @@ export class Bomb {
 	public blastRadius: number;
 	public blastDelayMS: number;
 	public isDestroyed: boolean;
-	public isExploding: boolean;
 	public fuseStartTime: number;
 	public shouldFlashRed: boolean;
 	public audioManager: AudioManager;
 	public radius: number = 15;
 
-	private fragments: BombFragment[] = [];
+	protected fragments: BombFragment[] = [];
 	private fragmentColorScale = d3.scaleLinear<string>().domain([0, 0.5, 1]).range(['red', 'yellow', 'orange']);
 	private fuseTimeoutId: number | null = null;
 
@@ -25,27 +24,22 @@ export class Bomb {
 		this.blastRadius = blastRadius;
 		this.isDestroyed = isDestroyed;
 		this.audioManager = audioManager;
-		this.blastDelayMS = 5000;
+		this.blastDelayMS = 6000;
 		this.fuseStartTime = 0;
 		this.shouldFlashRed = false;
-		this.isExploding = false;
 	}
 
 	public destroy(): void {
-		if (this.isDestroyed || this.isExploding) {
+		if (this.isDestroyed || this.isExploding()) {
 			return;
 		}
+		this.isDestroyed = true;
 		this.createFragments();
 		this.audioManager.play(AudioFile.BOMB_EXPLODE);
-		this.isExploding = true;
 		if (this.fuseTimeoutId !== null) {
 			clearTimeout(this.fuseTimeoutId);
 			this.fuseTimeoutId = null;
 		}
-		setTimeout((): void => {
-			this.isExploding = false;
-			this.isDestroyed = true;
-		}, 500);
 	}
 
 	public checkEnemyHit(enemyTanks: Tank[]): void {
@@ -53,14 +47,11 @@ export class Bomb {
 			if (enemyTank.isDestroyed) {
 				return;
 			}
-			if (
-				this.isExploding &&
-				this.isPointInsideBlastRadius(
-					enemyTank.xPosition + enemyTank.tankMidpoint,
-					enemyTank.yPosition + enemyTank.tankMidpoint
-				)
-			) {
-				enemyTank.destroy();
+			for (const fragment of this.fragments) {
+				if (fragment.checkHit(enemyTank)) {
+					enemyTank.destroy();
+					break;
+				}
 			}
 		});
 	}
@@ -69,22 +60,17 @@ export class Bomb {
 		if (playerTank.isDestroyed) {
 			return;
 		}
-		if (
-			this.isExploding &&
-			(this.isPointInsideBlastRadius(playerTank.xLeft, playerTank.yTop) ||
-				this.isPointInsideBlastRadius(playerTank.xRight, playerTank.yTop) ||
-				this.isPointInsideBlastRadius(playerTank.xLeft, playerTank.yBottom) ||
-				this.isPointInsideBlastRadius(playerTank.xRight, playerTank.yBottom) ||
-				this.isPointInsideBlastRadius(playerTank.xPosition, playerTank.yPosition))
-		) {
-			playerTank.destroy();
+		for (const fragment of this.fragments) {
+			if (fragment.checkHit(playerTank)) {
+				playerTank.destroy();
+				break;
+			}
 		}
 	}
 
 	public setFuse(): void {
-		if (this.isDestroyed) {
-			return;
-		}
+		this.fragments = [];
+		this.isDestroyed = false;
 		this.fuseStartTime = performance.now();
 		this.animateFuse();
 		this.fuseTimeoutId = window.setTimeout((): void => {
@@ -92,10 +78,29 @@ export class Bomb {
 		}, this.blastDelayMS);
 	}
 
-	public isPointInsideBlastRadius(x: number, y: number): boolean {
-		const dx = x - this.xPosition;
-		const dy = y - this.yPosition;
-		return Math.sqrt(dx * dx + dy * dy) <= this.blastRadius;
+	public isTankInsideBlastRadius(tank: Tank): boolean {
+		const squareXCenter: number = tank.xPosition + tank.tankMidpoint;
+		const squareYCenter: number = tank.yPosition + tank.tankMidpoint;
+		const circleXCenter: number = this.xPosition;
+		const circleYCenter: number = this.yPosition;
+		const halfSideLength: number = tank.tankMidpoint;
+		const closestX: number = Math.max(
+			squareXCenter - halfSideLength,
+			Math.min(circleXCenter, squareXCenter + halfSideLength)
+		);
+		const closestY: number = Math.max(
+			squareYCenter - halfSideLength,
+			Math.min(circleYCenter, squareYCenter + halfSideLength)
+		);
+		const dx: number = closestX - circleXCenter;
+		const dy: number = closestY - circleYCenter;
+		const distance: number = Math.sqrt(dx * dx + dy * dy);
+		return distance <= this.blastRadius;
+	}
+
+	public isExploding(): boolean {
+		const isExploding: boolean = this.fragments.some((fragment) => fragment.life > 0);
+		return isExploding;
 	}
 
 	protected updateExplosion(context: CanvasRenderingContext2D): void {
@@ -108,7 +113,8 @@ export class Bomb {
 	}
 
 	public draw(context: CanvasRenderingContext2D): void {
-		if (this.isExploding) {
+		const isExploding: boolean = this.isExploding();
+		if (isExploding) {
 			this.updateExplosion(context);
 			return;
 		}
@@ -173,7 +179,7 @@ export class PlayerBomb extends Bomb {
 
 export class BasicBomb extends Bomb {
 	constructor(startX: number, startY: number, isDestroyed: boolean, audioManager: AudioManager) {
-		const basicBombBlastRadius = 80;
+		const basicBombBlastRadius = 50;
 		super(startX, startY, basicBombBlastRadius, isDestroyed, audioManager);
 	}
 }
@@ -187,15 +193,19 @@ export class SuperBomb extends Bomb {
 
 export class LoveBomb extends Bomb {
 	constructor(startX: number, startY: number, isDestroyed: boolean, audioManager: AudioManager) {
-		const loveBombBlastRadius = 150;
+		const loveBombBlastRadius = 80;
 		super(startX, startY, loveBombBlastRadius, isDestroyed, audioManager);
 	}
 
 	override draw(context: CanvasRenderingContext2D): void {
-		if (this.isExploding) {
+		const isExploding = this.fragments.some((fragment: BombFragment) => {
+			return fragment.life > 0;
+		});
+		if (isExploding) {
 			this.updateExplosion(context);
 			return;
 		}
+
 		context.save();
 		context.translate(this.xPosition, this.yPosition);
 		context.scale(1, 1.3);
