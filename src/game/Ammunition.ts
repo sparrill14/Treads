@@ -1,5 +1,8 @@
+import * as d3 from 'd3';
+import { PastelColorPalette } from '../ui/PastelColorPalette';
 import { AudioFile, AudioManager } from './AudioManager';
 import { Bomb } from './Bomb';
+import { BombFragment } from './BombFragment';
 import { ObstacleCanvas } from './ObstacleCanvas';
 import { Tank } from './tanks/Tank';
 
@@ -16,7 +19,14 @@ export class Ammunition {
 	public canvasHeight: number;
 	public isDestroyed: boolean;
 	public audioManager: AudioManager;
+	public isExploding: boolean = false;
 	public radius: number = 4;
+	public fragmentationRadius: number = 10;
+	private fragments: BombFragment[] = [];
+	private fragmentColorScale = d3
+		.scaleLinear<string>()
+		.domain([0, 0.5, 1])
+		.range([PastelColorPalette.PALE_BLACK, PastelColorPalette.PALE_GRAY, PastelColorPalette.WHITE_SMOKE]);
 
 	constructor(
 		startX: number,
@@ -44,6 +54,9 @@ export class Ammunition {
 	}
 
 	updatePosition(obstacleCanvas: ObstacleCanvas): void {
+		if (this.isExploding) {
+			return;
+		}
 		this.xPosition += this.xVelocity;
 		this.yPosition += this.yVelocity;
 
@@ -88,8 +101,21 @@ export class Ammunition {
 		});
 
 		if (this.bounces > this.maxBounces) {
-			this.isDestroyed = true;
+			this.destroy();
 		}
+	}
+
+	public destroy(): void {
+		if (this.isDestroyed || this.isExploding) {
+			return;
+		}
+		this.createFragments();
+		this.audioManager.play(AudioFile.AMMUNITION_EXPLODE);
+		this.isExploding = true;
+		setTimeout((): void => {
+			this.isExploding = false;
+			this.isDestroyed = true;
+		}, 500);
 	}
 
 	checkEnemyHit(enemyTanks: Tank[]): void {
@@ -103,7 +129,7 @@ export class Ammunition {
 				this.yPosition > enemyTank.yTop &&
 				this.yPosition < enemyTank.yBottom
 			) {
-				this.isDestroyed = true;
+				this.destroy();
 				enemyTank.destroy();
 				this.audioManager.play(AudioFile.TANK_DESTROY);
 				console.log('Enemy hit!!!');
@@ -122,7 +148,7 @@ export class Ammunition {
 			this.yPosition < playerTank.yBottom
 		) {
 			playerTank.destroy();
-			this.isDestroyed = true;
+			this.destroy();
 			console.log('Player Hit!!!');
 		}
 	}
@@ -134,8 +160,8 @@ export class Ammunition {
 				const dy = this.yPosition - ammunition.yPosition;
 				const distance = Math.sqrt(dx * dx + dy * dy);
 				if (distance < this.radius + ammunition.radius) {
-					this.isDestroyed = true;
-					ammunition.isDestroyed = true;
+					this.destroy();
+					ammunition.destroy();
 				}
 			}
 		}
@@ -143,12 +169,12 @@ export class Ammunition {
 
 	checkBombCollision(bombs: Bomb[]): void {
 		for (const bomb of bombs) {
-			if (!bomb.isDestroyed) {
+			if (!bomb.isDestroyed && !bomb.isExploding()) {
 				const dx = this.xPosition - bomb.xPosition;
 				const dy = this.yPosition - bomb.yPosition;
 				const distance = Math.sqrt(dx * dx + dy * dy);
 				if (distance < this.radius + bomb.radius) {
-					this.isDestroyed = true;
+					this.destroy();
 					bomb.destroy();
 				}
 			}
@@ -175,6 +201,11 @@ export class Ammunition {
 	}
 
 	draw(context: CanvasRenderingContext2D): void {
+		if (this.isExploding) {
+			this.updateExplosion(context);
+			return;
+		}
+
 		context.beginPath();
 		context.arc(this.xPosition, this.yPosition, this.radius, 0, 2 * Math.PI);
 		context.fillStyle = 'white';
@@ -183,6 +214,35 @@ export class Ammunition {
 		context.strokeStyle = 'black';
 		context.stroke();
 		context.closePath();
+	}
+
+	private updateExplosion(context: CanvasRenderingContext2D): void {
+		this.fragments.forEach((particle) => {
+			particle.update();
+			particle.draw(context);
+		});
+
+		this.fragments = this.fragments.filter((particle) => particle.life > 0);
+	}
+
+	private createFragments(): void {
+		const fragmentCount = 15;
+		for (let i = 0; i < fragmentCount; i++) {
+			const angle = Math.random() * 2 * Math.PI;
+			const speed = Math.random() * 5 + 2;
+			const velocityX = Math.cos(angle) * speed;
+			const velocityY = Math.sin(angle) * speed;
+			const fragment = new BombFragment(
+				this.xPosition,
+				this.yPosition,
+				Math.random() * 2 + 1,
+				this.fragmentColorScale(Math.random()),
+				velocityX,
+				velocityY,
+				this.fragmentationRadius
+			);
+			this.fragments.push(fragment);
+		}
 	}
 
 	willHitPlayerTank(obstacleCanvas: ObstacleCanvas, playerTank: Tank): boolean {

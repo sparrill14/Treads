@@ -50,16 +50,12 @@ export class SuperBomberMovingTank extends EnemyTank {
 
 	public override plantBomb(playerTank: Tank): void {
 		if (this.timeBetweenPlantsIsElapsed && !this.isDestroyed) {
-			const availableBombIndex = this.bombs.findIndex((bomb) => bomb.isDestroyed);
+			const availableBombIndex = this.bombs.findIndex((bomb) => bomb.isDestroyed && !bomb.isExploding());
 			if (availableBombIndex !== -1) {
 				this.bombs[availableBombIndex].xPosition = this.xPosition + this.size / 2;
 				this.bombs[availableBombIndex].yPosition = this.yPosition + this.size / 2;
-				const willHitPlayerTank: boolean = this.bombs[availableBombIndex].isPointInsideBlastRadius(
-					playerTank.xPosition + playerTank.tankMidpoint,
-					playerTank.yPosition + playerTank.tankMidpoint
-				);
+				const willHitPlayerTank: boolean = this.bombs[availableBombIndex].isTankInsideBlastRadius(playerTank);
 				if (willHitPlayerTank) {
-					this.bombs[availableBombIndex].isDestroyed = false;
 					this.bombs[availableBombIndex].setFuse();
 					this.timeBetweenPlantsIsElapsed = false;
 					setTimeout(() => {
