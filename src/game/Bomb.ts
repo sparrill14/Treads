@@ -15,7 +15,7 @@ export class Bomb {
 	public audioManager: AudioManager;
 	public radius: number = 15;
 
-	private fragments: BombFragment[];
+	private fragments: BombFragment[] = [];
 	private fragmentColorScale = d3.scaleLinear<string>().domain([0, 0.5, 1]).range(['red', 'yellow', 'orange']);
 	private fuseTimeoutId: number | null = null;
 
@@ -29,7 +29,6 @@ export class Bomb {
 		this.fuseStartTime = 0;
 		this.shouldFlashRed = false;
 		this.isExploding = false;
-		this.fragments = [];
 	}
 
 	public destroy(): void {

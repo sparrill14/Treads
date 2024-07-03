@@ -1,3 +1,4 @@
+import ammunitionExplode from '../assets/audio/ammunitionExplode.mp3';
 import backgroundMusic from '../assets/audio/backgroundMusic.mp3';
 import bombExplode from '../assets/audio/bombExplode.mp3';
 import tankDestroy from '../assets/audio/tankDestroy.mp3';
@@ -8,6 +9,7 @@ export enum AudioFile {
 	TANK_DESTROY = 2,
 	BOMB_EXPLODE = 3,
 	BACKGROUND_MUSIC = 4,
+	AMMUNITION_EXPLODE = 5,
 }
 
 export class AudioManager {
@@ -27,6 +29,7 @@ export class AudioManager {
 			this.loadAudio(AudioFile.TANK_DESTROY, tankDestroy),
 			this.loadAudio(AudioFile.BOMB_EXPLODE, bombExplode),
 			this.loadAudio(AudioFile.BACKGROUND_MUSIC, backgroundMusic),
+			this.loadAudio(AudioFile.AMMUNITION_EXPLODE, ammunitionExplode),
 		];
 		return Promise.all(promises);
 	}
