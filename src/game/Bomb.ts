@@ -61,7 +61,6 @@ export class Bomb {
 				)
 			) {
 				enemyTank.destroy();
-				console.log('Enemy hit with bomb!!!');
 			}
 		});
 	}
@@ -79,7 +78,6 @@ export class Bomb {
 				this.isPointInsideBlastRadius(playerTank.xPosition, playerTank.yPosition))
 		) {
 			playerTank.destroy();
-			console.log('Player Hit with bomb!!!');
 		}
 	}
 
