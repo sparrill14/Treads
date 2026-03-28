@@ -7,5 +7,13 @@ export default tseslint.config(
   ...tseslint.configs.stylistic,
   {
     ignores: ["dist/**/*.*"],
+  },
+  {
+    rules: {
+      "@typescript-eslint/no-unused-vars": ["error", {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+      }],
+    },
   }
 );

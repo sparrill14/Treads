@@ -18,12 +18,14 @@ export class AudioManager {
 	private backgroundMusicSource: AudioBufferSourceNode | null;
 
 	constructor() {
-		this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+		this.audioContext = new (
+			window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+		)();
 		this.audioBuffers = new Map();
 		this.backgroundMusicSource = null;
 	}
 
-	loadAllAudio(): Promise<void[]> {
+	loadAllAudio() {
 		const promises = [
 			this.loadAudio(AudioFile.TANK_FIRE, tankFire),
 			this.loadAudio(AudioFile.TANK_DESTROY, tankDestroy),

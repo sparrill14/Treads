@@ -1,7 +1,7 @@
 import * as d3 from 'd3';
 import packageJson from '../../package.json';
 import { AudioManager } from '../game/AudioManager';
-import { Level, Level1, Level2, Level3, Level4, Level5, Level6, Level7, Level8 } from '../game/Level';
+import { Level, Level1, Level2, Level3, Level4, Level5, Level6, Level7, Level8, Level9 } from '../game/Level';
 
 export class LevelSelector {
 	private numLevels: number;
@@ -13,7 +13,7 @@ export class LevelSelector {
 	constructor(levels: number) {
 		this.numLevels = levels;
 		this.audioManager = new AudioManager();
-		const audioPromise: Promise<void[]> = this.audioManager.loadAllAudio();
+		const audioPromise = this.audioManager.loadAllAudio();
 		audioPromise.then((): void => {
 			this.audioManager.playBackgroundMusic();
 		});
@@ -58,6 +58,9 @@ export class LevelSelector {
 			case 8:
 				this.activeLevel = new Level8(this.audioManager);
 				break;
+			case 9:
+				this.activeLevel = new Level9(this.audioManager);
+				break;
 			default:
 				this.activeLevel = new Level1(this.audioManager);
 				break;
@@ -80,19 +83,19 @@ export class LevelSelector {
 			.range([0, effectiveWidth])
 			.clamp(true);
 
-		const svg: d3.Selection<SVGSVGElement, unknown, HTMLElement, any> = d3
+		const svg: d3.Selection<SVGSVGElement, unknown, HTMLElement, undefined> = d3
 			.select('#slider')
 			.append('svg')
 			.attr('width', this.sliderWidth)
 			.attr('height', 50);
 
-		const sliderGroup: d3.Selection<SVGGElement, unknown, HTMLElement, any> = svg
+		const sliderGroup: d3.Selection<SVGGElement, unknown, HTMLElement, undefined> = svg
 			.append('g')
 			.attr('transform', `translate(${margin.left}, 30)`);
 
 		sliderGroup.append('g').call(d3.axisBottom(scale).ticks(this.numLevels).tickFormat(d3.format('1')));
 
-		const handle: d3.Selection<SVGCircleElement, unknown, HTMLElement, any> = sliderGroup
+		const handle: d3.Selection<SVGCircleElement, unknown, HTMLElement, undefined> = sliderGroup
 			.append('circle')
 			.attr('cx', scale(this.activeLevelNumber))
 			.attr('cy', -10)
@@ -112,16 +115,16 @@ export class LevelSelector {
 	}
 
 	private createJumbotron(): void {
-		const jumbotron: d3.Selection<d3.BaseType, unknown, HTMLElement, any> = d3.select('#jumbotron');
+		const jumbotron: d3.Selection<d3.BaseType, unknown, HTMLElement, undefined> = d3.select('#jumbotron');
 		const colorScale = d3.scaleLinear<string>().domain([1, this.numLevels]).range(['lightblue', 'lightcoral']);
 		for (let i = 1; i <= this.numLevels; i++) {
-			const box: d3.Selection<HTMLDivElement, unknown, HTMLElement, any> = jumbotron
+			const box: d3.Selection<HTMLDivElement, unknown, HTMLElement, undefined> = jumbotron
 				.append('div')
 				.attr('class', 'jumbotron-box inactive')
 				.on('click', () => this.updateActiveLevel(i));
 
 			// Example of how you can append an SVG to a jumbotron box.
-			const svg: d3.Selection<SVGSVGElement, unknown, HTMLElement, any> = box
+			const svg: d3.Selection<SVGSVGElement, unknown, HTMLElement, undefined> = box
 				.append('svg')
 				.attr('width', '100%')
 				.attr('height', '100%');

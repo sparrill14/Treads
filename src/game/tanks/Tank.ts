@@ -190,24 +190,24 @@ export class Tank {
 	}
 
 	public updatePosition(
-		currentTank: Tank,
-		playerTank: Tank,
-		enemyTanks: Tank[],
-		ammunition: Ammunition[],
-		bombs: Bomb[]
+		_currentTank: Tank,
+		_playerTank: Tank,
+		_enemyTanks: Tank[],
+		_ammunition: Ammunition[],
+		_bombs: Bomb[]
 	): void {
 		return;
 	}
 
-	public aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+	public aim(_mouseXPos: number, _mouseYpos: number, _playerTank: Tank): void {
 		return;
 	}
 
-	public shoot(playerTank: Tank): void {
+	public shoot(_playerTank: Tank): void {
 		return;
 	}
 
-	public plantBomb(playerTank: Tank): void {
+	public plantBomb(_playerTank: Tank): void {
 		return;
 	}
 

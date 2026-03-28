@@ -11,6 +11,7 @@ export class GameCanvas {
 	public width: number;
 	public height: number;
 	public animationFrameID: number | null = null;
+	private frameInterval = 1000 / 45;
 
 	constructor(canvasSelector: string, width: number, height: number, obstacleCanvas: ObstacleCanvas) {
 		this.width = width;
@@ -36,13 +37,16 @@ export class GameCanvas {
 		}
 	}
 
+	// eslint-disable-next-line @typescript-eslint/no-empty-function
 	private resizeCanvas(): void {}
 
 	private gameLoop(timeStamp: number): void {
 		if (this.playerTank != null) {
-			const progress = timeStamp - this.lastRenderTime;
-			this.gameRenderer.render(progress, this.playerTank, this.enemyTanks);
-			this.lastRenderTime = timeStamp;
+			const elapsed = timeStamp - this.lastRenderTime;
+			if (elapsed >= this.frameInterval) {
+				this.gameRenderer.render(elapsed, this.playerTank, this.enemyTanks);
+				this.lastRenderTime = timeStamp;
+			}
 			this.animationFrameID = requestAnimationFrame(this.gameLoop.bind(this));
 		}
 	}

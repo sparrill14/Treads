@@ -5,9 +5,9 @@ import { Direction, Tank } from '../tanks/Tank';
 import { NavigationGrid } from './NavigationGrid';
 import { Navigator } from './Navigator';
 
-export class AStarNavigator extends Navigator {
+export class AStarNavigatorWithAvoidance extends Navigator {
 	public aggressionFactor = 15;
-	public pathRecaculationInterval = 60;
+	public pathRecaculationInterval = 20;
 	private navigationGrid: NavigationGrid;
 	private currentNode: Node | null = null;
 	private path: Node[] | null = [];
@@ -24,21 +24,23 @@ export class AStarNavigator extends Navigator {
 	public updatePosition(
 		currentTank: Tank,
 		playerTank: Tank,
-		_enemyTanks: Tank[],
-		_ammunition: Ammunition[],
-		_bombs: Bomb[]
+		enemyTanks: Tank[],
+		ammunition: Ammunition[],
+		bombs: Bomb[]
 	): void {
 		this.pathRecaculationInterval -= 1;
 		if (this.path == null || this.path.length == 0 || this.pathRecaculationInterval == 0) {
 			this.navigationGrid.reset();
 			const startNode: Node = this.navigationGrid.getNodeFromTank(currentTank);
 			const targetNode: Node = this.navigationGrid.getNodeFromTank(playerTank);
-			const destinationNode: Node = this.navigationGrid.getRandomNodeInRadiusOfTarget(
+			const destinationNode: Node = this.navigationGrid.getSafeNode(
 				targetNode,
-				this.aggressionFactor
+				this.aggressionFactor,
+				ammunition,
+				bombs
 			);
 			this.path = this.navigationGrid.aStar(startNode, destinationNode);
-			this.pathRecaculationInterval = 60;
+			this.pathRecaculationInterval = 20;
 			if (this.path == null) {
 				console.log(`Path is null`);
 			}

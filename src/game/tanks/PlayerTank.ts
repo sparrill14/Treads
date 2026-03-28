@@ -38,7 +38,7 @@ export class PlayerTank extends Tank {
 		super(canvas, reticule, xPosition, yPosition, speed, size, color, obstacleCanvas, ammunition, bombs, audioManager);
 
 		document.addEventListener('keydown', (event: KeyboardEvent) => {
-			if (this.keyStates.hasOwnProperty(event.key)) {
+			if (Object.prototype.hasOwnProperty.call(this.keyStates, event.key)) {
 				this.keyStates[event.key] = true;
 			}
 		});
@@ -48,7 +48,7 @@ export class PlayerTank extends Tank {
 			}
 		});
 		document.addEventListener('keyup', (event: KeyboardEvent) => {
-			if (this.keyStates.hasOwnProperty(event.key)) {
+			if (Object.prototype.hasOwnProperty.call(this.keyStates, event.key)) {
 				this.keyStates[event.key] = false;
 			}
 		});
@@ -64,11 +64,11 @@ export class PlayerTank extends Tank {
 	}
 
 	public override updatePosition(
-		currentTank: Tank,
-		playerTank: Tank,
-		enemyTanks: Tank[],
-		ammunition: Ammunition[],
-		bombs: Bomb[]
+		_currentTank: Tank,
+		_playerTank: Tank,
+		_enemyTanks: Tank[],
+		_ammunition: Ammunition[],
+		_bombs: Bomb[]
 	): void {
 		// Move the tank
 		if (this.up() && this.right()) {
@@ -95,7 +95,7 @@ export class PlayerTank extends Tank {
 		this.yBottom = this.yPosition + this.size;
 	}
 
-	public override plantBomb(playerTank: Tank): void {
+	public override plantBomb(_playerTank: Tank): void {
 		if (this.isDestroyed) {
 			return;
 		}
@@ -107,7 +107,7 @@ export class PlayerTank extends Tank {
 		}
 	}
 
-	public override aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+	public override aim(mouseXPos: number, mouseYpos: number, _playerTank: Tank): void {
 		if (this.isDestroyed) {
 			return;
 		}
@@ -120,7 +120,7 @@ export class PlayerTank extends Tank {
 		this.aimAngle = theta;
 	}
 
-	public override shoot(playerTank: Tank): void {
+	public override shoot(_playerTank: Tank): void {
 		if (!this.isDestroyed) {
 			const availableAmmunitionIndex = this.ammunition.findIndex((ammunition) => ammunition.isDestroyed);
 			if (availableAmmunitionIndex !== -1) {

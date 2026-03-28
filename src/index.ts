@@ -4,4 +4,4 @@ import './css/style.css';
 
 import { LevelSelector } from './ui/LevelSelector';
 
-const levelSelector: LevelSelector = new LevelSelector(8);
+new LevelSelector(9);

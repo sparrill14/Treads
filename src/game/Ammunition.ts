@@ -19,9 +19,9 @@ export class Ammunition {
 	public canvasHeight: number;
 	public isDestroyed: boolean;
 	public audioManager: AudioManager;
-	public isExploding: boolean = false;
-	public radius: number = 4;
-	public fragmentationRadius: number = 10;
+	public isExploding = false;
+	public radius = 4;
+	public fragmentationRadius = 10;
 	private fragments: BombFragment[] = [];
 	private fragmentColorScale = d3
 		.scaleLinear<string>()

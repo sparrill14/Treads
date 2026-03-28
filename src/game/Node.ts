@@ -6,6 +6,7 @@ export class Node {
 	public f = 0;
 	public walkable = true;
 	public parent: Node | null = null;
+	public dangerous = false;
 
 	constructor(x: number, y: number) {
 		this.x = x;

@@ -12,7 +12,7 @@ export class Bomb {
 	public fuseStartTime: number;
 	public shouldFlashRed: boolean;
 	public audioManager: AudioManager;
-	public radius: number = 15;
+	public radius = 15;
 
 	protected fragments: BombFragment[] = [];
 	private fragmentColorScale = d3.scaleLinear<string>().domain([0, 0.5, 1]).range(['red', 'yellow', 'orange']);

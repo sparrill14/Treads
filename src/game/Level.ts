@@ -5,6 +5,7 @@ import { GameCanvas } from './GameCanvas';
 import { Obstacle } from './Obstacle';
 import { ObstacleCanvas } from './ObstacleCanvas';
 import { AStarNavigator } from './navigation/AStarNavigator';
+import { AStarNavigatorWithAvoidance } from './navigation/AStarNavigatorWithAvoidance';
 import { NavigationGrid } from './navigation/NavigationGrid';
 import { Navigator } from './navigation/Navigator';
 import { SimpleNavigator } from './navigation/SimpleNavigator';
@@ -435,6 +436,68 @@ export class Level8 extends Level {
 		const playerTank = new DefaultPlayerTank(
 			this.gameCanvas.gameRenderer.canvas,
 			200,
+			250,
+			obstacleCanvas,
+			audioManager
+		);
+		this.gameCanvas.addPlayerTank(playerTank);
+	}
+}
+
+export class Level9 extends Level {
+	constructor(audioManager: AudioManager) {
+		const obs1: Obstacle = new Obstacle(350, 0, 30, 200);
+		const obs2: Obstacle = new Obstacle(350, 300, 30, 200);
+		const obs3: Obstacle = new Obstacle(700, 100, 30, 300);
+		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs1, obs2, obs3]);
+		super(obstacleCanvas, audioManager);
+
+		const ammo1: Ammunition[] = [
+			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
+			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
+			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
+		];
+		const bombs1: Bomb[] = [new BasicBomb(0, 0, true, audioManager), new BasicBomb(0, 0, true, audioManager)];
+		const navigationGrid1: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
+		const navigator1: Navigator = new AStarNavigatorWithAvoidance(navigationGrid1);
+		navigator1.aggressionFactor = 5;
+		const aiTank1 = new SuperBomberMovingTank(
+			this.gameCanvas.gameRenderer.canvas,
+			800,
+			100,
+			obstacleCanvas,
+			ammo1,
+			bombs1,
+			navigator1,
+			audioManager
+		);
+
+		const ammo2: Ammunition[] = [
+			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
+			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
+			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
+		];
+		const bombs2: Bomb[] = [new BasicBomb(0, 0, true, audioManager), new BasicBomb(0, 0, true, audioManager)];
+		const navigationGrid2: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
+		const navigator2: Navigator = new AStarNavigatorWithAvoidance(navigationGrid2);
+		navigator2.aggressionFactor = 10;
+		const aiTank2 = new SuperBomberMovingTank(
+			this.gameCanvas.gameRenderer.canvas,
+			800,
+			350,
+			obstacleCanvas,
+			ammo2,
+			bombs2,
+			navigator2,
+			audioManager
+		);
+
+		this.gameCanvas.addEnemyTank(aiTank1);
+		this.gameCanvas.addEnemyTank(aiTank2);
+
+		const playerTank = new DefaultPlayerTank(
+			this.gameCanvas.gameRenderer.canvas,
+			100,
 			250,
 			obstacleCanvas,
 			audioManager
