@@ -2,11 +2,16 @@ import * as d3 from 'd3';
 import packageJson from '../../package.json';
 import { AudioManager } from '../game/AudioManager';
 import { Level } from '../game/Level';
-import type { TankController } from '../game/core/types';
 import { LEVEL_CONFIGS } from '../game/LevelConfig';
+import { NeuralNetController } from '../game/controllers/NeuralNetController';
+import type { TankController } from '../game/core/types';
 
 export class LevelSelector {
-	public static createHeadlessLevel(levelNumber: number, seed: number = levelNumber, playerController?: TankController): Level {
+	public static createHeadlessLevel(
+		levelNumber: number,
+		seed: number = levelNumber,
+		playerController?: TankController
+	): Level {
 		const configIndex = Math.max(0, Math.min(levelNumber - 1, LEVEL_CONFIGS.length - 1));
 		return new Level(LEVEL_CONFIGS[configIndex], { headless: true, seed, playerController });
 	}
@@ -15,6 +20,8 @@ export class LevelSelector {
 	private activeLevel: Level | null = null;
 	private sliderWidth: number = Math.min(window.innerWidth * 0.8, 600);
 	private audioManager: AudioManager;
+	private aiMode = false;
+	private neuralNetController: NeuralNetController | null = null;
 
 	constructor(levels: number) {
 		this.numLevels = levels;
@@ -25,6 +32,7 @@ export class LevelSelector {
 		});
 		this.activeLevelNumber = 1;
 		this.setHeader();
+		this.createAiToggle();
 		this.createSlider();
 		this.createJumbotron();
 	}
@@ -39,11 +47,74 @@ export class LevelSelector {
 	public startActiveLevel() {
 		this.activeLevel?.stop();
 		const configIndex = Math.max(0, Math.min(this.activeLevelNumber - 1, LEVEL_CONFIGS.length - 1));
+		const config = LEVEL_CONFIGS[configIndex];
+
+		const controllerOverrides: Record<string, TankController> = {};
+		if (this.aiMode && this.neuralNetController) {
+			// Override all enemy controllers with the neural net controller
+			const nnController = this.neuralNetController;
+			config.enemies.forEach((_enemy, index) => {
+				controllerOverrides[`enemy-${index}`] = nnController;
+			});
+		}
+
 		this.activeLevel = new Level(LEVEL_CONFIGS[configIndex], {
 			audioManager: this.audioManager,
 			seed: this.activeLevelNumber,
+			controllerOverrides,
 		});
 		this.activeLevel.start();
+	}
+
+	private createAiToggle(): void {
+		const container = document.createElement('div');
+		container.id = 'ai-toggle-container';
+		container.style.cssText = 'text-align: center; margin: 10px 0;';
+
+		const btn = document.createElement('button');
+		btn.id = 'ai-toggle-btn';
+		btn.textContent = 'AI Mode: OFF';
+		btn.className = 'btn btn-outline-secondary btn-sm';
+		btn.addEventListener('click', () => this.toggleAiMode(btn));
+
+		container.appendChild(btn);
+
+		const header = document.getElementById('main-header');
+		if (header?.parentElement) {
+			header.parentElement.insertBefore(container, header.nextSibling);
+		}
+	}
+
+	private async toggleAiMode(btn: HTMLButtonElement): Promise<void> {
+		if (!this.aiMode) {
+			btn.textContent = 'AI Mode: Loading...';
+			btn.disabled = true;
+			try {
+				if (!this.neuralNetController) {
+					this.neuralNetController = new NeuralNetController('models/treads_policy.onnx');
+					await this.neuralNetController.loadModel();
+				}
+				this.aiMode = true;
+				btn.textContent = 'AI Mode: ON';
+				btn.className = 'btn btn-success btn-sm';
+			} catch (err) {
+				console.error('Failed to load AI model:', err);
+				btn.textContent = 'AI Mode: Error';
+				btn.className = 'btn btn-danger btn-sm';
+				setTimeout(() => {
+					btn.textContent = 'AI Mode: OFF';
+					btn.className = 'btn btn-outline-secondary btn-sm';
+					btn.disabled = false;
+				}, 2000);
+				return;
+			}
+			btn.disabled = false;
+		} else {
+			this.aiMode = false;
+			btn.textContent = 'AI Mode: OFF';
+			btn.className = 'btn btn-outline-secondary btn-sm';
+		}
+		this.startActiveLevel();
 	}
 
 	private createSlider(): void {
@@ -120,5 +191,3 @@ export class LevelSelector {
 		this.startActiveLevel();
 	}
 }
-
-

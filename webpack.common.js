@@ -1,5 +1,7 @@
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const MiniCssExtractPlugin = require("mini-css-extract-plugin");
+const CopyPlugin = require("copy-webpack-plugin");
+const path = require('path');
 
 module.exports = {
     entry: './src/index.ts',
@@ -18,6 +20,12 @@ module.exports = {
         new MiniCssExtractPlugin({
             filename: "[name].css",
         }),
+        new CopyPlugin({
+            patterns: [
+                { from: 'node_modules/onnxruntime-web/dist/*.wasm', to: '[name][ext]' },
+                { from: 'training/output/*.onnx', to: 'models/[name][ext]', noErrorOnMissing: true },
+            ],
+        }),
     ],
     optimization: {
         moduleIds: 'deterministic',
@@ -34,7 +42,7 @@ module.exports = {
         },
     },
     performance: {
-        assetFilter: (assetFilename) => !/\.(mp3|ogg|wav)$/i.test(assetFilename),
+        assetFilter: (assetFilename) => !/\.(mp3|ogg|wav|onnx|wasm)$/i.test(assetFilename),
     },
     module: {
         rules: [

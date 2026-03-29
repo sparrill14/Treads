@@ -48,6 +48,14 @@ build/Release
 node_modules/
 jspm_packages/
 .test-dist/
+.training-dist/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Training output (model weights, logs)
+training/output/
 
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/

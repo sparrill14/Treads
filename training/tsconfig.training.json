@@ -1,0 +1,10 @@
+{
+	"extends": "../tsconfig.json",
+	"compilerOptions": {
+		"module": "commonjs",
+		"outDir": "../.training-dist",
+		"sourceMap": false,
+		"types": ["node"]
+	},
+	"include": ["../src/**/*.ts", "./**/*.ts"]
+}
