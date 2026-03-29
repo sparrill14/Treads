@@ -1,5 +1,4 @@
-import { Ammunition } from './Ammunition';
-import { Bomb } from './Bomb';
+import { CollisionManager } from './CollisionManager';
 import { Tank } from './tanks/Tank';
 
 export class GameRenderer {
@@ -7,6 +6,7 @@ export class GameRenderer {
 	public enemyWin = false;
 
 	private context: CanvasRenderingContext2D | null;
+	private collisionManager: CollisionManager | null = null;
 
 	constructor(public canvas: HTMLCanvasElement) {
 		const context = this.canvas.getContext('2d');
@@ -19,6 +19,10 @@ export class GameRenderer {
 	public initializeCanvas(width: number, height: number): void {
 		this.canvas.width = width;
 		this.canvas.height = height;
+	}
+
+	public setCollisionManager(collisionManager: CollisionManager): void {
+		this.collisionManager = collisionManager;
 	}
 
 	renderLevelOverScreen() {
@@ -57,11 +61,8 @@ export class GameRenderer {
 			return;
 		}
 
-		const allAmmunition: Ammunition[] = [
-			...enemyTanks.flatMap((enemyTank) => enemyTank.ammunition),
-			...playerTank.ammunition,
-		];
-		const allBombs: Bomb[] = [...enemyTanks.flatMap((enemyTank) => enemyTank.bombs), ...playerTank.bombs];
+		const allAmmunition = [...enemyTanks.flatMap((enemyTank) => enemyTank.ammunition), ...playerTank.ammunition];
+		const allBombs = [...enemyTanks.flatMap((enemyTank) => enemyTank.bombs), ...playerTank.bombs];
 
 		playerTank.dt = deltaTime;
 		playerTank.updatePosition(playerTank, playerTank, enemyTanks, allAmmunition, allBombs);
@@ -77,42 +78,7 @@ export class GameRenderer {
 			}
 		});
 
-		enemyTanks.forEach((enemyTank) => {
-			enemyTank.ammunition.forEach((ammunition) => {
-				if (ammunition.isDestroyed) {
-					return;
-				}
-				ammunition.checkAmmunitionCollision(allAmmunition);
-				ammunition.checkBombCollision([...playerTank.bombs]);
-				ammunition.updatePosition(enemyTank.obstacleCanvas, deltaTime);
-				ammunition.checkPlayerHit(playerTank);
-			});
-			enemyTank.bombs.forEach((bomb) => {
-				if (bomb.isDestroyed && !bomb.isExploding()) {
-					return;
-				}
-				bomb.checkPlayerHit(playerTank);
-			});
-		});
-
-		playerTank.ammunition.forEach((ammunition) => {
-			if (ammunition.isDestroyed) {
-				return;
-			}
-			ammunition.checkAmmunitionCollision(allAmmunition);
-			ammunition.checkBombCollision(allBombs);
-			ammunition.updatePosition(playerTank.obstacleCanvas, deltaTime);
-			ammunition.checkEnemyHit(enemyTanks);
-			ammunition.checkPlayerHit(playerTank);
-		});
-
-		playerTank.bombs.forEach((bomb) => {
-			if (bomb.isDestroyed && !bomb.isExploding()) {
-				return;
-			}
-			bomb.checkEnemyHit(enemyTanks);
-			bomb.checkPlayerHit(playerTank);
-		});
+		this.collisionManager?.update(playerTank, enemyTanks, playerTank.obstacleCanvas, deltaTime);
 	}
 
 	render(playerTank: Tank, enemyTanks: Tank[]): void {

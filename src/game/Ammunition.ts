@@ -1,7 +1,6 @@
 import * as d3 from 'd3';
 import { PastelColorPalette } from '../ui/PastelColorPalette';
 import { AudioFile, AudioManager } from './AudioManager';
-import { Bomb } from './Bomb';
 import { BombFragment } from './BombFragment';
 import { ObstacleCanvas } from './ObstacleCanvas';
 import { Tank } from './tanks/Tank';
@@ -116,69 +115,6 @@ export class Ammunition {
 			this.isExploding = false;
 			this.isDestroyed = true;
 		}, 500);
-	}
-
-	checkEnemyHit(enemyTanks: Tank[]): void {
-		enemyTanks.forEach((enemyTank) => {
-			if (enemyTank.isDestroyed) {
-				return;
-			}
-			if (
-				this.xPosition > enemyTank.xLeft &&
-				this.xPosition < enemyTank.xRight &&
-				this.yPosition > enemyTank.yTop &&
-				this.yPosition < enemyTank.yBottom
-			) {
-				this.destroy();
-				enemyTank.destroy();
-				this.audioManager.play(AudioFile.TANK_DESTROY);
-				console.log('Enemy hit!!!');
-			}
-		});
-	}
-
-	checkPlayerHit(playerTank: Tank): void {
-		if (playerTank.isDestroyed) {
-			return;
-		}
-		if (
-			this.xPosition > playerTank.xLeft &&
-			this.xPosition < playerTank.xRight &&
-			this.yPosition > playerTank.yTop &&
-			this.yPosition < playerTank.yBottom
-		) {
-			playerTank.destroy();
-			this.destroy();
-			console.log('Player Hit!!!');
-		}
-	}
-
-	checkAmmunitionCollision(ammunitions: Ammunition[]): void {
-		for (const ammunition of ammunitions) {
-			if (ammunition !== this && !ammunition.isDestroyed) {
-				const dx = this.xPosition - ammunition.xPosition;
-				const dy = this.yPosition - ammunition.yPosition;
-				const distance = Math.sqrt(dx * dx + dy * dy);
-				if (distance < this.radius + ammunition.radius) {
-					this.destroy();
-					ammunition.destroy();
-				}
-			}
-		}
-	}
-
-	checkBombCollision(bombs: Bomb[]): void {
-		for (const bomb of bombs) {
-			if (!bomb.isDestroyed && !bomb.isExploding()) {
-				const dx = this.xPosition - bomb.xPosition;
-				const dy = this.yPosition - bomb.yPosition;
-				const distance = Math.sqrt(dx * dx + dy * dy);
-				if (distance < this.radius + bomb.radius) {
-					this.destroy();
-					bomb.destroy();
-				}
-			}
-		}
 	}
 
 	reload(

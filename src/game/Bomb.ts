@@ -14,7 +14,7 @@ export class Bomb {
 	public audioManager: AudioManager;
 	public radius = 15;
 
-	protected fragments: BombFragment[] = [];
+	public fragments: BombFragment[] = [];
 	private fragmentColorScale = d3.scaleLinear<string>().domain([0, 0.5, 1]).range(['red', 'yellow', 'orange']);
 	private fuseTimeoutId: number | null = null;
 
@@ -39,32 +39,6 @@ export class Bomb {
 		if (this.fuseTimeoutId !== null) {
 			clearTimeout(this.fuseTimeoutId);
 			this.fuseTimeoutId = null;
-		}
-	}
-
-	public checkEnemyHit(enemyTanks: Tank[]): void {
-		enemyTanks.forEach((enemyTank) => {
-			if (enemyTank.isDestroyed) {
-				return;
-			}
-			for (const fragment of this.fragments) {
-				if (fragment.checkHit(enemyTank)) {
-					enemyTank.destroy();
-					break;
-				}
-			}
-		});
-	}
-
-	public checkPlayerHit(playerTank: Tank): void {
-		if (playerTank.isDestroyed) {
-			return;
-		}
-		for (const fragment of this.fragments) {
-			if (fragment.checkHit(playerTank)) {
-				playerTank.destroy();
-				break;
-			}
 		}
 	}
 

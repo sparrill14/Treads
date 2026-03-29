@@ -2,6 +2,7 @@ import { InputManager } from '../utils/InputManager';
 import { Ammunition, BasicAIAmmunition, SuperAIAmmunition } from './Ammunition';
 import { AudioManager } from './AudioManager';
 import { BasicBomb, Bomb, LoveBomb } from './Bomb';
+import { CollisionManager } from './CollisionManager';
 import { GameCanvas } from './GameCanvas';
 import { type EnemyConfig, type LevelConfig, type NavigatorConfig } from './LevelConfig';
 import { Obstacle } from './Obstacle';
@@ -34,6 +35,7 @@ export class Level {
 		const obstacles = config.obstacles.map((o) => new Obstacle(o.x, o.y, o.width, o.height));
 		this.obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', this.canvasWidth, this.canvasHeight, obstacles);
 		this.gameCanvas = new GameCanvas('#game-canvas', this.canvasWidth, this.canvasHeight, this.obstacleCanvas);
+		this.gameCanvas.gameRenderer.setCollisionManager(new CollisionManager(audioManager));
 		this.inputManager = new InputManager(this.gameCanvas.gameRenderer.canvas);
 
 		for (const enemy of config.enemies) {

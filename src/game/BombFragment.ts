@@ -1,10 +1,8 @@
-import { Tank } from './tanks/Tank';
-
 export class BombFragment {
 	public life: number;
 
-	private x: number;
-	private y: number;
+	public x: number;
+	public y: number;
 	private fragmentRadius: number;
 	private fragmentColor: string;
 	private velocityX: number;
@@ -34,11 +32,5 @@ export class BombFragment {
 		context.fillStyle = this.fragmentColor;
 		context.fill();
 		context.closePath();
-	}
-
-	checkHit(tank: Tank): boolean {
-		return (
-			this.x >= tank.xLeft && this.x <= tank.xRight && this.y >= tank.yTop && this.y <= tank.yBottom && this.life > 0
-		);
 	}
 }

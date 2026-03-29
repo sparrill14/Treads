@@ -28,9 +28,9 @@
 - [x] Store level configs as data (JSON or typed objects)
 - **Why:** Scalability — adding levels requires zero new classes; opens door to level editor and procedural generation
 
-## 5. Centralized Collision System
+## 5. Centralized Collision System ✅
 
-- [ ] Create a collision manager that runs once per frame
-- [ ] Consolidate scattered collision checks (ammunition, bombs, obstacles) into one system
-- [ ] Make it easy to add new collidable entity types (power-ups, hazards)
+- [x] Create a collision manager that runs once per frame
+- [x] Consolidate scattered collision checks (ammunition, bombs, obstacles) into one system
+- [x] Make it easy to add new collidable entity types (power-ups, hazards)
 - **Why:** Eliminates duplicate checks, single place to optimize (spatial partitioning) as entity counts grow
