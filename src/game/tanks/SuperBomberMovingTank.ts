@@ -24,7 +24,7 @@ export class SuperBomberMovingTank extends EnemyTank {
 		navigator: Navigator,
 		audioManager: AudioManager
 	) {
-		const superBomberMovingTankSpeed = 2.2;
+		const superBomberMovingTankSpeed = 99;
 		const superBomberMovingTankSize = 30;
 		const superBomberMovingTankAggressionFactor = 5;
 		const superBomberMovingTankColor = PastelColorPalette.BLUSH_PINK;

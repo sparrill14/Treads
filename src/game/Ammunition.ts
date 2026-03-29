@@ -53,12 +53,12 @@ export class Ammunition {
 		this.audioManager = audioManager;
 	}
 
-	updatePosition(obstacleCanvas: ObstacleCanvas): void {
+	updatePosition(obstacleCanvas: ObstacleCanvas, dt: number): void {
 		if (this.isExploding) {
 			return;
 		}
-		this.xPosition += this.xVelocity;
-		this.yPosition += this.yVelocity;
+		this.xPosition += this.xVelocity * dt;
+		this.yPosition += this.yVelocity * dt;
 
 		if (this.xPosition <= 0 || this.xPosition > this.canvasWidth) {
 			this.xVelocity = -this.xVelocity;
@@ -246,14 +246,15 @@ export class Ammunition {
 	}
 
 	willHitPlayerTank(obstacleCanvas: ObstacleCanvas, playerTank: Tank): boolean {
+		const PREDICTION_STEP = 1 / 45;
 		let predictedXPosition: number = this.xPosition;
 		let predictedYPosition: number = this.yPosition;
 		let predictedXVelocity: number = this.xVelocity;
 		let predictedYVelocity: number = this.yVelocity;
 		let predictedBounces = 0;
 		while (predictedBounces <= this.maxBounces) {
-			predictedXPosition += predictedXVelocity;
-			predictedYPosition += predictedYVelocity;
+			predictedXPosition += predictedXVelocity * PREDICTION_STEP;
+			predictedYPosition += predictedYVelocity * PREDICTION_STEP;
 			if (predictedXPosition <= 0 || predictedXPosition > this.canvasWidth) {
 				predictedXVelocity = -predictedXVelocity;
 				predictedBounces++;
@@ -298,7 +299,7 @@ export class PlayerAmmunition extends Ammunition {
 		audioManager: AudioManager
 	) {
 		const playerAmmunitionMaxBounces = 1;
-		const playerAmmunitionSpeed = 4;
+		const playerAmmunitionSpeed = 180;
 		super(
 			startX,
 			startY,
@@ -324,7 +325,7 @@ export class BasicAIAmmunition extends Ammunition {
 		audioManager: AudioManager
 	) {
 		const BasicAIAmmunitionMaxBounces = 1;
-		const BasicAIAmmunitionSpeed = 4;
+		const BasicAIAmmunitionSpeed = 180;
 		super(
 			startX,
 			startY,
@@ -350,7 +351,7 @@ export class SuperAIAmmunition extends Ammunition {
 		audioManager: AudioManager
 	) {
 		const superAIAmmunitionMaxBounces = 2;
-		const superAIAmmunitionSpeed = 6;
+		const superAIAmmunitionSpeed = 270;
 		super(
 			startX,
 			startY,

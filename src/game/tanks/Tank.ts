@@ -25,6 +25,7 @@ export class Tank {
 	public yTop: number;
 	public yBottom: number;
 	public speed: number;
+	public dt = 1 / 60;
 	public size: number;
 	public tankMidpoint: number;
 	public color: string;
@@ -274,6 +275,7 @@ export class Tank {
 		if (this.isDestroyed) {
 			return;
 		}
+		const move = this.speed * this.dt;
 		if (this.lastDirectionMoved == Direction.NORTH) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -283,7 +285,7 @@ export class Tank {
 		let blocked = false;
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
-				this.yPosition - this.speed < obstacle.yTop + obstacle.height &&
+				this.yPosition - move < obstacle.yTop + obstacle.height &&
 				this.yPosition > obstacle.yTop &&
 				obstacle.xLeft < this.xPosition + this.size &&
 				this.xPosition < obstacle.xRight
@@ -294,7 +296,7 @@ export class Tank {
 			}
 		}
 		if (!blocked) {
-			this.yPosition = Math.max(this.yPosition - this.speed, 0);
+			this.yPosition = Math.max(this.yPosition - move, 0);
 		} else {
 			this.wasLastMoveBlocked = true;
 		}
@@ -304,6 +306,7 @@ export class Tank {
 		if (this.isDestroyed) {
 			return;
 		}
+		const move = this.speed * this.dt;
 		if (this.lastDirectionMoved == Direction.SOUTH) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -313,7 +316,7 @@ export class Tank {
 		let blocked = false;
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
-				this.yPosition + this.speed + this.size > obstacle.yTop &&
+				this.yPosition + move + this.size > obstacle.yTop &&
 				this.yPosition < obstacle.yTop + obstacle.height &&
 				obstacle.xLeft < this.xPosition + this.size &&
 				this.xPosition < obstacle.xRight
@@ -324,7 +327,7 @@ export class Tank {
 			}
 		}
 		if (!blocked) {
-			this.yPosition = Math.min(this.yPosition + this.speed, this.canvasHeight - this.size);
+			this.yPosition = Math.min(this.yPosition + move, this.canvasHeight - this.size);
 		} else {
 			this.wasLastMoveBlocked = true;
 		}
@@ -334,6 +337,7 @@ export class Tank {
 		if (this.isDestroyed) {
 			return;
 		}
+		const move = this.speed * this.dt;
 		if (this.lastDirectionMoved == Direction.WEST) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -343,7 +347,7 @@ export class Tank {
 		let blocked = false;
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
-				this.xPosition - this.speed < obstacle.xRight &&
+				this.xPosition - move < obstacle.xRight &&
 				this.xPosition > obstacle.xLeft &&
 				obstacle.yTop < this.yPosition + this.size &&
 				this.yPosition < obstacle.yBottom
@@ -354,7 +358,7 @@ export class Tank {
 			}
 		}
 		if (!blocked) {
-			this.xPosition = Math.max(this.xPosition - this.speed, 0);
+			this.xPosition = Math.max(this.xPosition - move, 0);
 		} else {
 			this.wasLastMoveBlocked = true;
 		}
@@ -364,6 +368,7 @@ export class Tank {
 		if (this.isDestroyed) {
 			return;
 		}
+		const move = this.speed * this.dt;
 		if (this.lastDirectionMoved == Direction.EAST) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -373,7 +378,7 @@ export class Tank {
 		let blocked = false;
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
-				this.xPosition + this.speed + this.size > obstacle.xLeft &&
+				this.xPosition + move + this.size > obstacle.xLeft &&
 				this.xPosition < obstacle.xLeft + obstacle.width &&
 				obstacle.yTop < this.yPosition + this.size &&
 				this.yPosition < obstacle.yBottom
@@ -384,7 +389,7 @@ export class Tank {
 			}
 		}
 		if (!blocked) {
-			this.xPosition = Math.min(this.xPosition + this.speed, this.canvasWidth - this.size);
+			this.xPosition = Math.min(this.xPosition + move, this.canvasWidth - this.size);
 		} else {
 			this.wasLastMoveBlocked = true;
 		}
@@ -394,6 +399,7 @@ export class Tank {
 		if (this.isDestroyed) {
 			return;
 		}
+		const move = this.speed * this.dt;
 		if (this.lastDirectionMoved == Direction.NORTHEAST) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -405,7 +411,7 @@ export class Tank {
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
 				!blockedNorth &&
-				this.yPosition - this.speed < obstacle.yTop + obstacle.height &&
+				this.yPosition - move < obstacle.yTop + obstacle.height &&
 				this.yPosition > obstacle.yTop &&
 				obstacle.xLeft < this.xPosition + this.size &&
 				this.xPosition < obstacle.xRight
@@ -415,7 +421,7 @@ export class Tank {
 			}
 			if (
 				!blockedEast &&
-				this.xPosition + this.speed + this.size > obstacle.xLeft &&
+				this.xPosition + move + this.size > obstacle.xLeft &&
 				this.xPosition < obstacle.xLeft + obstacle.width &&
 				obstacle.yTop < this.yPosition + this.size &&
 				this.yPosition < obstacle.yBottom
@@ -428,10 +434,10 @@ export class Tank {
 			this.wasLastMoveBlocked = true;
 		}
 		if (!blockedNorth) {
-			this.yPosition = Math.max(this.yPosition - this.speed, 0);
+			this.yPosition = Math.max(this.yPosition - move, 0);
 		}
 		if (!blockedEast) {
-			this.xPosition = Math.min(this.xPosition + this.speed, this.canvasWidth - this.size);
+			this.xPosition = Math.min(this.xPosition + move, this.canvasWidth - this.size);
 		}
 	}
 
@@ -439,6 +445,7 @@ export class Tank {
 		if (this.isDestroyed) {
 			return;
 		}
+		const move = this.speed * this.dt;
 		if (this.lastDirectionMoved == Direction.NORTHWEST) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -450,7 +457,7 @@ export class Tank {
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
 				!blockedNorth &&
-				this.yPosition - this.speed < obstacle.yTop + obstacle.height &&
+				this.yPosition - move < obstacle.yTop + obstacle.height &&
 				this.yPosition > obstacle.yTop &&
 				obstacle.xLeft < this.xPosition + this.size &&
 				this.xPosition < obstacle.xRight
@@ -460,7 +467,7 @@ export class Tank {
 			}
 			if (
 				!blockedWest &&
-				this.xPosition - this.speed < obstacle.xRight &&
+				this.xPosition - move < obstacle.xRight &&
 				this.xPosition > obstacle.xLeft &&
 				obstacle.yTop < this.yPosition + this.size &&
 				this.yPosition < obstacle.yBottom
@@ -473,10 +480,10 @@ export class Tank {
 			this.wasLastMoveBlocked = true;
 		}
 		if (!blockedNorth) {
-			this.yPosition = Math.max(this.yPosition - this.speed, 0);
+			this.yPosition = Math.max(this.yPosition - move, 0);
 		}
 		if (!blockedWest) {
-			this.xPosition = Math.max(this.xPosition - this.speed, 0);
+			this.xPosition = Math.max(this.xPosition - move, 0);
 		}
 	}
 
@@ -484,6 +491,7 @@ export class Tank {
 		if (this.isDestroyed) {
 			return;
 		}
+		const move = this.speed * this.dt;
 		if (this.lastDirectionMoved == Direction.SOUTHEAST) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -495,7 +503,7 @@ export class Tank {
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
 				!blockedSouth &&
-				this.yPosition + this.speed + this.size > obstacle.yTop &&
+				this.yPosition + move + this.size > obstacle.yTop &&
 				this.yPosition < obstacle.yTop + obstacle.height &&
 				obstacle.xLeft < this.xPosition + this.size &&
 				this.xPosition < obstacle.xRight
@@ -505,7 +513,7 @@ export class Tank {
 			}
 			if (
 				!blockedEast &&
-				this.xPosition + this.speed + this.size > obstacle.xLeft &&
+				this.xPosition + move + this.size > obstacle.xLeft &&
 				this.xPosition < obstacle.xLeft + obstacle.width &&
 				obstacle.yTop < this.yPosition + this.size &&
 				this.yPosition < obstacle.yBottom
@@ -518,10 +526,10 @@ export class Tank {
 			this.wasLastMoveBlocked = true;
 		}
 		if (!blockedSouth) {
-			this.yPosition = Math.min(this.yPosition + this.speed, this.canvasHeight - this.size);
+			this.yPosition = Math.min(this.yPosition + move, this.canvasHeight - this.size);
 		}
 		if (!blockedEast) {
-			this.xPosition = Math.min(this.xPosition + this.speed, this.canvasWidth - this.size);
+			this.xPosition = Math.min(this.xPosition + move, this.canvasWidth - this.size);
 		}
 	}
 
@@ -529,6 +537,7 @@ export class Tank {
 		if (this.isDestroyed) {
 			return;
 		}
+		const move = this.speed * this.dt;
 		if (this.lastDirectionMoved == Direction.SOUTHWEST) {
 			this.consecutiveDirectionMoves += 1;
 		} else {
@@ -540,7 +549,7 @@ export class Tank {
 		for (const obstacle of this.obstacleCanvas.obstacles) {
 			if (
 				!blockedSouth &&
-				this.yPosition + this.speed + this.size > obstacle.yTop &&
+				this.yPosition + move + this.size > obstacle.yTop &&
 				this.yPosition < obstacle.yTop + obstacle.height &&
 				obstacle.xLeft < this.xPosition + this.size &&
 				this.xPosition < obstacle.xRight
@@ -550,7 +559,7 @@ export class Tank {
 			}
 			if (
 				!blockedWest &&
-				this.xPosition - this.speed < obstacle.xRight &&
+				this.xPosition - move < obstacle.xRight &&
 				this.xPosition > obstacle.xLeft &&
 				obstacle.yTop < this.yPosition + this.size &&
 				this.yPosition < obstacle.yBottom
@@ -563,10 +572,10 @@ export class Tank {
 			this.wasLastMoveBlocked = true;
 		}
 		if (!blockedSouth) {
-			this.yPosition = Math.min(this.yPosition + this.speed, this.canvasHeight - this.size);
+			this.yPosition = Math.min(this.yPosition + move, this.canvasHeight - this.size);
 		}
 		if (!blockedWest) {
-			this.xPosition = Math.max(this.xPosition - this.speed, 0);
+			this.xPosition = Math.max(this.xPosition - move, 0);
 		}
 	}
 }

@@ -19,7 +19,7 @@ export class SimpleMovingTank extends EnemyTank {
 		navigator: Navigator,
 		audioManager: AudioManager
 	) {
-		const simpleMovingTankSpeed = 1.2;
+		const simpleMovingTankSpeed = 54;
 		const simpleMovingTankSize = 30;
 		const simpleMovingTankAggressionFactor = 15;
 		const simpleMovingTankColor = PastelColorPalette.CORAL_ORANGE;

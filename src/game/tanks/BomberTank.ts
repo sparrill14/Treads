@@ -24,7 +24,7 @@ export class BomberTank extends EnemyTank {
 		navigator: Navigator,
 		audioManager: AudioManager
 	) {
-		const bomberTankSpeed = 2;
+		const bomberTankSpeed = 90;
 		const bomberTankSize = 30;
 		const bomberTankAggressionFactor = 4;
 		const bomberTankColor = PastelColorPalette.PALE_YELLOW;

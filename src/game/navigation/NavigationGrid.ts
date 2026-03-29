@@ -157,14 +157,15 @@ export class NavigationGrid {
 			if (ammunition.isDestroyed) {
 				continue;
 			}
+			const PREDICTION_STEP = 1 / 45;
 			let predictedXPosition: number = ammunition.xPosition;
 			let predictedYPosition: number = ammunition.yPosition;
 			let predictedXVelocity: number = ammunition.xVelocity;
 			let predictedYVelocity: number = ammunition.yVelocity;
 			let predictedBounces: number = ammunition.bounces;
 			while (predictedBounces <= ammunition.maxBounces) {
-				predictedXPosition += predictedXVelocity;
-				predictedYPosition += predictedYVelocity;
+				predictedXPosition += predictedXVelocity * PREDICTION_STEP;
+				predictedYPosition += predictedYVelocity * PREDICTION_STEP;
 				if (predictedXPosition <= 0 || predictedXPosition > this.gameCanvas.width) {
 					predictedXVelocity = -predictedXVelocity;
 					predictedBounces++;

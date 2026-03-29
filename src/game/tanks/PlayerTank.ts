@@ -164,7 +164,7 @@ export class DefaultPlayerTank extends PlayerTank {
 		obstacleCanvas: ObstacleCanvas,
 		audioManager: AudioManager
 	) {
-		const defaultPlayerTankSpeed = 2;
+		const defaultPlayerTankSpeed = 90;
 		const defaultPlayerTankSize = 30;
 		const defaultPlayerTankColor = '#4f6d7a';
 		const ammunition: Ammunition[] = [

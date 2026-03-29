@@ -11,7 +11,6 @@ export class GameCanvas {
 	public width: number;
 	public height: number;
 	public animationFrameID: number | null = null;
-	private frameInterval = 1000 / 45;
 
 	constructor(canvasSelector: string, width: number, height: number, obstacleCanvas: ObstacleCanvas) {
 		this.width = width;
@@ -42,11 +41,10 @@ export class GameCanvas {
 
 	private gameLoop(timeStamp: number): void {
 		if (this.playerTank != null) {
-			const elapsed = timeStamp - this.lastRenderTime;
-			if (elapsed >= this.frameInterval) {
-				this.gameRenderer.render(elapsed, this.playerTank, this.enemyTanks);
-				this.lastRenderTime = timeStamp;
-			}
+			const deltaTime = Math.min((timeStamp - this.lastRenderTime) / 1000, 0.1);
+			this.lastRenderTime = timeStamp;
+			this.gameRenderer.update(deltaTime, this.playerTank, this.enemyTanks);
+			this.gameRenderer.render(this.playerTank, this.enemyTanks);
 			this.animationFrameID = requestAnimationFrame(this.gameLoop.bind(this));
 		}
 	}
