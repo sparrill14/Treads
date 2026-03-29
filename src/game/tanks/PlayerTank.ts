@@ -1,4 +1,4 @@
-import { KeyStates } from '../../utils/KeyStates';
+import { InputManager } from '../../utils/InputManager';
 import { Ammunition, PlayerAmmunition } from '../Ammunition';
 import { AudioFile, AudioManager } from '../AudioManager';
 import { Bomb, PlayerBomb } from '../Bomb';
@@ -7,20 +7,7 @@ import { AdjustingCustomColorReticule, Reticule } from '../Reticule';
 import { Tank } from './Tank';
 
 export class PlayerTank extends Tank {
-	public keyStates: KeyStates = {
-		ArrowUp: false,
-		ArrowDown: false,
-		ArrowLeft: false,
-		ArrowRight: false,
-		w: false,
-		a: false,
-		s: false,
-		d: false,
-		W: false,
-		A: false,
-		S: false,
-		D: false,
-	};
+	private inputManager: InputManager;
 
 	constructor(
 		canvas: HTMLCanvasElement,
@@ -33,34 +20,11 @@ export class PlayerTank extends Tank {
 		obstacleCanvas: ObstacleCanvas,
 		ammunition: Ammunition[],
 		bombs: Bomb[],
-		audioManager: AudioManager
+		audioManager: AudioManager,
+		inputManager: InputManager
 	) {
 		super(canvas, reticule, xPosition, yPosition, speed, size, color, obstacleCanvas, ammunition, bombs, audioManager);
-
-		document.addEventListener('keydown', (event: KeyboardEvent) => {
-			if (Object.prototype.hasOwnProperty.call(this.keyStates, event.key)) {
-				this.keyStates[event.key] = true;
-			}
-		});
-		document.addEventListener('keydown', (event: KeyboardEvent) => {
-			if (event.code === 'Space') {
-				this.plantBomb(this);
-			}
-		});
-		document.addEventListener('keyup', (event: KeyboardEvent) => {
-			if (Object.prototype.hasOwnProperty.call(this.keyStates, event.key)) {
-				this.keyStates[event.key] = false;
-			}
-		});
-		document.addEventListener('mousemove', (event: MouseEvent) => {
-			this.aimXPos = event.clientX - this.xOffset;
-			this.aimYPos = event.clientY - this.yOffset;
-		});
-		document.addEventListener('click', (event: MouseEvent) => {
-			if (canvas.contains(event.target as Node)) {
-				this.shoot(this);
-			}
-		});
+		this.inputManager = inputManager;
 	}
 
 	public override updatePosition(
@@ -70,22 +34,34 @@ export class PlayerTank extends Tank {
 		_ammunition: Ammunition[],
 		_bombs: Bomb[]
 	): void {
+		// Handle queued actions
+		if (this.inputManager.consumeShoot()) {
+			this.shoot(this);
+		}
+		if (this.inputManager.consumeBomb()) {
+			this.plantBomb(this);
+		}
+
+		// Update aim from mouse position
+		this.aimXPos = this.inputManager.mouseX;
+		this.aimYPos = this.inputManager.mouseY;
+
 		// Move the tank
-		if (this.up() && this.right()) {
+		if (this.inputManager.up() && this.inputManager.right()) {
 			this.moveNorthEast();
-		} else if (this.up() && this.left()) {
+		} else if (this.inputManager.up() && this.inputManager.left()) {
 			this.moveNorthWest();
-		} else if (this.down() && this.right()) {
+		} else if (this.inputManager.down() && this.inputManager.right()) {
 			this.moveSouthEast();
-		} else if (this.down() && this.left()) {
+		} else if (this.inputManager.down() && this.inputManager.left()) {
 			this.moveSouthWest();
-		} else if (this.up()) {
+		} else if (this.inputManager.up()) {
 			this.moveNorth();
-		} else if (this.down()) {
+		} else if (this.inputManager.down()) {
 			this.moveSouth();
-		} else if (this.left()) {
+		} else if (this.inputManager.left()) {
 			this.moveWest();
-		} else if (this.right()) {
+		} else if (this.inputManager.right()) {
 			this.moveEast();
 		}
 
@@ -138,22 +114,6 @@ export class PlayerTank extends Tank {
 		}
 		return;
 	}
-
-	public up(): boolean {
-		return this.keyStates.ArrowUp || this.keyStates.w || this.keyStates.W;
-	}
-
-	public down(): boolean {
-		return this.keyStates.ArrowDown || this.keyStates.s || this.keyStates.S;
-	}
-
-	public left(): boolean {
-		return this.keyStates.ArrowLeft || this.keyStates.a || this.keyStates.A;
-	}
-
-	public right(): boolean {
-		return this.keyStates.ArrowRight || this.keyStates.d || this.keyStates.D;
-	}
 }
 
 export class DefaultPlayerTank extends PlayerTank {
@@ -162,7 +122,8 @@ export class DefaultPlayerTank extends PlayerTank {
 		xPos: number,
 		yPos: number,
 		obstacleCanvas: ObstacleCanvas,
-		audioManager: AudioManager
+		audioManager: AudioManager,
+		inputManager: InputManager
 	) {
 		const defaultPlayerTankSpeed = 90;
 		const defaultPlayerTankSize = 30;
@@ -191,7 +152,8 @@ export class DefaultPlayerTank extends PlayerTank {
 			obstacleCanvas,
 			ammunition,
 			bombs,
-			audioManager
+			audioManager,
+			inputManager
 		);
 	}
 }

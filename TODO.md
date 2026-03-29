@@ -16,9 +16,9 @@
 
 ## 3. Centralized Input Manager
 
-- [ ] Create an `InputManager` class that owns all DOM event listeners
-- [ ] Remove listener registration from `PlayerTank` constructor
-- [ ] Add proper cleanup on level teardown (`stop()` removes listeners)
+- [x] Create an `InputManager` class that owns all DOM event listeners
+- [x] Remove listener registration from `PlayerTank` constructor
+- [x] Add proper cleanup on level teardown (`stop()` removes listeners)
 - **Why:** Prevents memory leaks and ghost input bugs from stacking listeners on level switch
 
 ## 4. Data-Driven Levels

@@ -1,3 +1,4 @@
+import { InputManager } from '../utils/InputManager';
 import { Ammunition, BasicAIAmmunition, SuperAIAmmunition } from './Ammunition';
 import { AudioManager } from './AudioManager';
 import { BasicBomb, Bomb, LoveBomb } from './Bomb';
@@ -23,15 +24,18 @@ export class Level {
 	public canvasWidth = 1000;
 	public canvasHeight = 500;
 	public audioManager: AudioManager;
+	public inputManager: InputManager;
 
 	constructor(obstacleCanvas: ObstacleCanvas, audioManager: AudioManager) {
 		this.obstacleCanvas = obstacleCanvas;
 		this.gameCanvas = new GameCanvas('#game-canvas', this.canvasWidth, this.canvasHeight, obstacleCanvas);
 		this.audioManager = audioManager;
+		this.inputManager = new InputManager(this.gameCanvas.gameRenderer.canvas);
 	}
 
 	public stop() {
 		this.gameCanvas.stop();
+		this.inputManager.destroy();
 	}
 
 	public start() {
@@ -58,7 +62,8 @@ export class Level1 extends Level {
 			100,
 			250,
 			obstacleCanvas,
-			audioManager
+			audioManager,
+			this.inputManager
 		);
 		this.gameCanvas.addPlayerTank(playerTank);
 	}
@@ -100,7 +105,8 @@ export class Level2 extends Level {
 			100,
 			250,
 			obstacleCanvas,
-			audioManager
+			audioManager,
+			this.inputManager
 		);
 		this.gameCanvas.addPlayerTank(playerTank);
 	}
@@ -127,7 +133,8 @@ export class Level3 extends Level {
 			200,
 			250,
 			obstacleCanvas,
-			audioManager
+			audioManager,
+			this.inputManager
 		);
 		this.gameCanvas.addPlayerTank(playerTank);
 	}
@@ -160,7 +167,8 @@ export class Level4 extends Level {
 			50,
 			450,
 			obstacleCanvas,
-			audioManager
+			audioManager,
+			this.inputManager
 		);
 		this.gameCanvas.addPlayerTank(playerTank);
 	}
@@ -206,7 +214,8 @@ export class Level5 extends Level {
 			200,
 			250,
 			obstacleCanvas,
-			audioManager
+			audioManager,
+			this.inputManager
 		);
 		this.gameCanvas.addPlayerTank(playerTank);
 	}
@@ -281,7 +290,8 @@ export class Level6 extends Level {
 			200,
 			250,
 			obstacleCanvas,
-			audioManager
+			audioManager,
+			this.inputManager
 		);
 		this.gameCanvas.addPlayerTank(playerTank);
 	}
@@ -358,7 +368,8 @@ export class Level7 extends Level {
 			100,
 			430,
 			obstacleCanvas,
-			audioManager
+			audioManager,
+			this.inputManager
 		);
 		this.gameCanvas.addPlayerTank(playerTank);
 	}
@@ -438,7 +449,8 @@ export class Level8 extends Level {
 			200,
 			250,
 			obstacleCanvas,
-			audioManager
+			audioManager,
+			this.inputManager
 		);
 		this.gameCanvas.addPlayerTank(playerTank);
 	}
@@ -500,7 +512,8 @@ export class Level9 extends Level {
 			100,
 			250,
 			obstacleCanvas,
-			audioManager
+			audioManager,
+			this.inputManager
 		);
 		this.gameCanvas.addPlayerTank(playerTank);
 	}
