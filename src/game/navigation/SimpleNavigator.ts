@@ -17,16 +17,16 @@ export class SimpleNavigator extends Navigator {
 		this.simplePathFinder = pathfinder;
 	}
 
-	public draw(context: CanvasRenderingContext2D): void {
+	public draw(_context: CanvasRenderingContext2D): void {
 		return;
 	}
 
 	updatePosition(
 		currentTank: Tank,
 		playerTank: Tank,
-		enemyTanks: Tank[],
-		ammunition: Ammunition[],
-		bombs: Bomb[]
+		_enemyTanks: Tank[],
+		_ammunition: Ammunition[],
+		_bombs: Bomb[]
 	): void {
 		this.pathRecaculationInterval -= 1;
 		if (this.path == null || this.path.length == 0 || this.pathRecaculationInterval == 0) {

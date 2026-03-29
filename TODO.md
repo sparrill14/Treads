@@ -21,11 +21,11 @@
 - [x] Add proper cleanup on level teardown (`stop()` removes listeners)
 - **Why:** Prevents memory leaks and ghost input bugs from stacking listeners on level switch
 
-## 4. Data-Driven Levels
+## 4. Data-Driven Levels ✅
 
-- [ ] Define a `LevelConfig` interface for obstacle, enemy, and player placement
-- [ ] Replace individual `Level1`–`Level9` classes with a single `Level` class that reads config
-- [ ] Store level configs as data (JSON or typed objects)
+- [x] Define a `LevelConfig` interface for obstacle, enemy, and player placement
+- [x] Replace individual `Level1`–`Level9` classes with a single `Level` class that reads config
+- [x] Store level configs as data (JSON or typed objects)
 - **Why:** Scalability — adding levels requires zero new classes; opens door to level editor and procedural generation
 
 ## 5. Centralized Collision System

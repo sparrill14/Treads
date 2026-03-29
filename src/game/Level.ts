@@ -3,6 +3,7 @@ import { Ammunition, BasicAIAmmunition, SuperAIAmmunition } from './Ammunition';
 import { AudioManager } from './AudioManager';
 import { BasicBomb, Bomb, LoveBomb } from './Bomb';
 import { GameCanvas } from './GameCanvas';
+import { type EnemyConfig, type LevelConfig, type NavigatorConfig } from './LevelConfig';
 import { Obstacle } from './Obstacle';
 import { ObstacleCanvas } from './ObstacleCanvas';
 import { AStarNavigator } from './navigation/AStarNavigator';
@@ -12,6 +13,7 @@ import { Navigator } from './navigation/Navigator';
 import { SimpleNavigator } from './navigation/SimpleNavigator';
 import { SimplePathfinder } from './navigation/SimplePathFinder';
 import { BomberTank } from './tanks/BomberTank';
+import { EnemyTank } from './tanks/EnemyTank';
 import { DefaultPlayerTank } from './tanks/PlayerTank';
 import { SimpleMovingTank } from './tanks/SimpleMovingTank';
 import { StationaryRandomAimTank } from './tanks/StationaryRandomAimTank';
@@ -26,11 +28,27 @@ export class Level {
 	public audioManager: AudioManager;
 	public inputManager: InputManager;
 
-	constructor(obstacleCanvas: ObstacleCanvas, audioManager: AudioManager) {
-		this.obstacleCanvas = obstacleCanvas;
-		this.gameCanvas = new GameCanvas('#game-canvas', this.canvasWidth, this.canvasHeight, obstacleCanvas);
+	constructor(config: LevelConfig, audioManager: AudioManager) {
 		this.audioManager = audioManager;
+
+		const obstacles = config.obstacles.map((o) => new Obstacle(o.x, o.y, o.width, o.height));
+		this.obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', this.canvasWidth, this.canvasHeight, obstacles);
+		this.gameCanvas = new GameCanvas('#game-canvas', this.canvasWidth, this.canvasHeight, this.obstacleCanvas);
 		this.inputManager = new InputManager(this.gameCanvas.gameRenderer.canvas);
+
+		for (const enemy of config.enemies) {
+			this.gameCanvas.addEnemyTank(this.createEnemy(enemy));
+		}
+
+		const playerTank = new DefaultPlayerTank(
+			this.gameCanvas.gameRenderer.canvas,
+			config.player.x,
+			config.player.y,
+			this.obstacleCanvas,
+			audioManager,
+			this.inputManager
+		);
+		this.gameCanvas.addPlayerTank(playerTank);
 	}
 
 	public stop() {
@@ -41,480 +59,92 @@ export class Level {
 	public start() {
 		this.gameCanvas.start();
 	}
-}
 
-export class Level1 extends Level {
-	constructor(audioManager: AudioManager) {
-		const obs: Obstacle = new Obstacle(300, 200, 40, 100);
-		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs]);
-		super(obstacleCanvas, audioManager);
-		const stationaryTank = new StationaryTank(
-			this.gameCanvas.gameRenderer.canvas,
-			900,
-			240,
-			obstacleCanvas,
-			audioManager
-		);
-		this.gameCanvas.addEnemyTank(stationaryTank);
-
-		const playerTank = new DefaultPlayerTank(
-			this.gameCanvas.gameRenderer.canvas,
-			100,
-			250,
-			obstacleCanvas,
-			audioManager,
-			this.inputManager
-		);
-		this.gameCanvas.addPlayerTank(playerTank);
+	private createAmmo(type: 'basic' | 'super', count: number): Ammunition[] {
+		const Ctor = type === 'basic' ? BasicAIAmmunition : SuperAIAmmunition;
+		return Array.from({ length: count }, () => new Ctor(0, 0, 0, 0, 0, true, this.audioManager));
 	}
-}
 
-export class Level2 extends Level {
-	constructor(audioManager: AudioManager) {
-		const obs: Obstacle = new Obstacle(300, 200, 40, 100);
-		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs]);
-		super(obstacleCanvas, audioManager);
-
-		const stationaryTank1 = new StationaryTank(
-			this.gameCanvas.gameRenderer.canvas,
-			800,
-			100,
-			obstacleCanvas,
-			audioManager
-		);
-		const stationaryTank2 = new StationaryTank(
-			this.gameCanvas.gameRenderer.canvas,
-			900,
-			240,
-			obstacleCanvas,
-			audioManager
-		);
-		const stationaryTank3 = new StationaryTank(
-			this.gameCanvas.gameRenderer.canvas,
-			800,
-			400,
-			obstacleCanvas,
-			audioManager
-		);
-		this.gameCanvas.addEnemyTank(stationaryTank1);
-		this.gameCanvas.addEnemyTank(stationaryTank2);
-		this.gameCanvas.addEnemyTank(stationaryTank3);
-
-		const playerTank = new DefaultPlayerTank(
-			this.gameCanvas.gameRenderer.canvas,
-			100,
-			250,
-			obstacleCanvas,
-			audioManager,
-			this.inputManager
-		);
-		this.gameCanvas.addPlayerTank(playerTank);
+	private createBombs(type: 'basic' | 'love', count: number): Bomb[] {
+		const Ctor = type === 'basic' ? BasicBomb : LoveBomb;
+		return Array.from({ length: count }, () => new Ctor(0, 0, true, this.audioManager));
 	}
-}
 
-export class Level3 extends Level {
-	constructor(audioManager: AudioManager) {
-		const obs: Obstacle = new Obstacle(700, 150, 30, 250);
-		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs]);
-		super(obstacleCanvas, audioManager);
-		const superAmmo: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
-		const aiTank = new StationaryRandomAimTank(
-			this.gameCanvas.gameRenderer.canvas,
-			900,
-			250,
-			obstacleCanvas,
-			superAmmo,
-			audioManager
-		);
-		this.gameCanvas.addEnemyTank(aiTank);
-
-		const playerTank = new DefaultPlayerTank(
-			this.gameCanvas.gameRenderer.canvas,
-			200,
-			250,
-			obstacleCanvas,
-			audioManager,
-			this.inputManager
-		);
-		this.gameCanvas.addPlayerTank(playerTank);
+	private createNavigator(navConfig: NavigatorConfig): Navigator {
+		let nav: Navigator;
+		switch (navConfig.type) {
+			case 'simple': {
+				const pathfinder = new SimplePathfinder(this.gameCanvas, this.obstacleCanvas, false);
+				nav = new SimpleNavigator(pathfinder);
+				break;
+			}
+			case 'astar': {
+				const grid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
+				nav = new AStarNavigator(grid);
+				break;
+			}
+			case 'astar-avoidance': {
+				const grid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
+				nav = new AStarNavigatorWithAvoidance(grid);
+				break;
+			}
+		}
+		if (navConfig.aggressionFactor !== undefined) {
+			nav.aggressionFactor = navConfig.aggressionFactor;
+		}
+		return nav;
 	}
-}
 
-export class Level4 extends Level {
-	constructor(audioManager: AudioManager) {
-		const obs: Obstacle = new Obstacle(300, 130, 500, 35);
-		const obs2: Obstacle = new Obstacle(200, 330, 500, 35);
-		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs, obs2]);
-		super(obstacleCanvas, audioManager);
-		const basicAmmo: Ammunition[] = [new BasicAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
-		const basicBomb: Bomb[] = [];
-		const simplePathFinder: SimplePathfinder = new SimplePathfinder(this.gameCanvas, this.obstacleCanvas, false);
-		const navigator: Navigator = new SimpleNavigator(simplePathFinder);
-		const aiTank = new SimpleMovingTank(
-			this.gameCanvas.gameRenderer.canvas,
-			900,
-			50,
-			obstacleCanvas,
-			basicAmmo,
-			basicBomb,
-			navigator,
-			audioManager
-		);
-		this.gameCanvas.addEnemyTank(aiTank);
+	private createEnemy(cfg: EnemyConfig): EnemyTank {
+		const canvas = this.gameCanvas.gameRenderer.canvas;
+		const obs = this.obstacleCanvas;
+		const am = this.audioManager;
 
-		const playerTank = new DefaultPlayerTank(
-			this.gameCanvas.gameRenderer.canvas,
-			50,
-			450,
-			obstacleCanvas,
-			audioManager,
-			this.inputManager
-		);
-		this.gameCanvas.addPlayerTank(playerTank);
-	}
-}
-
-export class Level5 extends Level {
-	constructor(audioManager: AudioManager) {
-		const obs: Obstacle = new Obstacle(100, 100, 200, 100);
-		const obs2: Obstacle = new Obstacle(700, 100, 30, 100);
-		const obs3: Obstacle = new Obstacle(700, 350, 30, 100);
-		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs, obs2, obs3]);
-		super(obstacleCanvas, audioManager);
-		const basicAmmo: Ammunition[] = [new BasicAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
-		const superAmmo: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
-		const basicBomb: Bomb[] = [];
-		const navigationGrid: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
-		const navigator: Navigator = new AStarNavigator(navigationGrid);
-		const aiTank3 = new SimpleMovingTank(
-			this.gameCanvas.gameRenderer.canvas,
-			800,
-			300,
-			obstacleCanvas,
-			basicAmmo,
-			basicBomb,
-			navigator,
-			audioManager
-		);
-		const aiTank = new StationaryRandomAimTank(
-			this.gameCanvas.gameRenderer.canvas,
-			800,
-			100,
-			obstacleCanvas,
-			superAmmo,
-			audioManager
-		);
-		const aiTank2 = new StationaryTank(this.gameCanvas.gameRenderer.canvas, 800, 200, obstacleCanvas, audioManager);
-		this.gameCanvas.addEnemyTank(aiTank3);
-		this.gameCanvas.addEnemyTank(aiTank);
-		this.gameCanvas.addEnemyTank(aiTank2);
-
-		const playerTank = new DefaultPlayerTank(
-			this.gameCanvas.gameRenderer.canvas,
-			200,
-			250,
-			obstacleCanvas,
-			audioManager,
-			this.inputManager
-		);
-		this.gameCanvas.addPlayerTank(playerTank);
-	}
-}
-
-export class Level6 extends Level {
-	constructor(audioManager: AudioManager) {
-		const obs: Obstacle = new Obstacle(100, 100, 200, 100);
-		const obs2: Obstacle = new Obstacle(700, 100, 30, 300);
-		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs, obs2]);
-		super(obstacleCanvas, audioManager);
-
-		const basicBombs: Bomb[] = [
-			new BasicBomb(0, 0, true, audioManager),
-			new BasicBomb(0, 0, true, audioManager),
-			new BasicBomb(0, 0, true, audioManager),
-		];
-		const basicBombs2: Bomb[] = [
-			new BasicBomb(0, 0, true, audioManager),
-			new BasicBomb(0, 0, true, audioManager),
-			new BasicBomb(0, 0, true, audioManager),
-		];
-		const basicBombs3: Bomb[] = [
-			new BasicBomb(0, 0, true, audioManager),
-			new BasicBomb(0, 0, true, audioManager),
-			new BasicBomb(0, 0, true, audioManager),
-		];
-
-		const navigationGrid: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
-		const navigationGrid2: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
-		const navigationGrid3: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
-		const navigator1: Navigator = new AStarNavigator(navigationGrid);
-		const navigator2: Navigator = new AStarNavigator(navigationGrid2);
-		const navigator3: Navigator = new AStarNavigator(navigationGrid3);
-		const aiTank = new BomberTank(
-			this.gameCanvas.gameRenderer.canvas,
-			800,
-			100,
-			obstacleCanvas,
-			[new BasicAIAmmunition(0, 0, 0, 0, 0, true, audioManager)],
-			basicBombs,
-			navigator1,
-			audioManager
-		);
-		const aiTank2 = new BomberTank(
-			this.gameCanvas.gameRenderer.canvas,
-			800,
-			200,
-			obstacleCanvas,
-			[new BasicAIAmmunition(0, 0, 0, 0, 0, true, audioManager)],
-			basicBombs2,
-			navigator2,
-			audioManager
-		);
-		const aiTank3 = new BomberTank(
-			this.gameCanvas.gameRenderer.canvas,
-			800,
-			300,
-			obstacleCanvas,
-			[new BasicAIAmmunition(0, 0, 0, 0, 0, true, audioManager)],
-			basicBombs3,
-			navigator3,
-			audioManager
-		);
-
-		this.gameCanvas.addEnemyTank(aiTank);
-		this.gameCanvas.addEnemyTank(aiTank2);
-		this.gameCanvas.addEnemyTank(aiTank3);
-
-		const playerTank = new DefaultPlayerTank(
-			this.gameCanvas.gameRenderer.canvas,
-			200,
-			250,
-			obstacleCanvas,
-			audioManager,
-			this.inputManager
-		);
-		this.gameCanvas.addPlayerTank(playerTank);
-	}
-}
-
-export class Level7 extends Level {
-	constructor(audioManager: AudioManager) {
-		const obs1: Obstacle = new Obstacle(0, 120, 400, 50);
-		const obs2: Obstacle = new Obstacle(600, 120, 400, 50);
-
-		const obs3: Obstacle = new Obstacle(0, 330, 400, 50);
-		const obs4: Obstacle = new Obstacle(600, 330, 400, 50);
-		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs1, obs2, obs3, obs4]);
-		super(obstacleCanvas, audioManager);
-
-		const superAmmo1: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
-		const aiTank1 = new StationaryRandomAimTank(
-			this.gameCanvas.gameRenderer.canvas,
-			900,
-			50,
-			obstacleCanvas,
-			superAmmo1,
-			audioManager
-		);
-
-		const superAmmo2: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
-		const aiTank2 = new StationaryRandomAimTank(
-			this.gameCanvas.gameRenderer.canvas,
-			900,
-			250,
-			obstacleCanvas,
-			superAmmo2,
-			audioManager
-		);
-
-		const superAmmo3: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
-		const aiTank3 = new StationaryRandomAimTank(
-			this.gameCanvas.gameRenderer.canvas,
-			900,
-			430,
-			obstacleCanvas,
-			superAmmo3,
-			audioManager
-		);
-
-		const superAmmo4: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
-		const aiTank4 = new StationaryRandomAimTank(
-			this.gameCanvas.gameRenderer.canvas,
-			100,
-			50,
-			obstacleCanvas,
-			superAmmo4,
-			audioManager
-		);
-
-		const superAmmo5: Ammunition[] = [new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager)];
-		const aiTank5 = new StationaryRandomAimTank(
-			this.gameCanvas.gameRenderer.canvas,
-			100,
-			250,
-			obstacleCanvas,
-			superAmmo5,
-			audioManager
-		);
-
-		this.gameCanvas.addEnemyTank(aiTank1);
-		this.gameCanvas.addEnemyTank(aiTank2);
-		this.gameCanvas.addEnemyTank(aiTank3);
-		this.gameCanvas.addEnemyTank(aiTank4);
-		this.gameCanvas.addEnemyTank(aiTank5);
-
-		const playerTank = new DefaultPlayerTank(
-			this.gameCanvas.gameRenderer.canvas,
-			100,
-			430,
-			obstacleCanvas,
-			audioManager,
-			this.inputManager
-		);
-		this.gameCanvas.addPlayerTank(playerTank);
-	}
-}
-
-export class Level8 extends Level {
-	constructor(audioManager: AudioManager) {
-		const obs: Obstacle = new Obstacle(700, 100, 30, 300);
-		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs]);
-		super(obstacleCanvas, audioManager);
-		const basicAmmo: Ammunition[] = [
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-		];
-		const basicAmmo2: Ammunition[] = [
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-		];
-		const basicAmmo3: Ammunition[] = [
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-		];
-
-		const basicBombs: Bomb[] = [new LoveBomb(0, 0, true, audioManager), new LoveBomb(0, 0, true, audioManager)];
-		const basicBombs2: Bomb[] = [new LoveBomb(0, 0, true, audioManager), new LoveBomb(0, 0, true, audioManager)];
-		const basicBombs3: Bomb[] = [new LoveBomb(0, 0, true, audioManager), new LoveBomb(0, 0, true, audioManager)];
-
-		const navigationGrid: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
-		const navigationGrid2: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
-		const navigationGrid3: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
-		const navigator1: Navigator = new AStarNavigator(navigationGrid);
-		navigator1.aggressionFactor = 5;
-		const navigator2: Navigator = new AStarNavigator(navigationGrid2);
-		navigator2.aggressionFactor = 10;
-		const navigator3: Navigator = new AStarNavigator(navigationGrid3);
-		navigator3.aggressionFactor = 15;
-		const aiTank = new SuperBomberMovingTank(
-			this.gameCanvas.gameRenderer.canvas,
-			800,
-			100,
-			obstacleCanvas,
-			basicAmmo,
-			basicBombs,
-			navigator1,
-			audioManager
-		);
-		const aiTank2 = new SuperBomberMovingTank(
-			this.gameCanvas.gameRenderer.canvas,
-			800,
-			200,
-			obstacleCanvas,
-			basicAmmo2,
-			basicBombs2,
-			navigator2,
-			audioManager
-		);
-		const aiTank3 = new SuperBomberMovingTank(
-			this.gameCanvas.gameRenderer.canvas,
-			800,
-			300,
-			obstacleCanvas,
-			basicAmmo3,
-			basicBombs3,
-			navigator3,
-			audioManager
-		);
-
-		this.gameCanvas.addEnemyTank(aiTank);
-		this.gameCanvas.addEnemyTank(aiTank2);
-		this.gameCanvas.addEnemyTank(aiTank3);
-
-		const playerTank = new DefaultPlayerTank(
-			this.gameCanvas.gameRenderer.canvas,
-			200,
-			250,
-			obstacleCanvas,
-			audioManager,
-			this.inputManager
-		);
-		this.gameCanvas.addPlayerTank(playerTank);
-	}
-}
-
-export class Level9 extends Level {
-	constructor(audioManager: AudioManager) {
-		const obs1: Obstacle = new Obstacle(350, 0, 30, 200);
-		const obs2: Obstacle = new Obstacle(350, 300, 30, 200);
-		const obs3: Obstacle = new Obstacle(700, 100, 30, 300);
-		const obstacleCanvas = new ObstacleCanvas('#obstacle-canvas', 1000, 500, [obs1, obs2, obs3]);
-		super(obstacleCanvas, audioManager);
-
-		const ammo1: Ammunition[] = [
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-		];
-		const bombs1: Bomb[] = [new BasicBomb(0, 0, true, audioManager), new BasicBomb(0, 0, true, audioManager)];
-		const navigationGrid1: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
-		const navigator1: Navigator = new AStarNavigatorWithAvoidance(navigationGrid1);
-		navigator1.aggressionFactor = 5;
-		const aiTank1 = new SuperBomberMovingTank(
-			this.gameCanvas.gameRenderer.canvas,
-			800,
-			100,
-			obstacleCanvas,
-			ammo1,
-			bombs1,
-			navigator1,
-			audioManager
-		);
-
-		const ammo2: Ammunition[] = [
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-			new SuperAIAmmunition(0, 0, 0, 0, 0, true, audioManager),
-		];
-		const bombs2: Bomb[] = [new BasicBomb(0, 0, true, audioManager), new BasicBomb(0, 0, true, audioManager)];
-		const navigationGrid2: NavigationGrid = new NavigationGrid(this.gameCanvas, this.obstacleCanvas, false);
-		const navigator2: Navigator = new AStarNavigatorWithAvoidance(navigationGrid2);
-		navigator2.aggressionFactor = 10;
-		const aiTank2 = new SuperBomberMovingTank(
-			this.gameCanvas.gameRenderer.canvas,
-			800,
-			350,
-			obstacleCanvas,
-			ammo2,
-			bombs2,
-			navigator2,
-			audioManager
-		);
-
-		this.gameCanvas.addEnemyTank(aiTank1);
-		this.gameCanvas.addEnemyTank(aiTank2);
-
-		const playerTank = new DefaultPlayerTank(
-			this.gameCanvas.gameRenderer.canvas,
-			100,
-			250,
-			obstacleCanvas,
-			audioManager,
-			this.inputManager
-		);
-		this.gameCanvas.addPlayerTank(playerTank);
+		switch (cfg.type) {
+			case 'stationary':
+				return new StationaryTank(canvas, cfg.x, cfg.y, obs, am);
+			case 'stationary-random-aim':
+				return new StationaryRandomAimTank(
+					canvas,
+					cfg.x,
+					cfg.y,
+					obs,
+					this.createAmmo(cfg.ammo?.type ?? 'basic', cfg.ammo?.count ?? 1),
+					am
+				);
+			case 'simple-moving':
+				return new SimpleMovingTank(
+					canvas,
+					cfg.x,
+					cfg.y,
+					obs,
+					this.createAmmo(cfg.ammo?.type ?? 'basic', cfg.ammo?.count ?? 1),
+					this.createBombs(cfg.bombs?.type ?? 'basic', cfg.bombs?.count ?? 0),
+					this.createNavigator(cfg.navigator ?? { type: 'astar' }),
+					am
+				);
+			case 'bomber':
+				return new BomberTank(
+					canvas,
+					cfg.x,
+					cfg.y,
+					obs,
+					this.createAmmo(cfg.ammo?.type ?? 'basic', cfg.ammo?.count ?? 1),
+					this.createBombs(cfg.bombs?.type ?? 'basic', cfg.bombs?.count ?? 0),
+					this.createNavigator(cfg.navigator ?? { type: 'astar' }),
+					am
+				);
+			case 'super-bomber':
+				return new SuperBomberMovingTank(
+					canvas,
+					cfg.x,
+					cfg.y,
+					obs,
+					this.createAmmo(cfg.ammo?.type ?? 'super', cfg.ammo?.count ?? 1),
+					this.createBombs(cfg.bombs?.type ?? 'basic', cfg.bombs?.count ?? 0),
+					this.createNavigator(cfg.navigator ?? { type: 'astar' }),
+					am
+				);
+		}
 	}
 }

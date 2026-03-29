@@ -1,7 +1,8 @@
 import * as d3 from 'd3';
 import packageJson from '../../package.json';
 import { AudioManager } from '../game/AudioManager';
-import { Level, Level1, Level2, Level3, Level4, Level5, Level6, Level7, Level8, Level9 } from '../game/Level';
+import { Level } from '../game/Level';
+import { LEVEL_CONFIGS } from '../game/LevelConfig';
 
 export class LevelSelector {
 	private numLevels: number;
@@ -18,7 +19,7 @@ export class LevelSelector {
 			this.audioManager.playBackgroundMusic();
 		});
 		this.activeLevelNumber = 1;
-		this.activeLevel = new Level1(this.audioManager);
+		this.activeLevel = new Level(LEVEL_CONFIGS[0], this.audioManager);
 		this.setHeader();
 		this.createSlider();
 		this.createJumbotron();
@@ -33,38 +34,8 @@ export class LevelSelector {
 
 	public startActiveLevel() {
 		this.activeLevel.stop();
-		switch (this.activeLevelNumber) {
-			case 1:
-				this.activeLevel = new Level1(this.audioManager);
-				break;
-			case 2:
-				this.activeLevel = new Level2(this.audioManager);
-				break;
-			case 3:
-				this.activeLevel = new Level3(this.audioManager);
-				break;
-			case 4:
-				this.activeLevel = new Level4(this.audioManager);
-				break;
-			case 5:
-				this.activeLevel = new Level5(this.audioManager);
-				break;
-			case 6:
-				this.activeLevel = new Level6(this.audioManager);
-				break;
-			case 7:
-				this.activeLevel = new Level7(this.audioManager);
-				break;
-			case 8:
-				this.activeLevel = new Level8(this.audioManager);
-				break;
-			case 9:
-				this.activeLevel = new Level9(this.audioManager);
-				break;
-			default:
-				this.activeLevel = new Level1(this.audioManager);
-				break;
-		}
+		const configIndex = Math.max(0, Math.min(this.activeLevelNumber - 1, LEVEL_CONFIGS.length - 1));
+		this.activeLevel = new Level(LEVEL_CONFIGS[configIndex], this.audioManager);
 		this.activeLevel.start();
 	}
 

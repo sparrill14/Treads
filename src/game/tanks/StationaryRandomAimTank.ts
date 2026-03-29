@@ -50,7 +50,7 @@ export class StationaryRandomAimTank extends EnemyTank {
 		return randomAmount;
 	}
 
-	public override updatePosition(playerTank: Tank): void {
+	public override updatePosition(_playerTank: Tank): void {
 		return;
 	}
 
@@ -76,7 +76,7 @@ export class StationaryRandomAimTank extends EnemyTank {
 		return;
 	}
 
-	public override aim(mouseXPos: number, mouseYpos: number, playerTank: Tank): void {
+	public override aim(_mouseXPos: number, _mouseYpos: number, _playerTank: Tank): void {
 		if (this.isDestroyed) {
 			return;
 		}
