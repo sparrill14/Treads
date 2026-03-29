@@ -23,7 +23,8 @@
     "build:dev": "webpack --config webpack.dev.js",
     "build:prod": "webpack --config webpack.prod.js",
     "prebuild": "echo \"Build started ...\"",
-    "postbuild": "echo \"Build completed successfully.\""
+    "postbuild": "echo \"Build completed successfully.\"",
+    "test": "tsc -p tsconfig.test.json && node ./.test-dist/tests/run-tests.js"
   },
   "repository": {
     "type": "git",

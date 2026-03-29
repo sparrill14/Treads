@@ -2,13 +2,18 @@ import * as d3 from 'd3';
 import packageJson from '../../package.json';
 import { AudioManager } from '../game/AudioManager';
 import { Level } from '../game/Level';
+import type { TankController } from '../game/core/types';
 import { LEVEL_CONFIGS } from '../game/LevelConfig';
 
 export class LevelSelector {
+	public static createHeadlessLevel(levelNumber: number, seed: number = levelNumber, playerController?: TankController): Level {
+		const configIndex = Math.max(0, Math.min(levelNumber - 1, LEVEL_CONFIGS.length - 1));
+		return new Level(LEVEL_CONFIGS[configIndex], { headless: true, seed, playerController });
+	}
 	private numLevels: number;
 	private activeLevelNumber: number;
 	private activeLevel: Level;
-	private sliderWidth: number = Math.min(window.innerWidth * 0.8, 600); // Responsive width
+	private sliderWidth: number = Math.min(window.innerWidth * 0.8, 600);
 	private audioManager: AudioManager;
 
 	constructor(levels: number) {
@@ -19,7 +24,7 @@ export class LevelSelector {
 			this.audioManager.playBackgroundMusic();
 		});
 		this.activeLevelNumber = 1;
-		this.activeLevel = new Level(LEVEL_CONFIGS[0], this.audioManager);
+		this.activeLevel = new Level(LEVEL_CONFIGS[0], { audioManager: this.audioManager, seed: this.activeLevelNumber });
 		this.setHeader();
 		this.createSlider();
 		this.createJumbotron();
@@ -35,37 +40,30 @@ export class LevelSelector {
 	public startActiveLevel() {
 		this.activeLevel.stop();
 		const configIndex = Math.max(0, Math.min(this.activeLevelNumber - 1, LEVEL_CONFIGS.length - 1));
-		this.activeLevel = new Level(LEVEL_CONFIGS[configIndex], this.audioManager);
+		this.activeLevel = new Level(LEVEL_CONFIGS[configIndex], {
+			audioManager: this.audioManager,
+			seed: this.activeLevelNumber,
+		});
 		this.activeLevel.start();
 	}
 
 	private createSlider(): void {
-		const margin: { top: number; right: number; bottom: number; left: number } = {
-			top: 10,
-			right: 10,
-			bottom: 20,
-			left: 10,
-		};
+		const margin = { top: 10, right: 10, bottom: 20, left: 10 };
 		const effectiveWidth: number = this.sliderWidth - margin.left - margin.right;
-
 		const scale: d3.ScaleLinear<number, number, never> = d3
 			.scaleLinear()
 			.domain([1, this.numLevels])
 			.range([0, effectiveWidth])
 			.clamp(true);
-
 		const svg: d3.Selection<SVGSVGElement, unknown, HTMLElement, undefined> = d3
 			.select('#slider')
 			.append('svg')
 			.attr('width', this.sliderWidth)
 			.attr('height', 50);
-
 		const sliderGroup: d3.Selection<SVGGElement, unknown, HTMLElement, undefined> = svg
 			.append('g')
 			.attr('transform', `translate(${margin.left}, 30)`);
-
 		sliderGroup.append('g').call(d3.axisBottom(scale).ticks(this.numLevels).tickFormat(d3.format('1')));
-
 		const handle: d3.Selection<SVGCircleElement, unknown, HTMLElement, undefined> = sliderGroup
 			.append('circle')
 			.attr('cx', scale(this.activeLevelNumber))
@@ -76,12 +74,11 @@ export class LevelSelector {
 		const dragHandler: d3.DragBehavior<SVGCircleElement, unknown, unknown> = d3
 			.drag<SVGCircleElement, unknown>()
 			.on('drag', (event) => {
-				const x = event.x - margin.left; // Adjusting for the left margin
+				const x = event.x - margin.left;
 				const level = Math.round(scale.invert(x));
 				handle.attr('cx', scale(level));
 				this.updateActiveLevel(level);
 			});
-
 		handle.call(dragHandler);
 	}
 
@@ -93,18 +90,11 @@ export class LevelSelector {
 				.append('div')
 				.attr('class', 'jumbotron-box inactive')
 				.on('click', () => this.updateActiveLevel(i));
-
-			// Example of how you can append an SVG to a jumbotron box.
 			const svg: d3.Selection<SVGSVGElement, unknown, HTMLElement, undefined> = box
 				.append('svg')
 				.attr('width', '100%')
 				.attr('height', '100%');
-
-			svg
-				.append('rect') // Placeholder for actual SVG content.
-				.attr('width', '100%')
-				.attr('height', '100%')
-				.attr('fill', colorScale(i));
+			svg.append('rect').attr('width', '100%').attr('height', '100%').attr('fill', colorScale(i));
 			svg
 				.append('text')
 				.attr('x', '50%')
@@ -131,3 +121,5 @@ export class LevelSelector {
 		this.startActiveLevel();
 	}
 }
+
+
