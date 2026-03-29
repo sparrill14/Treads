@@ -16,7 +16,7 @@ export class ScriptedEnemyController implements TankController {
 	private selfId = '';
 	private planner: NavigationPlanner | null = null;
 	private rng = new SeededRandom(1);
-	private path: Array<{ x: number; y: number }> = [];
+	private path: { x: number; y: number }[] = [];
 	private pathTicksRemaining = 0;
 	private aimAngleChangeAmount = 0;
 

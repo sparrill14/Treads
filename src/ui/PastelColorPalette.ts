@@ -1,64 +1,64 @@
-export class PastelColorPalette {
-	public static readonly BABY_BLUE = '#ABDEE6';
-	public static readonly LAVENDER_BLUSH = '#CBAACB';
-	public static readonly PALE_YELLOW = '#FFFFB5';
-	public static readonly PEACH_PUFF = '#FFCCB6';
-	public static readonly BLUSH_PINK = '#F3B0C3';
-	public static readonly LIGHT_AQUA = '#C6DBDA';
-	public static readonly LIGHT_PINK = '#FEE1E8';
-	public static readonly LIGHT_CORAL_PINK = '#FED7C3';
-	public static readonly MINT_CREAM = '#F6EAC2';
-	public static readonly PALE_LAVENDER = '#ECD5E3';
-	public static readonly CORAL_ORANGE = '#FF968A';
-	public static readonly SOFT_PEACH = '#FFAEA5';
-	public static readonly LIGHT_SALMON_PINK = '#FFCFB5';
-	public static readonly LIGHT_ROSE = '#FFD8BE';
-	public static readonly SOFT_ORANGE = '#FFC8A2';
-	public static readonly SOFT_TEAL = '#D4F0F0';
-	public static readonly PALE_MINT = '#8FCACA';
-	public static readonly LIGHT_SAGE = '#CCE2CB';
-	public static readonly PALE_GREEN = '#B6CFB6';
-	public static readonly MINT_GREEN = '#97C1A9';
-	public static readonly SOFT_PEACH_PINK = '#FCB9AA';
-	public static readonly PALE_PEACH = '#FFDBCC';
-	public static readonly PALE_GRAY = '#ECE4E4';
-	public static readonly PALE_AQUA = '#A2E1DB';
-	public static readonly SOFT_CYAN = '#55CBCD';
-	public static readonly LIGHT_LAVENDER = '#E3DFFF';
-	public static readonly PALE_BLUE = '#D4F1F9';
-	public static readonly LIGHT_MAUVE = '#DFC9F3';
-	public static readonly LIGHT_LIME = '#E3F6C7';
-	public static readonly LIGHT_GOLDENROD = '#FFF8C3';
-	public static readonly PALE_ORANGE = '#FFDAB9';
-	public static readonly LIGHT_YELLOW = '#FFF9DB';
-	public static readonly LIGHT_IVORY = '#FDFD96';
-	public static readonly LIGHT_TURQUOISE = '#AFF8D8';
-	public static readonly LIGHT_SEA_GREEN = '#D9F9B1';
-	public static readonly LIGHT_PERIWINKLE = '#C5C6E8';
-	public static readonly LIGHT_VIOLET = '#E1C6FF';
-	public static readonly LIGHT_LILAC = '#F2C3E8';
-	public static readonly LIGHT_APRICOT = '#FFE5B4';
-	public static readonly LIGHT_BUTTERSCOTCH = '#FFD27F';
-	public static readonly LIGHT_MELON = '#FFB7A2';
-	public static readonly LIGHT_TEA_GREEN = '#D1F2EB';
-	public static readonly LIGHT_CRIMSON = '#FF7F7F';
-	public static readonly LIGHT_PERSIAN_GREEN = '#00A8A8';
-	public static readonly LIGHT_SKY_BLUE = '#87CEFA';
-	public static readonly LIGHT_PASTEL_PURPLE = '#C3B1E1';
-	public static readonly LIGHT_PASTEL_PINK = '#EFB8C8';
-	public static readonly LIGHT_PASTEL_RED = '#FFA07A';
-	public static readonly LIGHT_PASTEL_BLUE = '#ADD8E6';
-	public static readonly LIGHT_PASTEL_GREEN = '#98FB98';
-	public static readonly LIGHT_PASTEL_ORANGE = '#FFDAB9';
-	public static readonly LIGHT_PASTEL_YELLOW = '#FFFACD';
-	public static readonly PALE_BLACK = '#A9A9A9';
-	public static readonly LIGHT_GRAY = '#D3D3D3';
-	public static readonly GAINSBORO = '#DCDCDC';
-	public static readonly PALE_SILVER = '#C0C0C0';
-	public static readonly PALE_SMOKE = '#F5F5F5';
-	public static readonly WHITE_SMOKE = '#F5F5F5';
-	public static readonly OFF_WHITE = '#FAF9F6';
-	public static readonly IVORY = '#FFFFF0';
-	public static readonly ALABASTER = '#FAEBD7';
-	public static readonly SEASHELL = '#FFF5EE';
-}
+export const PastelColorPalette = {
+	BABY_BLUE: '#ABDEE6',
+	LAVENDER_BLUSH: '#CBAACB',
+	PALE_YELLOW: '#FFFFB5',
+	PEACH_PUFF: '#FFCCB6',
+	BLUSH_PINK: '#F3B0C3',
+	LIGHT_AQUA: '#C6DBDA',
+	LIGHT_PINK: '#FEE1E8',
+	LIGHT_CORAL_PINK: '#FED7C3',
+	MINT_CREAM: '#F6EAC2',
+	PALE_LAVENDER: '#ECD5E3',
+	CORAL_ORANGE: '#FF968A',
+	SOFT_PEACH: '#FFAEA5',
+	LIGHT_SALMON_PINK: '#FFCFB5',
+	LIGHT_ROSE: '#FFD8BE',
+	SOFT_ORANGE: '#FFC8A2',
+	SOFT_TEAL: '#D4F0F0',
+	PALE_MINT: '#8FCACA',
+	LIGHT_SAGE: '#CCE2CB',
+	PALE_GREEN: '#B6CFB6',
+	MINT_GREEN: '#97C1A9',
+	SOFT_PEACH_PINK: '#FCB9AA',
+	PALE_PEACH: '#FFDBCC',
+	PALE_GRAY: '#ECE4E4',
+	PALE_AQUA: '#A2E1DB',
+	SOFT_CYAN: '#55CBCD',
+	LIGHT_LAVENDER: '#E3DFFF',
+	PALE_BLUE: '#D4F1F9',
+	LIGHT_MAUVE: '#DFC9F3',
+	LIGHT_LIME: '#E3F6C7',
+	LIGHT_GOLDENROD: '#FFF8C3',
+	PALE_ORANGE: '#FFDAB9',
+	LIGHT_YELLOW: '#FFF9DB',
+	LIGHT_IVORY: '#FDFD96',
+	LIGHT_TURQUOISE: '#AFF8D8',
+	LIGHT_SEA_GREEN: '#D9F9B1',
+	LIGHT_PERIWINKLE: '#C5C6E8',
+	LIGHT_VIOLET: '#E1C6FF',
+	LIGHT_LILAC: '#F2C3E8',
+	LIGHT_APRICOT: '#FFE5B4',
+	LIGHT_BUTTERSCOTCH: '#FFD27F',
+	LIGHT_MELON: '#FFB7A2',
+	LIGHT_TEA_GREEN: '#D1F2EB',
+	LIGHT_CRIMSON: '#FF7F7F',
+	LIGHT_PERSIAN_GREEN: '#00A8A8',
+	LIGHT_SKY_BLUE: '#87CEFA',
+	LIGHT_PASTEL_PURPLE: '#C3B1E1',
+	LIGHT_PASTEL_PINK: '#EFB8C8',
+	LIGHT_PASTEL_RED: '#FFA07A',
+	LIGHT_PASTEL_BLUE: '#ADD8E6',
+	LIGHT_PASTEL_GREEN: '#98FB98',
+	LIGHT_PASTEL_ORANGE: '#FFDAB9',
+	LIGHT_PASTEL_YELLOW: '#FFFACD',
+	PALE_BLACK: '#A9A9A9',
+	LIGHT_GRAY: '#D3D3D3',
+	GAINSBORO: '#DCDCDC',
+	PALE_SILVER: '#C0C0C0',
+	PALE_SMOKE: '#F5F5F5',
+	WHITE_SMOKE: '#F5F5F5',
+	OFF_WHITE: '#FAF9F6',
+	IVORY: '#FFFFF0',
+	ALABASTER: '#FAEBD7',
+	SEASHELL: '#FFF5EE',
+} as const;

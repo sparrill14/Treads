@@ -21,8 +21,8 @@ function runEnemyScenario(
 	enemy: EnemyConfig,
 	player: PlayerConfig,
 	obstacles: ObstacleConfig[] = [],
-	seed: number = 1,
-	ticks: number = 500
+	seed = 1,
+	ticks = 500
 ): EnemyMetrics {
 	const levelConfig: LevelConfig = {
 		player,

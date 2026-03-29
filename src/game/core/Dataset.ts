@@ -30,7 +30,7 @@ export function exportDatasetFromReplay(replay: ReplayData): DatasetSample[] {
 	const initialState = createInitialGameState(replay.levelConfig, replay.seed);
 	const simulation = new Simulation(initialState, createReplayControllers(initialState, replay));
 	const collector = new DatasetCollector();
-	for (let tick = 0; tick < replay.ticks.length; tick++) {
+	for (const _tick of replay.ticks) {
 		collector.recordStep(simulation.step());
 	}
 	return collector.toJSON();

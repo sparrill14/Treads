@@ -68,7 +68,7 @@ export class NavigationPlanner {
 		projectiles: ProjectileStateView[],
 		bombs: BombStateView[],
 		rng: SeededRandom
-	): Array<{ x: number; y: number }> {
+	): { x: number; y: number }[] {
 		const start = this.getNodeFromTank(currentTank);
 		const target = this.getNodeFromTank(targetTank);
 		const getDestination = (): GridNode =>

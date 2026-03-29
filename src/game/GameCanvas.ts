@@ -1,7 +1,6 @@
 import { AudioFile, AudioManager } from './AudioManager';
 import { Simulation } from './core/Simulation';
 import type { GameState, SimulationEvent } from './core/types';
-import type { DeepReadonly } from './core/stateUtils';
 import { GameRenderer } from './GameRenderer';
 
 export class GameCanvas {
