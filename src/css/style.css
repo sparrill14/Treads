@@ -1,9 +1,42 @@
 body {
 	background-color: rgb(184, 187, 183);
+	margin: 0;
+	font-family: Arial, sans-serif;
 }
 
 h1 {
 	user-select: none;
+}
+
+.container-fluid {
+	width: 100%;
+	padding: 1.5rem 0 0;
+	box-sizing: border-box;
+}
+
+.row {
+	display: flex;
+	width: 100%;
+}
+
+.justify-content-center {
+	justify-content: center;
+}
+
+.text-center {
+	text-align: center;
+}
+
+.col-2 {
+	width: min(20rem, calc(100% - 2rem));
+}
+
+.mb-6 {
+	margin-bottom: 1.5rem;
+}
+
+.mb-12 {
+	margin-bottom: 3rem;
 }
 
 .game-canvas {

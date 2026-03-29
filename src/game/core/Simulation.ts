@@ -1,8 +1,9 @@
-import { computeGunBarrelEnd, deriveAimTarget, normalizeAngle, circlesOverlap, getMoveDelta, updateTankBounds } from './geometry';
+import { computeGunBarrelEnd, deriveAimTarget, normalizeAngle, circlesOverlap, getMoveDelta, tankIntersectsBlast } from './geometry';
 import { stepProjectile, projectileHitsTank } from './physics';
 import { SeededRandom } from './prng';
 import { getBombSpec, getProjectileSpec } from './specs';
-import { cloneGameState, cloneJson, freezeObservation } from './stateUtils';
+import { cloneGameState, cloneJson, createReadonlySnapshot, type DeepReadonly, freezeObservation } from './stateUtils';
+import { MOVE_INTENTS } from './types';
 import type {
 	BombStateView,
 	ControllerStepRecord,
@@ -28,6 +29,8 @@ const NO_OP_ACTION: TankAction = {
 export class Simulation {
 	private state: GameState;
 	private controllers: Record<string, TankController>;
+	private snapshotCache: DeepReadonly<GameState> | null = null;
+	private invalidMoveWarnings = new Set<string>();
 
 	constructor(initialState: GameState, controllers: Record<string, TankController>) {
 		this.state = cloneGameState(initialState);
@@ -36,8 +39,11 @@ export class Simulation {
 		this.resetControllers();
 	}
 
-	public getState(): GameState {
-		return this.state;
+	public getState(): DeepReadonly<GameState> {
+		if (this.snapshotCache === null) {
+			this.snapshotCache = createReadonlySnapshot(this.state);
+		}
+		return this.snapshotCache;
 	}
 
 	public getStateSnapshot(): GameState {
@@ -72,6 +78,7 @@ export class Simulation {
 		this.state.rngState = rng.getState();
 		this.refreshDerivedState();
 		this.updateStatus();
+		this.snapshotCache = null;
 		const records = this.buildRecords(observations, actions);
 		const completedTick = this.state.tick;
 		this.state.tick += 1;
@@ -118,13 +125,23 @@ export class Simulation {
 
 	private sanitizeAction(action: TankAction, tank: TankStateView): TankAction {
 		const aimAngle = Number.isFinite(action.aimAngle) ? normalizeAngle(action.aimAngle) : tank.aimAngle;
+		const move = MOVE_INTENTS.includes(action.move) ? action.move : this.sanitizeInvalidMove(action.move, tank);
 		return {
-			move: action.move ?? 'none',
+			move,
 			aimAngle,
 			fire: Boolean(action.fire),
 			plantBomb: Boolean(action.plantBomb),
 			aimTarget: action.aimTarget ? { x: action.aimTarget.x, y: action.aimTarget.y } : undefined,
 		};
+	}
+
+	private sanitizeInvalidMove(move: unknown, tank: TankStateView): MoveIntent {
+		const warningKey = `${tank.controllerId}:${String(move)}`;
+		if (!this.invalidMoveWarnings.has(warningKey)) {
+			this.invalidMoveWarnings.add(warningKey);
+			console.warn(`Invalid move intent "${String(move)}" from controller ${tank.controllerId}; clamping to "none".`);
+		}
+		return 'none';
 	}
 
 	private applyActions(actions: Record<string, TankAction>, events: SimulationEvent[], rng: SeededRandom): void {
@@ -339,9 +356,7 @@ export class Simulation {
 	}
 
 	private tankInBlast(tank: TankStateView, bomb: BombStateView): boolean {
-		const dx = Math.max(tank.bounds.left - bomb.x, 0, bomb.x - tank.bounds.right);
-		const dy = Math.max(tank.bounds.top - bomb.y, 0, bomb.y - tank.bounds.bottom);
-		return Math.sqrt(dx * dx + dy * dy) <= bomb.blastRadius;
+		return tankIntersectsBlast(tank, bomb.x, bomb.y, bomb.blastRadius);
 	}
 
 	private getProjectileTargets(projectile: ProjectileStateView): TankStateView[] {
@@ -443,7 +458,6 @@ export class Simulation {
 		for (const tank of this.state.tanks) {
 			tank.activeAmmo = 0;
 			tank.activeBombs = 0;
-			updateTankBounds(tank);
 		}
 		for (const projectile of this.state.projectiles) {
 			const owner = this.state.tanks.find((tank) => tank.id === projectile.ownerTankId);
@@ -498,7 +512,6 @@ export class Simulation {
 				this.moveSouthWest(tank, Math.abs(move.dx), Math.abs(move.dy));
 				break;
 		}
-		updateTankBounds(tank);
 	}
 
 	private moveNorth(tank: TankStateView, moveY: number): void {

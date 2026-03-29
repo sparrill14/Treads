@@ -90,11 +90,13 @@ export class ScriptedEnemyController implements TankController {
 		}
 		this.pathTicksRemaining -= 1;
 		if (this.path.length === 0 || this.pathTicksRemaining <= 0) {
+			const { aggressionFactor, closeApproach } = this.getNavigationProfile(obs.self);
 			this.path = this.planner.getPath(
 				this.options.navigationMode,
 				obs.self,
 				target,
-				this.options.aggressionFactor,
+				aggressionFactor,
+				closeApproach,
 				obs.projectiles,
 				obs.bombs,
 				this.rng
@@ -116,6 +118,16 @@ export class ScriptedEnemyController implements TankController {
 			return this.getBlockedRecoveryMove(desiredMove);
 		}
 		return desiredMove;
+	}
+
+	private getNavigationProfile(self: TankStateView): { aggressionFactor: number; closeApproach: boolean } {
+		if (!self.bombType || self.activeBombs >= self.maxBombs) {
+			return { aggressionFactor: this.options.aggressionFactor, closeApproach: false };
+		}
+		return {
+			aggressionFactor: 0,
+			closeApproach: true,
+		};
 	}
 
 	private getBlockedRecoveryMove(desiredMove: MoveIntent): MoveIntent {

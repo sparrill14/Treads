@@ -1,5 +1,6 @@
 import { SeededRandom } from './core/prng';
 import type { GameState, SimulationEvent, TankStateView } from './core/types';
+import type { DeepReadonly } from './core/stateUtils';
 
 interface VisualParticle {
 	x: number;
@@ -55,7 +56,7 @@ export class GameRenderer {
 		this.particles = this.particles.filter((particle) => particle.life > 0);
 	}
 
-	public render(currentState: GameState, previousState: GameState | null, alpha: number): void {
+	public render(currentState: DeepReadonly<GameState>, previousState: GameState | null, alpha: number): void {
 		this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
 		this.drawObstacles(currentState);
 		this.drawBombs(currentState, previousState, alpha);
@@ -65,14 +66,14 @@ export class GameRenderer {
 		this.drawOverlay(currentState);
 	}
 
-	private drawObstacles(state: GameState): void {
+	private drawObstacles(state: DeepReadonly<GameState>): void {
 		this.context.fillStyle = '#1d1c1a';
 		for (const obstacle of state.obstacles) {
 			this.context.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
 		}
 	}
 
-	private drawBombs(state: GameState, previousState: GameState | null, alpha: number): void {
+	private drawBombs(state: DeepReadonly<GameState>, previousState: GameState | null, alpha: number): void {
 		for (const bomb of state.bombs) {
 			const previousBomb = previousState?.bombs.find((candidate) => candidate.id === bomb.id) ?? null;
 			const x = this.interpolate(previousBomb?.x ?? bomb.x, bomb.x, alpha);
@@ -88,7 +89,7 @@ export class GameRenderer {
 		}
 	}
 
-	private drawProjectiles(state: GameState, previousState: GameState | null, alpha: number): void {
+	private drawProjectiles(state: DeepReadonly<GameState>, previousState: GameState | null, alpha: number): void {
 		for (const projectile of state.projectiles) {
 			const previousProjectile = previousState?.projectiles.find((candidate) => candidate.id === projectile.id) ?? null;
 			const x = this.interpolate(previousProjectile?.x ?? projectile.x, projectile.x, alpha);
@@ -104,7 +105,7 @@ export class GameRenderer {
 		}
 	}
 
-	private drawTanks(state: GameState, previousState: GameState | null, alpha: number): void {
+	private drawTanks(state: DeepReadonly<GameState>, previousState: GameState | null, alpha: number): void {
 		const enemyTanks = state.tanks.filter((tank) => tank.team === 'enemy');
 		const playerTank = state.tanks.find((tank) => tank.team === 'player') ?? null;
 		for (const tank of enemyTanks) {
@@ -115,7 +116,7 @@ export class GameRenderer {
 		}
 	}
 
-	private drawTank(tank: TankStateView, previousState: GameState | null, alpha: number, isPlayer: boolean): void {
+	private drawTank(tank: DeepReadonly<TankStateView>, previousState: GameState | null, alpha: number, isPlayer: boolean): void {
 		const previousTank = previousState?.tanks.find((candidate) => candidate.id === tank.id) ?? null;
 		const x = this.interpolate(previousTank?.x ?? tank.x, tank.x, alpha);
 		const y = this.interpolate(previousTank?.y ?? tank.y, tank.y, alpha);
@@ -182,7 +183,7 @@ export class GameRenderer {
 		}
 	}
 
-	private drawOverlay(state: GameState): void {
+	private drawOverlay(state: DeepReadonly<GameState>): void {
 		if (state.status === 'running') {
 			return;
 		}

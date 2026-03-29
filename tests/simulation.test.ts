@@ -7,7 +7,7 @@ import { serializeGameState } from '../src/game/core/stateUtils';
 import { PassiveTankController } from '../src/game/controllers/ReplayController';
 
 const TEST_LEVEL = LEVEL_CONFIGS[8];
-const TEST_TICKS = 240;
+const TEST_TICKS = 300;
 const TEST_SEED = 20260329;
 
 function createRun() {

@@ -1,5 +1,6 @@
 import { predictProjectileWillHitTank } from '../core/physics';
 import { SeededRandom } from '../core/prng';
+import { MinPriorityQueue } from './MinPriorityQueue';
 import type {
 	ArenaState,
 	BombStateView,
@@ -49,9 +50,9 @@ export class NavigationPlanner {
 							cellTop < obstacle.y + obstacle.height
 					),
 					dangerous: false,
-					g: 0,
+					g: Number.POSITIVE_INFINITY,
 					h: 0,
-					f: 0,
+					f: Number.POSITIVE_INFINITY,
 					parent: null,
 				};
 			}
@@ -63,22 +64,25 @@ export class NavigationPlanner {
 		currentTank: TankStateView,
 		targetTank: TankStateView,
 		aggressionFactor: number,
+		closeApproach: boolean,
 		projectiles: ProjectileStateView[],
 		bombs: BombStateView[],
 		rng: SeededRandom
 	): Array<{ x: number; y: number }> {
 		const start = this.getNodeFromTank(currentTank);
 		const target = this.getNodeFromTank(targetTank);
+		const getDestination = (): GridNode =>
+			closeApproach ? this.getRandomNodeWithinRadius(target, aggressionFactor, rng) : this.getRandomNodeInRadius(target, aggressionFactor, rng);
 		if (mode === 'simple') {
-			const destination = this.getRandomNodeInRadius(target, aggressionFactor, rng);
+			const destination = getDestination();
 			return this.findSimplePath(start, destination).map((node) => ({ x: node.x, y: node.y }));
 		}
 
 		this.reset();
 		const destination =
 			mode === 'astar-avoidance'
-				? this.getSafeNode(target, aggressionFactor, currentTank, projectiles, bombs, rng)
-				: this.getRandomNodeInRadius(target, aggressionFactor, rng);
+				? this.getSafeNode(target, aggressionFactor, closeApproach, currentTank, projectiles, bombs, rng)
+				: getDestination();
 		return (this.aStar(start, destination) ?? []).map((node) => ({ x: node.x, y: node.y }));
 	}
 
@@ -107,9 +111,9 @@ export class NavigationPlanner {
 		for (let x = 0; x < this.gridXLength; x++) {
 			for (let y = 0; y < this.gridYLength; y++) {
 				const node = this.grid[x][y];
-				node.g = 0;
+				node.g = Number.POSITIVE_INFINITY;
 				node.h = 0;
-				node.f = 0;
+				node.f = Number.POSITIVE_INFINITY;
 				node.parent = null;
 				node.dangerous = false;
 			}
@@ -178,17 +182,31 @@ export class NavigationPlanner {
 		return candidates.length > 0 ? rng.pick(candidates) : target;
 	}
 
+	private getRandomNodeWithinRadius(target: GridNode, radius: number, rng: SeededRandom): GridNode {
+		const candidates: GridNode[] = [];
+		for (let x = 0; x < this.gridXLength; x++) {
+			for (let y = 0; y < this.gridYLength; y++) {
+				const node = this.grid[x][y];
+				const distance = Math.sqrt((node.x - target.x) ** 2 + (node.y - target.y) ** 2);
+				if (distance <= radius && node.walkable) {
+					candidates.push(node);
+				}
+			}
+		}
+		return candidates.length > 0 ? rng.pick(candidates) : target;
+	}
+
 	private getSafeNode(
 		target: GridNode,
 		radius: number,
+		closeApproach: boolean,
 		currentTank: TankStateView,
 		projectiles: ProjectileStateView[],
 		bombs: BombStateView[],
 		rng: SeededRandom
 	): GridNode {
 		for (const projectile of projectiles) {
-			const predictionTank: TankStateView = JSON.parse(JSON.stringify(currentTank)) as TankStateView;
-			if (predictProjectileWillHitTank(projectile, predictionTank, this.arena, this.obstacles)) {
+			if (predictProjectileWillHitTank(projectile, currentTank, this.arena, this.obstacles)) {
 				const node = this.getNodeFromPoint(projectile.x, projectile.y);
 				this.markDangerous(node.x, node.y, 1);
 			}
@@ -204,7 +222,8 @@ export class NavigationPlanner {
 			for (let y = 0; y < this.gridYLength; y++) {
 				const node = this.grid[x][y];
 				const distance = Math.sqrt((node.x - target.x) ** 2 + (node.y - target.y) ** 2);
-				if (distance <= radius + 1 && distance >= radius - 1 && node.walkable && !node.dangerous) {
+				const inRange = closeApproach ? distance <= radius : distance <= radius + 1 && distance >= radius - 1;
+				if (inRange && node.walkable && !node.dangerous) {
 					candidates.push(node);
 				}
 			}
@@ -228,11 +247,21 @@ export class NavigationPlanner {
 	}
 
 	private aStar(start: GridNode, target: GridNode): GridNode[] | null {
-		const openSet: GridNode[] = [start];
+		start.g = 0;
+		start.h = this.getHeuristic(start, target);
+		start.f = start.h;
+		const openSet = new MinPriorityQueue<GridNode>();
+		openSet.push(start, start.f);
 		const closedSet = new Set<GridNode>();
-		while (openSet.length > 0) {
-			openSet.sort((left, right) => left.f - right.f);
-			const current = openSet[0];
+		while (openSet.size > 0) {
+			const currentEntry = openSet.pop();
+			if (!currentEntry) {
+				break;
+			}
+			const current = currentEntry.value;
+			if (closedSet.has(current) || currentEntry.priority !== current.f) {
+				continue;
+			}
 			if (current.x === target.x && current.y === target.y) {
 				const path: GridNode[] = [];
 				let cursor: GridNode | null = current;
@@ -243,25 +272,27 @@ export class NavigationPlanner {
 				return path;
 			}
 
-			openSet.splice(0, 1);
 			closedSet.add(current);
 			for (const neighbor of this.getWalkableNeighbors(current)) {
 				if (closedSet.has(neighbor)) {
 					continue;
 				}
 				const tentativeG = current.g + (neighbor.x === current.x || neighbor.y === current.y ? 1 : Math.SQRT2);
-				if (!openSet.includes(neighbor)) {
-					openSet.push(neighbor);
-				} else if (tentativeG >= neighbor.g) {
+				if (tentativeG >= neighbor.g) {
 					continue;
 				}
 				neighbor.parent = current;
 				neighbor.g = tentativeG;
-				neighbor.h = Math.round(Math.sqrt((neighbor.x - target.x) ** 2 + (neighbor.y - target.y) ** 2));
+				neighbor.h = this.getHeuristic(neighbor, target);
 				neighbor.f = neighbor.g + neighbor.h;
+				openSet.push(neighbor, neighbor.f);
 			}
 		}
 		return null;
+	}
+
+	private getHeuristic(node: GridNode, target: GridNode): number {
+		return Math.hypot(node.x - target.x, node.y - target.y);
 	}
 
 	private getWalkableNeighbors(node: GridNode): GridNode[] {

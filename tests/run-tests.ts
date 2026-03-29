@@ -1,8 +1,10 @@
+import { runBehaviorTests } from './behavior.test';
 import { runSimulationTests } from './simulation.test';
 
 try {
 	runSimulationTests();
-	console.log('Simulation tests passed.');
+	runBehaviorTests();
+	console.log('Simulation and behavior tests passed.');
 } catch (error) {
 	console.error('Simulation tests failed.');
 	console.error(error);

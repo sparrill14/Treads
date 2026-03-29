@@ -1,6 +1,5 @@
 import type {
 	ArenaState,
-	Bounds,
 	MoveIntent,
 	ObstacleStateView,
 	ProjectileStateView,
@@ -19,19 +18,6 @@ export function normalizeAngle(angle: number): number {
 	return normalized;
 }
 
-export function buildBounds(x: number, y: number, size: number): Bounds {
-	return {
-		left: x,
-		right: x + size,
-		top: y,
-		bottom: y + size,
-	};
-}
-
-export function updateTankBounds(tank: TankStateView): void {
-	tank.bounds = buildBounds(tank.x, tank.y, tank.size);
-}
-
 export function getTankCenter(tank: Pick<TankStateView, 'x' | 'y' | 'size'>): { x: number; y: number } {
 	return {
 		x: tank.x + tank.size / 2,
@@ -45,10 +31,6 @@ export function computeGunBarrelEnd(tank: Pick<TankStateView, 'x' | 'y' | 'size'
 		x: center.x + Math.cos(tank.aimAngle) * tank.size,
 		y: center.y + Math.sin(tank.aimAngle) * tank.size,
 	};
-}
-
-export function pointInBounds(x: number, y: number, bounds: Bounds): boolean {
-	return x > bounds.left && x < bounds.right && y > bounds.top && y < bounds.bottom;
 }
 
 export function circlesOverlap(x1: number, y1: number, r1: number, x2: number, y2: number, r2: number): boolean {
@@ -171,5 +153,4 @@ export function obstacleIntersectsTank(x: number, y: number, size: number, obsta
 export function clampTankToArena(tank: TankStateView, arena: ArenaState): void {
 	tank.x = clamp(tank.x, 0, arena.width - tank.size);
 	tank.y = clamp(tank.y, 0, arena.height - tank.size);
-	updateTankBounds(tank);
 }

@@ -1,7 +1,7 @@
 import { AudioFile, AudioManager } from './AudioManager';
 import { Simulation } from './core/Simulation';
 import type { GameState, SimulationEvent } from './core/types';
-import { cloneGameState } from './core/stateUtils';
+import type { DeepReadonly } from './core/stateUtils';
 import { GameRenderer } from './GameRenderer';
 
 export class GameCanvas {
@@ -17,12 +17,13 @@ export class GameCanvas {
 	constructor(canvasSelector: string, private simulation: Simulation, private audioManager?: AudioManager) {
 		const canvas = document.querySelector(canvasSelector) as HTMLCanvasElement;
 		this.gameRenderer = new GameRenderer(canvas);
-		const { width, height } = this.simulation.getState().arena;
+		const initialState = this.simulation.getState();
+		const { width, height } = initialState.arena;
 		this.width = width;
 		this.height = height;
 		this.gameRenderer.initializeCanvas(width, height);
-		this.tickMs = 1000 / this.simulation.getState().tickRate;
-		this.previousState = cloneGameState(this.simulation.getState());
+		this.tickMs = 1000 / initialState.tickRate;
+		this.previousState = this.simulation.getStateSnapshot();
 	}
 
 	public start(): void {
@@ -43,16 +44,18 @@ export class GameCanvas {
 		const frameDelta = Math.min(timeStamp - this.lastFrameTime, 250);
 		this.lastFrameTime = timeStamp;
 		this.accumulatorMs += frameDelta;
+		let currentState = this.simulation.getState();
 
-		while (this.accumulatorMs >= this.tickMs && this.simulation.getState().status === 'running') {
-			this.previousState = cloneGameState(this.simulation.getState());
+		while (this.accumulatorMs >= this.tickMs && currentState.status === 'running') {
+			this.previousState = this.simulation.getStateSnapshot();
 			const stepResult = this.simulation.step();
 			this.handleEvents(stepResult.events);
 			this.accumulatorMs -= this.tickMs;
+			currentState = this.simulation.getState();
 		}
 
 		this.gameRenderer.updateVisuals(frameDelta / 1000);
-		this.gameRenderer.render(this.simulation.getState(), this.previousState, this.accumulatorMs / this.tickMs);
+		this.gameRenderer.render(currentState, this.previousState, this.accumulatorMs / this.tickMs);
 		this.animationFrameID = requestAnimationFrame(this.gameLoop.bind(this));
 	}
 

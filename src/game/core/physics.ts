@@ -1,5 +1,5 @@
 import { SIMULATION_TICK_SECONDS, type ArenaState, type ObstacleStateView, type ProjectileStateView, type TankStateView } from './types';
-import { pointInBounds, projectileObstacleResponse, tankIntersectsBlast } from './geometry';
+import { projectileObstacleResponse, tankIntersectsBlast } from './geometry';
 
 export function stepProjectile(projectile: ProjectileStateView, arena: ArenaState, obstacles: ObstacleStateView[]): void {
 	projectile.x += projectile.vx * SIMULATION_TICK_SECONDS;
@@ -28,7 +28,12 @@ export function stepProjectile(projectile: ProjectileStateView, arena: ArenaStat
 }
 
 export function projectileHitsTank(projectile: ProjectileStateView, tank: TankStateView): boolean {
-	return pointInBounds(projectile.x, projectile.y, tank.bounds);
+	return (
+		projectile.x > tank.x &&
+		projectile.x < tank.x + tank.size &&
+		projectile.y > tank.y &&
+		projectile.y < tank.y + tank.size
+	);
 }
 
 export function predictProjectileWillHitTank(
@@ -37,7 +42,7 @@ export function predictProjectileWillHitTank(
 	arena: ArenaState,
 	obstacles: ObstacleStateView[]
 ): boolean {
-	const predictedProjectile: ProjectileStateView = JSON.parse(JSON.stringify(projectile)) as ProjectileStateView;
+	const predictedProjectile: ProjectileStateView = { ...projectile };
 	while (predictedProjectile.bounces <= predictedProjectile.maxBounces) {
 		stepProjectile(predictedProjectile, arena, obstacles);
 		if (projectileHitsTank(predictedProjectile, tank)) {

@@ -1,6 +1,5 @@
 import { PassiveTankController } from '../controllers/ReplayController';
 import { ScriptedEnemyController } from '../controllers/ScriptedEnemyController';
-import { buildBounds } from './geometry';
 import { getTankSpec } from './specs';
 import type { EnemyConfig, LevelConfig, NavigatorType } from '../LevelConfig';
 import type { GameState, MatchBootstrap, TankController, TankStateView } from './types';
@@ -45,7 +44,6 @@ function createPlayerTankState(id: string, config: LevelConfig['player']): TankS
 		aimTargetX: null,
 		aimTargetY: null,
 		destroyed: false,
-		bounds: buildBounds(config.x, config.y, spec.size),
 		ammoType: 'basic',
 		maxAmmo: 5,
 		activeAmmo: 0,
@@ -81,7 +79,6 @@ function createEnemyTankState(id: string, config: EnemyConfig): TankStateView {
 		aimTargetX: null,
 		aimTargetY: null,
 		destroyed: false,
-		bounds: buildBounds(config.x, config.y, spec.size),
 		ammoType: config.ammo?.type ?? (config.type === 'super-bomber' ? 'super' : 'basic'),
 		maxAmmo: config.ammo?.count ?? 1,
 		activeAmmo: 0,

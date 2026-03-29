@@ -22,8 +22,6 @@ export class InputManager {
 	public bombRequested = false;
 
 	private canvas: HTMLCanvasElement;
-	private xOffset: number;
-	private yOffset: number;
 
 	private onKeyDown: (e: KeyboardEvent) => void;
 	private onKeyUp: (e: KeyboardEvent) => void;
@@ -32,9 +30,6 @@ export class InputManager {
 
 	constructor(canvas: HTMLCanvasElement) {
 		this.canvas = canvas;
-		const rect = canvas.getBoundingClientRect();
-		this.xOffset = rect.left;
-		this.yOffset = rect.top;
 
 		this.onKeyDown = (event: KeyboardEvent) => {
 			if (Object.prototype.hasOwnProperty.call(this.keyStates, event.key)) {
@@ -52,8 +47,9 @@ export class InputManager {
 		};
 
 		this.onMouseMove = (event: MouseEvent) => {
-			this.mouseX = event.clientX - this.xOffset;
-			this.mouseY = event.clientY - this.yOffset;
+			const rect = this.canvas.getBoundingClientRect();
+			this.mouseX = event.clientX - rect.left;
+			this.mouseY = event.clientY - rect.top;
 		};
 
 		this.onClick = (event: MouseEvent) => {

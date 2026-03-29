@@ -33,6 +33,9 @@ module.exports = {
             },
         },
     },
+    performance: {
+        assetFilter: (assetFilename) => !/\.(mp3|ogg|wav)$/i.test(assetFilename),
+    },
     module: {
         rules: [
             {

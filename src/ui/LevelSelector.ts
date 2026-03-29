@@ -12,7 +12,7 @@ export class LevelSelector {
 	}
 	private numLevels: number;
 	private activeLevelNumber: number;
-	private activeLevel: Level;
+	private activeLevel: Level | null = null;
 	private sliderWidth: number = Math.min(window.innerWidth * 0.8, 600);
 	private audioManager: AudioManager;
 
@@ -24,7 +24,6 @@ export class LevelSelector {
 			this.audioManager.playBackgroundMusic();
 		});
 		this.activeLevelNumber = 1;
-		this.activeLevel = new Level(LEVEL_CONFIGS[0], { audioManager: this.audioManager, seed: this.activeLevelNumber });
 		this.setHeader();
 		this.createSlider();
 		this.createJumbotron();
@@ -38,7 +37,7 @@ export class LevelSelector {
 	}
 
 	public startActiveLevel() {
-		this.activeLevel.stop();
+		this.activeLevel?.stop();
 		const configIndex = Math.max(0, Math.min(this.activeLevelNumber - 1, LEVEL_CONFIGS.length - 1));
 		this.activeLevel = new Level(LEVEL_CONFIGS[configIndex], {
 			audioManager: this.audioManager,

@@ -3,18 +3,12 @@ import type { AmmoType, BombType, EnemyType, LevelConfig } from '../LevelConfig'
 export const SIMULATION_TICK_RATE = 60;
 export const SIMULATION_TICK_SECONDS = 1 / SIMULATION_TICK_RATE;
 
-export type MoveIntent = 'none' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+export const MOVE_INTENTS = ['none', 'n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const;
+export type MoveIntent = (typeof MOVE_INTENTS)[number];
 export type Team = 'player' | 'enemy';
 export type TankKind = 'player' | EnemyType;
 export type MatchStatus = 'running' | 'player_win' | 'enemy_win';
 export type AudioCue = 'tank-fire' | 'tank-destroy' | 'bomb-explode' | 'ammunition-explode';
-
-export interface Bounds {
-	left: number;
-	right: number;
-	top: number;
-	bottom: number;
-}
 
 export interface ArenaState {
 	width: number;
@@ -54,7 +48,6 @@ export interface TankStateView {
 	aimTargetX: number | null;
 	aimTargetY: number | null;
 	destroyed: boolean;
-	bounds: Bounds;
 	ammoType: AmmoType;
 	maxAmmo: number;
 	activeAmmo: number;

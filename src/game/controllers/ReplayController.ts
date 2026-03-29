@@ -9,11 +9,19 @@ const NO_OP_ACTION: TankAction = {
 };
 
 export class ReplayController implements TankController {
-	constructor(private tankId: string, private replay: ReplayData) {}
+	private readonly actionsByTick = new Map<number, TankAction>();
+
+	constructor(private tankId: string, replay: ReplayData) {
+		for (const tickRecord of replay.ticks) {
+			const action = tickRecord.actions[this.tankId];
+			if (action) {
+				this.actionsByTick.set(tickRecord.tick, action);
+			}
+		}
+	}
 
 	public act(obs: TankObservation): TankAction {
-		const tickRecord = this.replay.ticks.find((tick) => tick.tick === obs.tick);
-		return tickRecord?.actions[this.tankId] ?? NO_OP_ACTION;
+		return this.actionsByTick.get(obs.tick) ?? NO_OP_ACTION;
 	}
 }
 
