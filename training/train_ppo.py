@@ -107,6 +107,17 @@ def train():
     output_dir = os.path.join(os.path.dirname(__file__), "output")
     os.makedirs(output_dir, exist_ok=True)
 
+    # Detect device
+    import torch
+    if torch.cuda.is_available():
+        device = "cuda"
+        print(f"GPU detected: {torch.cuda.get_device_name(0)}")
+        print(f"CUDA version: {torch.version.cuda}")
+        print(f"Training on: {device}")
+    else:
+        device = "cpu"
+        print(f"No GPU detected. Training on: {device}")
+
     print("Creating environment...")
     env = make_env()
 
@@ -123,7 +134,7 @@ def train():
         gae_lambda=0.95,
         clip_range=0.2,
         ent_coef=0.05,
-        device="cpu",
+        device=device,
         policy_kwargs=dict(
             net_arch=[256, 256],
         ),
