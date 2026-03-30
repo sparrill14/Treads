@@ -12,8 +12,17 @@ export class GameCanvas {
 	private lastFrameTime = 0;
 	private accumulatorMs = 0;
 	private previousState: GameState | null = null;
+	private readonly onKeyDown = (e: KeyboardEvent): void => {
+		if (e.key === 'F2') {
+			this.gameRenderer.diagnosticsEnabled = !this.gameRenderer.diagnosticsEnabled;
+		}
+	};
 
-	constructor(canvasSelector: string, private simulation: Simulation, private audioManager?: AudioManager) {
+	constructor(
+		canvasSelector: string,
+		private simulation: Simulation,
+		private audioManager?: AudioManager
+	) {
 		const canvas = document.querySelector(canvasSelector) as HTMLCanvasElement;
 		this.gameRenderer = new GameRenderer(canvas);
 		const initialState = this.simulation.getState();
@@ -23,6 +32,7 @@ export class GameCanvas {
 		this.gameRenderer.initializeCanvas(width, height);
 		this.tickMs = 1000 / initialState.tickRate;
 		this.previousState = this.simulation.getStateSnapshot();
+		document.addEventListener('keydown', this.onKeyDown);
 	}
 
 	public start(): void {
@@ -37,6 +47,7 @@ export class GameCanvas {
 			cancelAnimationFrame(this.animationFrameID);
 			this.animationFrameID = null;
 		}
+		document.removeEventListener('keydown', this.onKeyDown);
 	}
 
 	private gameLoop(timeStamp: number): void {
@@ -48,6 +59,7 @@ export class GameCanvas {
 		while (this.accumulatorMs >= this.tickMs && currentState.status === 'running') {
 			this.previousState = this.simulation.getStateSnapshot();
 			const stepResult = this.simulation.step();
+			this.gameRenderer.setLastActions(stepResult.actions);
 			this.handleEvents(stepResult.events);
 			this.accumulatorMs -= this.tickMs;
 			currentState = this.simulation.getState();
@@ -84,4 +96,3 @@ export class GameCanvas {
 		}
 	}
 }
-

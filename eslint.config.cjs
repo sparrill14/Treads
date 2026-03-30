@@ -6,7 +6,7 @@ module.exports = tseslint.config(
 	...tseslint.configs.strict,
 	...tseslint.configs.stylistic,
 	{
-		ignores: ['dist/**/*.*', '.test-dist/**/*.*', 'webpack.*.js', 'eslint.config.*'],
+		ignores: ['dist/**/*.*', '.test-dist/**/*.*', '.training-dist/**/*.*', 'webpack.*.js', 'eslint.config.*', 'training/test-cli-runner.js'],
 	},
 	{
 		rules: {

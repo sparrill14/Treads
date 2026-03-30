@@ -1,10 +1,4 @@
-import type {
-	ArenaState,
-	MoveIntent,
-	ObstacleStateView,
-	ProjectileStateView,
-	TankStateView,
-} from './types';
+import type { ArenaState, MoveIntent, ObstacleStateView, ProjectileStateView, TankStateView } from './types';
 
 export function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(value, max));
@@ -18,6 +12,27 @@ export function normalizeAngle(angle: number): number {
 	return normalized;
 }
 
+export function signedAngleDelta(from: number, to: number): number {
+	const normalizedFrom = normalizeAngle(from);
+	const normalizedTo = normalizeAngle(to);
+	const delta = normalizedTo - normalizedFrom;
+	if (delta > Math.PI) {
+		return delta - Math.PI * 2;
+	}
+	if (delta < -Math.PI) {
+		return delta + Math.PI * 2;
+	}
+	return delta;
+}
+
+export function rotateAngleTowards(current: number, target: number, maxDelta: number): number {
+	const delta = signedAngleDelta(current, target);
+	if (Math.abs(delta) <= maxDelta) {
+		return normalizeAngle(target);
+	}
+	return normalizeAngle(current + Math.sign(delta) * maxDelta);
+}
+
 export function getTankCenter(tank: Pick<TankStateView, 'x' | 'y' | 'size'>): { x: number; y: number } {
 	return {
 		x: tank.x + tank.size / 2,
@@ -25,7 +40,10 @@ export function getTankCenter(tank: Pick<TankStateView, 'x' | 'y' | 'size'>): { 
 	};
 }
 
-export function computeGunBarrelEnd(tank: Pick<TankStateView, 'x' | 'y' | 'size' | 'aimAngle'>): { x: number; y: number } {
+export function computeGunBarrelEnd(tank: Pick<TankStateView, 'x' | 'y' | 'size' | 'aimAngle'>): {
+	x: number;
+	y: number;
+} {
 	const center = getTankCenter(tank);
 	return {
 		x: center.x + Math.cos(tank.aimAngle) * tank.size,
@@ -147,7 +165,12 @@ export function projectileObstacleResponse(
 }
 
 export function obstacleIntersectsTank(x: number, y: number, size: number, obstacle: ObstacleStateView): boolean {
-	return x < obstacle.x + obstacle.width && x + size > obstacle.x && y < obstacle.y + obstacle.height && y + size > obstacle.y;
+	return (
+		x < obstacle.x + obstacle.width &&
+		x + size > obstacle.x &&
+		y < obstacle.y + obstacle.height &&
+		y + size > obstacle.y
+	);
 }
 
 export function clampTankToArena(tank: TankStateView, arena: ArenaState): void {

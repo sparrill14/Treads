@@ -1,9 +1,16 @@
-import { computeGunBarrelEnd, deriveAimTarget, normalizeAngle, circlesOverlap, getMoveDelta, tankIntersectsBlast } from './geometry';
-import { stepProjectile, projectileHitsTank } from './physics';
+import {
+	circlesOverlap,
+	computeGunBarrelEnd,
+	deriveAimTarget,
+	getMoveDelta,
+	normalizeAngle,
+	rotateAngleTowards,
+	tankIntersectsBlast,
+} from './geometry';
+import { projectileHitsTank, stepProjectile } from './physics';
 import { SeededRandom } from './prng';
 import { getBombSpec, getProjectileSpec } from './specs';
 import { cloneGameState, cloneJson, createReadonlySnapshot, type DeepReadonly, freezeObservation } from './stateUtils';
-import { MOVE_INTENTS } from './types';
 import type {
 	BombStateView,
 	ControllerStepRecord,
@@ -18,6 +25,7 @@ import type {
 	TankObservation,
 	TankStateView,
 } from './types';
+import { MOVE_INTENTS } from './types';
 
 const NO_OP_ACTION: TankAction = {
 	move: 'none',
@@ -25,6 +33,11 @@ const NO_OP_ACTION: TankAction = {
 	fire: false,
 	plantBomb: false,
 };
+
+// Prevent degenerate same-origin projectile self-cancellation while preserving intended projectile interactions.
+const MIN_SAFE_SHOT_COOLDOWN_TICKS = 3;
+const MIN_BOMB_COOLDOWN_TICKS = 15;
+const MAX_TURRET_ROTATION_RADIANS_PER_TICK = 0.3;
 
 export class Simulation {
 	private state: GameState;
@@ -69,7 +82,10 @@ export class Simulation {
 			const observation = this.buildObservation(tank.id);
 			observations[tank.id] = observation;
 			const controller = this.controllers[tank.controllerId];
-			actions[tank.id] = this.sanitizeAction(controller?.act(observation) ?? { ...NO_OP_ACTION, aimAngle: tank.aimAngle }, tank);
+			actions[tank.id] = this.sanitizeAction(
+				controller?.act(observation) ?? { ...NO_OP_ACTION, aimAngle: tank.aimAngle },
+				tank
+			);
 		}
 
 		const events: SimulationEvent[] = [];
@@ -156,13 +172,14 @@ export class Simulation {
 				tank.bombCooldownTicks -= 1;
 			}
 			const action = actions[tank.id] ?? { ...NO_OP_ACTION, aimAngle: tank.aimAngle };
-			tank.aimAngle = action.aimAngle;
+			const targetAim = normalizeAngle(action.aimAngle);
+			tank.aimAngle = rotateAngleTowards(tank.aimAngle, targetAim, MAX_TURRET_ROTATION_RADIANS_PER_TICK);
 			if (action.aimTarget) {
 				tank.aimTargetX = action.aimTarget.x;
 				tank.aimTargetY = action.aimTarget.y;
 			} else {
 				const derived = deriveAimTarget(
-					tank.aimAngle,
+					targetAim,
 					tank.x + tank.size / 2,
 					tank.y + tank.size / 2,
 					this.state.arena,
@@ -213,7 +230,7 @@ export class Simulation {
 			maxBounces: projectileSpec.maxBounces,
 		};
 		this.state.projectiles.push(projectile);
-		tank.shotCooldownTicks = tank.shotCooldownTicksOnFire;
+		tank.shotCooldownTicks = Math.max(tank.shotCooldownTicksOnFire, MIN_SAFE_SHOT_COOLDOWN_TICKS);
 		events.push({
 			type: 'projectile-fired',
 			tick: this.state.tick,
@@ -242,7 +259,7 @@ export class Simulation {
 			fuseTicksRemaining: bombSpec.fuseTicks,
 		};
 		this.state.bombs.push(bomb);
-		tank.bombCooldownTicks = tank.bombCooldownTicksOnPlant;
+		tank.bombCooldownTicks = Math.max(tank.bombCooldownTicksOnPlant, MIN_BOMB_COOLDOWN_TICKS);
 		events.push({
 			type: 'bomb-planted',
 			tick: this.state.tick,
@@ -276,7 +293,16 @@ export class Simulation {
 				if (destroyedProjectileIds.has(otherProjectile.id)) {
 					continue;
 				}
-				if (circlesOverlap(projectile.x, projectile.y, projectile.radius, otherProjectile.x, otherProjectile.y, otherProjectile.radius)) {
+				if (
+					circlesOverlap(
+						projectile.x,
+						projectile.y,
+						projectile.radius,
+						otherProjectile.x,
+						otherProjectile.y,
+						otherProjectile.radius
+					)
+				) {
 					this.markProjectileDestroyed(projectile, destroyedProjectileIds, events, rng);
 					this.markProjectileDestroyed(otherProjectile, destroyedProjectileIds, events, rng);
 					break;
@@ -410,7 +436,10 @@ export class Simulation {
 		});
 	}
 
-	private buildRecords(observations: Record<string, TankObservation>, actions: Record<string, TankAction>): ControllerStepRecord[] {
+	private buildRecords(
+		observations: Record<string, TankObservation>,
+		actions: Record<string, TankAction>
+	): ControllerStepRecord[] {
 		return Object.entries(observations).map(([tankId, observation]) => {
 			const postStepTank = this.requireTank(tankId);
 			const reward = this.calculateReward(observation, postStepTank);
@@ -431,7 +460,9 @@ export class Simulation {
 			reward -= 1;
 		}
 		const livingOpponentsBefore = observation.enemies.filter((enemy) => !enemy.destroyed).length;
-		const livingOpponentsAfter = this.state.tanks.filter((tank) => tank.team !== observation.self.team && !tank.destroyed).length;
+		const livingOpponentsAfter = this.state.tanks.filter(
+			(tank) => tank.team !== observation.self.team && !tank.destroyed
+		).length;
 		if (livingOpponentsAfter < livingOpponentsBefore) {
 			reward += livingOpponentsBefore - livingOpponentsAfter;
 		}
@@ -450,7 +481,9 @@ export class Simulation {
 			this.state.status = 'enemy_win';
 			return;
 		}
-		const allEnemiesDestroyed = this.state.tanks.filter((tank) => tank.team === 'enemy').every((tank) => tank.destroyed);
+		const allEnemiesDestroyed = this.state.tanks
+			.filter((tank) => tank.team === 'enemy')
+			.every((tank) => tank.destroyed);
 		this.state.status = allEnemiesDestroyed ? 'player_win' : 'running';
 	}
 
@@ -694,4 +727,3 @@ export class Simulation {
 		return tank;
 	}
 }
-

@@ -1,70 +1,299 @@
 """
-Validate the trained model by running it in the Gym environment and reporting actions.
+Validate a hybrid-trained PPO checkpoint on the game runtime.
+
+Behavior:
+- Auto-detects the most recent run directory under training/output by default.
+- Uses treads_ppo_best.zip when available, otherwise treads_ppo_final.zip.
+- Evaluates across requested levels and reports overall + per-opponent stats.
+- Prints firing/bomb usage rates to catch "never fires" regressions.
 """
-import sys
+
+import argparse
+import math
 import os
+import sys
+from typing import Any, Dict, List, Optional, Tuple, cast
+from dataclasses import dataclass
+
+import numpy as np
+from stable_baselines3 import PPO
+
 sys.path.insert(0, os.path.dirname(__file__))
 
-from treads_env import TreadsEnvDiscrete, MOVE_INTENTS, NUM_AIM_BINS
-from stable_baselines3 import PPO
-import numpy as np
+from treads_env import MOVE_INTENTS, TreadsEnv  # noqa: E402
 
 
-def validate():
+# Keep this mapping in sync with src/game/LevelConfig.ts.
+LEVEL_TO_OPPONENT_KIND = {
+    1: "stationary",
+    2: "stationary",
+    3: "stationary-random-aim",
+    4: "simple-moving",
+    5: "stationary-random-aim",
+    6: "bomber",
+    7: "stationary-random-aim",
+    8: "super-bomber",
+    9: "super-bomber",
+}
+
+MOVE_COUNT = len(MOVE_INTENTS)
+FIRE_THRESHOLD = -0.2
+BOMB_THRESHOLD = 0.8
+
+
+@dataclass
+class EpisodeStats:
+    win: int
+    reward: float
+    steps: int
+    fires: int
+    bombs: int
+    level: int
+    opponent_kind: str
+
+
+ObsDict = Dict[str, Any]
+DecodedAction = Dict[str, Any]
+
+
+def _decode_action(continuous_action: Any, obs_raw: Optional[ObsDict]) -> DecodedAction:
+    """Decode 4D continuous action using enemy-relative aim encoding.
+
+    aim_signal = 0  → pointed directly at nearest enemy
+    aim_signal = ±1 → pointed 180° away from enemy
+    """
+    a = np.asarray(continuous_action, dtype=np.float32).reshape(-1)
+    if a.shape[0] < 4:
+        aim = float(obs_raw["self"]["aimAngle"]) if obs_raw is not None else 0.0
+        return {
+            "move": 0,
+            "aim_angle": np.array([aim], dtype=np.float32),
+            "fire": 0,
+            "plant_bomb": 0,
+        }
+
+    move_signal = float(np.clip(a[0], -1.0, 1.0))
+    aim_signal = float(np.clip(a[1], -1.0, 1.0))
+    fire_signal = float(np.clip(a[2], -1.0, 1.0))
+    bomb_signal = float(np.clip(a[3], -1.0, 1.0))
+
+    move_idx = int(np.clip(round((move_signal + 1.0) * 0.5 * (MOVE_COUNT - 1)), 0, MOVE_COUNT - 1))
+
+    # Enemy-relative aim encoding
+    raw_obs: ObsDict = obs_raw or {}
+    alive_enemies = [
+        e
+        for e in cast(List[ObsDict], raw_obs.get("enemies", []))
+        if not bool(e.get("destroyed", False))
+    ]
+    if alive_enemies and obs_raw is not None:
+        sx = float(raw_obs["self"]["x"]) + float(raw_obs["self"]["size"]) / 2
+        sy = float(raw_obs["self"]["y"]) + float(raw_obs["self"]["size"]) / 2
+        nearest = min(
+            alive_enemies,
+            key=lambda e: (float(e["x"]) + float(e["size"]) / 2 - sx) ** 2
+            + (float(e["y"]) + float(e["size"]) / 2 - sy) ** 2,
+        )
+        ex = float(nearest["x"]) + float(nearest["size"]) / 2
+        ey = float(nearest["y"]) + float(nearest["size"]) / 2
+        angle_to_enemy = math.atan2(ey - sy, ex - sx)
+        aim_angle = angle_to_enemy + aim_signal * math.pi
+    else:
+        aim_angle = float(raw_obs["self"]["aimAngle"]) if obs_raw is not None else 0.0
+
+    return {
+        "move": move_idx,
+        "aim_angle": np.array([aim_angle], dtype=np.float32),
+        "fire": int(fire_signal > FIRE_THRESHOLD),
+        "plant_bomb": int(bomb_signal > BOMB_THRESHOLD),
+    }
+
+
+def _find_latest_run_dir(output_dir: str) -> str:
+    candidates: List[Tuple[float, str]] = []
+    for entry in os.scandir(output_dir):
+        if not entry.is_dir():
+            continue
+        log_path = os.path.join(entry.path, "training_log.csv")
+        best_zip = os.path.join(entry.path, "treads_ppo_best.zip")
+        final_zip = os.path.join(entry.path, "treads_ppo_final.zip")
+        if os.path.isfile(log_path) and (os.path.isfile(best_zip) or os.path.isfile(final_zip)):
+            candidates.append((os.path.getmtime(log_path), entry.path))
+
+    if not candidates:
+        raise FileNotFoundError(
+            "No hybrid run directories with training_log.csv and checkpoint zip found under training/output."
+        )
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1]
+
+
+def _resolve_model_path(model_path_arg: str) -> str:
+    if model_path_arg:
+        if not os.path.isfile(model_path_arg):
+            raise FileNotFoundError(f"Specified model path does not exist: {model_path_arg}")
+        return model_path_arg
+
     output_dir = os.path.join(os.path.dirname(__file__), "output")
-    model_path = os.path.join(output_dir, "treads_ppo.zip")
+    run_dir = _find_latest_run_dir(output_dir)
+    best_zip = os.path.join(run_dir, "treads_ppo_best.zip")
+    final_zip = os.path.join(run_dir, "treads_ppo_final.zip")
 
-    print(f"Loading model from {model_path}...")
-    model = PPO.load(model_path, device="cpu")
+    if os.path.isfile(best_zip):
+        return best_zip
+    if os.path.isfile(final_zip):
+        return final_zip
+    raise FileNotFoundError(f"No best/final checkpoint found in detected run dir: {run_dir}")
 
-    env = TreadsEnvDiscrete(level=1, seed_start=5000, max_episode_steps=1800)
 
-    num_episodes = 10
-    wins = 0
-    total_rewards = []
+def _print_summary(stats: List[EpisodeStats]) -> None:
+    if not stats:
+        print("No episodes were evaluated.")
+        return
 
-    for ep in range(num_episodes):
-        obs, info = env.reset()
-        total_reward = 0.0
-        steps = 0
-        done = False
-        actions_taken = {"moves": {}, "fires": 0, "aims": {}, "total_steps": 0}
+    wins = sum(s.win for s in stats)
+    total_eps = len(stats)
+    total_steps = sum(s.steps for s in stats)
+    total_fires = sum(s.fires for s in stats)
+    total_bombs = sum(s.bombs for s in stats)
+    avg_reward = float(np.mean([s.reward for s in stats]))
 
-        while not done:
-            action, _ = model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = env.step(action)
-            total_reward += reward
-            steps += 1
-            done = terminated or truncated
+    print("\nOverall Summary")
+    print(f"  Win rate: {wins}/{total_eps} = {wins / total_eps:.3f}")
+    print(f"  Avg reward: {avg_reward:.3f}")
+    print(f"  Fire rate: {total_fires}/{total_steps} ticks = {total_fires / max(total_steps, 1):.3f}")
+    print(f"  Bomb rate: {total_bombs}/{total_steps} ticks = {total_bombs / max(total_steps, 1):.3f}")
 
-            move_name = MOVE_INTENTS[int(action[0])]
-            actions_taken["moves"][move_name] = actions_taken["moves"].get(move_name, 0) + 1
-            aim_bin = int(action[1])
-            actions_taken["aims"][aim_bin] = actions_taken["aims"].get(aim_bin, 0) + 1
-            if int(action[2]) == 1:
-                actions_taken["fires"] += 1
-            actions_taken["total_steps"] = steps
+    print("\nPer Opponent Kind")
+    by_kind: Dict[str, List[EpisodeStats]] = {}
+    for s in stats:
+        by_kind.setdefault(s.opponent_kind, []).append(s)
+    for kind in sorted(by_kind.keys()):
+        group = by_kind[kind]
+        kind_wins = sum(g.win for g in group)
+        kind_eps = len(group)
+        kind_steps = sum(g.steps for g in group)
+        kind_fires = sum(g.fires for g in group)
+        print(
+            f"  {kind}: win={kind_wins}/{kind_eps} ({kind_wins / kind_eps:.3f}), "
+            f"fire_rate={kind_fires / max(kind_steps, 1):.3f}"
+        )
 
-        result = info.get("result", {})
-        is_win = result.get("win", False)
-        wins += int(is_win)
-        total_rewards.append(total_reward)
+    print("\nPer Level")
+    by_level: Dict[int, List[EpisodeStats]] = {}
+    for s in stats:
+        by_level.setdefault(s.level, []).append(s)
+    for lvl in sorted(by_level.keys()):
+        group = by_level[lvl]
+        lvl_wins = sum(g.win for g in group)
+        lvl_eps = len(group)
+        print(f"  L{lvl}: {lvl_wins}/{lvl_eps} ({lvl_wins / lvl_eps:.3f})")
 
-        print(f"Episode {ep+1}: steps={steps}, reward={total_reward:.3f}, "
-              f"status={result.get('status', '?')}, win={is_win}")
 
-        top_moves = sorted(actions_taken["moves"].items(), key=lambda x: -x[1])[:5]
-        move_str = ", ".join(f"{m}={c}" for m, c in top_moves)
-        print(f"  Moves: {move_str}")
-        print(f"  Fires: {actions_taken['fires']}/{steps} ticks")
-        aim_spread = len(actions_taken["aims"])
-        print(f"  Aim spread: {aim_spread}/{NUM_AIM_BINS} bins used")
+def validate(
+    model_path: str,
+    levels: List[int],
+    episodes_per_level: int,
+    max_ticks: int,
+    seed_start: int,
+    deterministic: bool,
+) -> None:
+    model = cast(Any, PPO.load(model_path, device="cpu"))  # pyright: ignore[reportUnknownMemberType]
+    print(f"Loaded checkpoint: {model_path}")
+    print(
+        f"Validation config: levels={levels}, episodes_per_level={episodes_per_level}, "
+        f"max_ticks={max_ticks}, deterministic={deterministic}"
+    )
 
-    print(f"\nSummary: {wins}/{num_episodes} wins, "
-          f"avg reward: {np.mean(total_rewards):.3f}")
+    stats: List[EpisodeStats] = []
+    seed = seed_start
 
-    env.close()
+    for level in levels:
+        for _ in range(episodes_per_level):
+            env = TreadsEnv(level=level, seed_start=seed, max_episode_steps=max_ticks)
+            obs, _ = env.reset()
+            done = False
+            total_reward = 0.0
+            steps = 0
+            fires = 0
+            bombs = 0
+            info: dict[str, object] = {}
+
+            while not done:
+                action, _ = model.predict(obs, deterministic=deterministic)
+                obs_raw = cast(Optional[ObsDict], getattr(env, "_last_obs_raw", None))
+                decoded = _decode_action(action, obs_raw)
+
+                fires += int(decoded["fire"])
+                bombs += int(decoded["plant_bomb"])
+
+                obs, reward, terminated, truncated, info = env.step(decoded)
+                total_reward += float(reward)
+                steps += 1
+                done = terminated or truncated
+
+            result = cast(dict[str, Any], info.get("result", {}))
+            win = int(bool(result.get("win", False)))
+            kind = LEVEL_TO_OPPONENT_KIND.get(level, "unknown")
+            stats.append(
+                EpisodeStats(
+                    win=win,
+                    reward=total_reward,
+                    steps=steps,
+                    fires=fires,
+                    bombs=bombs,
+                    level=level,
+                    opponent_kind=kind,
+                )
+            )
+
+            print(
+                f"Episode L{level} seed={seed}: steps={steps} win={bool(win)} "
+                f"reward={total_reward:.3f} fires={fires} bombs={bombs}"
+            )
+
+            env.close()
+            seed += 1
+
+    _print_summary(stats)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default="",
+        help="Optional explicit checkpoint path (.zip). Defaults to latest run's best/final.",
+    )
+    parser.add_argument(
+        "--levels",
+        type=str,
+        default="1,2,3,4,5,6,7,8,9",
+        help="Comma-separated levels to validate.",
+    )
+    parser.add_argument("--episodes-per-level", type=int, default=20)
+    parser.add_argument("--max-ticks", type=int, default=720)
+    parser.add_argument("--seed-start", type=int, default=14000)
+    parser.add_argument(
+        "--stochastic",
+        action="store_true",
+        help="Use stochastic actions instead of deterministic policy mean.",
+    )
+    args = parser.parse_args()
+
+    model_path = _resolve_model_path(args.model_path)
+    levels = [int(x.strip()) for x in args.levels.split(",") if x.strip()]
+    validate(
+        model_path=model_path,
+        levels=levels,
+        episodes_per_level=args.episodes_per_level,
+        max_ticks=args.max_ticks,
+        seed_start=args.seed_start,
+        deterministic=not args.stochastic,
+    )
 
 
 if __name__ == "__main__":
-    validate()
+    main()

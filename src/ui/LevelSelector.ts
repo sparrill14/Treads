@@ -5,6 +5,8 @@ import { Level } from '../game/Level';
 import { LEVEL_CONFIGS } from '../game/LevelConfig';
 import { NeuralNetController } from '../game/controllers/NeuralNetController';
 import type { TankController } from '../game/core/types';
+import { ReplayViewer } from './ReplayViewer';
+import { TrainingDashboard } from './TrainingDashboard';
 
 export class LevelSelector {
 	public static createHeadlessLevel(
@@ -22,6 +24,8 @@ export class LevelSelector {
 	private audioManager: AudioManager;
 	private aiMode = false;
 	private neuralNetController: NeuralNetController | null = null;
+	private replayViewer: ReplayViewer | null = null;
+	private trainingDashboard: TrainingDashboard | null = null;
 
 	constructor(levels: number) {
 		this.numLevels = levels;
@@ -33,6 +37,7 @@ export class LevelSelector {
 		this.activeLevelNumber = 1;
 		this.setHeader();
 		this.createAiToggle();
+		this.createReplayButton();
 		this.createSlider();
 		this.createJumbotron();
 	}
@@ -115,6 +120,53 @@ export class LevelSelector {
 			btn.className = 'btn btn-outline-secondary btn-sm';
 		}
 		this.startActiveLevel();
+	}
+
+	private createReplayButton(): void {
+		const container = document.createElement('div');
+		container.id = 'viewer-controls';
+		container.style.cssText = 'text-align: center; margin: 5px 0;';
+
+		const replayBtn = document.createElement('button');
+		replayBtn.textContent = 'Replay Viewer';
+		replayBtn.className = 'btn btn-outline-info btn-sm';
+		replayBtn.addEventListener('click', () => this.openReplayViewer());
+
+		const dashBtn = document.createElement('button');
+		dashBtn.textContent = 'Training Dashboard';
+		dashBtn.className = 'btn btn-outline-info btn-sm';
+		dashBtn.style.marginLeft = '6px';
+		dashBtn.addEventListener('click', () => this.openTrainingDashboard());
+
+		container.append(replayBtn, dashBtn);
+
+		const aiContainer = document.getElementById('ai-toggle-container');
+		if (aiContainer?.parentElement) {
+			aiContainer.parentElement.insertBefore(container, aiContainer.nextSibling);
+		}
+	}
+
+	private openReplayViewer(): void {
+		this.activeLevel?.stop();
+		const canvas = document.querySelector('#game-canvas') as HTMLCanvasElement;
+		if (!canvas) return;
+
+		this.replayViewer = new ReplayViewer();
+		this.replayViewer.show(canvas, () => {
+			this.replayViewer = null;
+			this.startActiveLevel();
+		});
+	}
+
+	private openTrainingDashboard(): void {
+		if (this.trainingDashboard) return;
+		const canvas = document.querySelector('#game-canvas') as HTMLCanvasElement;
+		if (!canvas) return;
+
+		this.trainingDashboard = new TrainingDashboard();
+		this.trainingDashboard.show(canvas, () => {
+			this.trainingDashboard = null;
+		});
 	}
 
 	private createSlider(): void {

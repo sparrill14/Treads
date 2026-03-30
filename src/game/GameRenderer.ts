@@ -1,6 +1,6 @@
 import { SeededRandom } from './core/prng';
-import type { GameState, SimulationEvent, TankStateView } from './core/types';
 import type { DeepReadonly } from './core/stateUtils';
+import type { GameState, MoveIntent, SimulationEvent, TankAction, TankStateView } from './core/types';
 
 interface VisualParticle {
 	x: number;
@@ -13,9 +13,23 @@ interface VisualParticle {
 	color: string;
 }
 
+const MOVE_ARROWS: Record<MoveIntent, { dx: number; dy: number } | null> = {
+	none: null,
+	n: { dx: 0, dy: -1 },
+	s: { dx: 0, dy: 1 },
+	e: { dx: 1, dy: 0 },
+	w: { dx: -1, dy: 0 },
+	ne: { dx: 0.707, dy: -0.707 },
+	nw: { dx: -0.707, dy: -0.707 },
+	se: { dx: 0.707, dy: 0.707 },
+	sw: { dx: -0.707, dy: 0.707 },
+};
+
 export class GameRenderer {
 	private context: CanvasRenderingContext2D;
 	private particles: VisualParticle[] = [];
+	private lastActions: Record<string, TankAction> = {};
+	public diagnosticsEnabled = false;
 
 	constructor(public canvas: HTMLCanvasElement) {
 		const context = this.canvas.getContext('2d');
@@ -28,6 +42,10 @@ export class GameRenderer {
 	public initializeCanvas(width: number, height: number): void {
 		this.canvas.width = width;
 		this.canvas.height = height;
+	}
+
+	public setLastActions(actions: Record<string, TankAction>): void {
+		this.lastActions = actions;
 	}
 
 	public consumeEvents(events: SimulationEvent[]): void {
@@ -63,6 +81,9 @@ export class GameRenderer {
 		this.drawProjectiles(currentState, previousState, alpha);
 		this.drawTanks(currentState, previousState, alpha);
 		this.drawParticles();
+		if (this.diagnosticsEnabled) {
+			this.drawDiagnostics(currentState, previousState, alpha);
+		}
 		this.drawOverlay(currentState);
 	}
 
@@ -116,7 +137,12 @@ export class GameRenderer {
 		}
 	}
 
-	private drawTank(tank: DeepReadonly<TankStateView>, previousState: GameState | null, alpha: number, isPlayer: boolean): void {
+	private drawTank(
+		tank: DeepReadonly<TankStateView>,
+		previousState: GameState | null,
+		alpha: number,
+		isPlayer: boolean
+	): void {
 		const previousTank = previousState?.tanks.find((candidate) => candidate.id === tank.id) ?? null;
 		const x = this.interpolate(previousTank?.x ?? tank.x, tank.x, alpha);
 		const y = this.interpolate(previousTank?.y ?? tank.y, tank.y, alpha);
@@ -147,7 +173,10 @@ export class GameRenderer {
 		this.context.stroke();
 		this.context.beginPath();
 		this.context.moveTo(x + tank.size / 2, y + tank.size / 2);
-		this.context.lineTo(x + tank.size / 2 + Math.cos(tank.aimAngle) * tank.size, y + tank.size / 2 + Math.sin(tank.aimAngle) * tank.size);
+		this.context.lineTo(
+			x + tank.size / 2 + Math.cos(tank.aimAngle) * tank.size,
+			y + tank.size / 2 + Math.sin(tank.aimAngle) * tank.size
+		);
 		this.context.lineWidth = 7;
 		this.context.stroke();
 
@@ -198,6 +227,104 @@ export class GameRenderer {
 		const y = this.canvas.height / 2 + fontSize / 2;
 		this.context.strokeText(message, x, y);
 		this.context.fillText(message, x, y);
+	}
+
+	private drawDiagnostics(state: DeepReadonly<GameState>, previousState: GameState | null, alpha: number): void {
+		const ctx = this.context;
+		ctx.save();
+
+		// Draw diagnostics badge
+		ctx.font = '12px monospace';
+		ctx.fillStyle = 'rgba(0,0,0,0.6)';
+		ctx.fillRect(0, 0, 110, 20);
+		ctx.fillStyle = '#0f0';
+		ctx.fillText('DIAGNOSTICS ON', 5, 14);
+
+		for (const tank of state.tanks) {
+			if (tank.destroyed) continue;
+			const action = this.lastActions[tank.id];
+			if (!action) continue;
+
+			const prevTank = previousState?.tanks.find((t) => t.id === tank.id);
+			const cx = this.interpolate(
+				prevTank ? prevTank.x + prevTank.size / 2 : tank.x + tank.size / 2,
+				tank.x + tank.size / 2,
+				alpha
+			);
+			const cy = this.interpolate(
+				prevTank ? prevTank.y + prevTank.size / 2 : tank.y + tank.size / 2,
+				tank.y + tank.size / 2,
+				alpha
+			);
+
+			// Move direction arrow
+			const moveDir = MOVE_ARROWS[action.move];
+			if (moveDir) {
+				const arrowLen = tank.size * 1.2;
+				const ax = cx + moveDir.dx * arrowLen;
+				const ay = cy + moveDir.dy * arrowLen;
+				ctx.strokeStyle = '#0ff';
+				ctx.lineWidth = 2;
+				ctx.setLineDash([3, 3]);
+				ctx.beginPath();
+				ctx.moveTo(cx, cy);
+				ctx.lineTo(ax, ay);
+				ctx.stroke();
+				// Arrow head
+				const headLen = 6;
+				const angle = Math.atan2(ay - cy, ax - cx);
+				ctx.beginPath();
+				ctx.moveTo(ax, ay);
+				ctx.lineTo(ax - headLen * Math.cos(angle - 0.4), ay - headLen * Math.sin(angle - 0.4));
+				ctx.moveTo(ax, ay);
+				ctx.lineTo(ax - headLen * Math.cos(angle + 0.4), ay - headLen * Math.sin(angle + 0.4));
+				ctx.stroke();
+				ctx.setLineDash([]);
+			}
+
+			// Aim direction line (magenta, extending to arena edge)
+			const aimLen = Math.max(state.arena.width, state.arena.height);
+			const aimX = cx + Math.cos(action.aimAngle) * aimLen;
+			const aimY = cy + Math.sin(action.aimAngle) * aimLen;
+			ctx.strokeStyle = 'rgba(255,0,255,0.4)';
+			ctx.lineWidth = 1;
+			ctx.beginPath();
+			ctx.moveTo(cx, cy);
+			ctx.lineTo(aimX, aimY);
+			ctx.stroke();
+
+			// Fire indicator
+			if (action.fire) {
+				ctx.strokeStyle = 'red';
+				ctx.lineWidth = 2;
+				ctx.beginPath();
+				ctx.arc(cx, cy, tank.size * 0.8, 0, Math.PI * 2);
+				ctx.stroke();
+			}
+
+			// Bomb indicator
+			if (action.plantBomb) {
+				ctx.strokeStyle = 'orange';
+				ctx.lineWidth = 2;
+				ctx.beginPath();
+				ctx.arc(cx, cy, tank.size, 0, Math.PI * 2);
+				ctx.stroke();
+			}
+
+			// Label: move intent + fire/bomb
+			const labelParts: string[] = [action.move];
+			if (action.fire) labelParts.push('F');
+			if (action.plantBomb) labelParts.push('B');
+			ctx.font = '10px monospace';
+			ctx.fillStyle = '#fff';
+			ctx.strokeStyle = '#000';
+			ctx.lineWidth = 2;
+			const label = labelParts.join(' ');
+			ctx.strokeText(label, cx - ctx.measureText(label).width / 2, cy - tank.size * 0.7);
+			ctx.fillText(label, cx - ctx.measureText(label).width / 2, cy - tank.size * 0.7);
+		}
+
+		ctx.restore();
 	}
 
 	private interpolate(previousValue: number, currentValue: number, alpha: number): number {

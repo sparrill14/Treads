@@ -34,3 +34,24 @@
 - [x] Consolidate scattered collision checks (ammunition, bombs, obstacles) into one system
 - [x] Make it easy to add new collidable entity types (power-ups, hazards)
 - **Why:** Eliminates duplicate checks, single place to optimize (spatial partitioning) as entity counts grow
+
+## 6. Neural Net Controller ✅
+
+- [x] Audit observation pipeline (Python ↔ TypeScript normalization verified identical)
+- [x] Audit action pipeline (ONNX logit decoding verified identical)
+- [x] Build diagnostic overlay (F2 toggle: move arrows, aim lines, fire/bomb indicators)
+- [x] Increase aim bins from 16 → 32 (11.25° precision, enables hitting from ~300px)
+- [x] Improve reward shaping (bullet-approach reward, boosted fire/kill/win rewards)
+- [x] Train PPO agent (500K timesteps, MlpPolicy [256,256])
+
+## 7. Replay & Training Tools ✅
+
+- [x] Training replay capture (--save-replay flag, periodic saving every 50K steps)
+- [x] Replay viewer page (file picker, play/pause, speed control, scrub bar, seek)
+- [x] Training progress dashboard (d3 charts: reward, win rate, episode length)
+
+## 8. Tank Unification ✅
+
+- [x] Unified TankStateView interface — no separate PlayerTank/EnemyTank classes
+- [x] All controllers use TankObservation/TankAction system
+- [x] Legacy tank files removed

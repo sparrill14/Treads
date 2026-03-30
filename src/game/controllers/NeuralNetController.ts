@@ -6,21 +6,24 @@ const ARENA_HEIGHT = 500;
 const MAX_ENEMIES = 3;
 const MAX_PROJECTILES = 5;
 const MAX_OBSTACLES = 3;
-const SELF_DIM = 8;
+const SELF_DIM = 11;
 const ENEMY_DIM = 5;
 const PROJ_DIM = 5;
 const OBS_DIM = 4;
 const OBS_SIZE = SELF_DIM + MAX_ENEMIES * ENEMY_DIM + MAX_PROJECTILES * PROJ_DIM + MAX_OBSTACLES * OBS_DIM;
 
-// MultiDiscrete action dimensions: [move(9), aim(16), fire(2), bomb(2)]
-const ACTION_DIMS = [9, 16, 2, 2];
-const NUM_AIM_BINS = 16;
+// Continuous action means: [move_signal, aim_signal, fire_signal, bomb_signal] in [-1, 1]
+const ACTION_DIM = 4;
+const FIRE_THRESHOLD = -0.2;
+const BOMB_THRESHOLD = 0.8;
 
 const MOVE_INTENTS: MoveIntent[] = ['none', 'n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
 
 export class NeuralNetController implements TankController {
 	private session: ort.InferenceSession | null = null;
 	private ready = false;
+	private inferenceInFlight = false;
+	private queuedInput: Float32Array | null = null;
 
 	constructor(private modelUrl: string) {}
 
@@ -40,6 +43,7 @@ export class NeuralNetController implements TankController {
 	}
 
 	public act(obs: TankObservation): TankAction {
+		this.lastObs = obs;
 		if (!this.ready || !this.session) {
 			// Fallback: no-op until model is loaded
 			return { move: 'none', aimAngle: obs.self.aimAngle, fire: false, plantBomb: false };
@@ -64,50 +68,84 @@ export class NeuralNetController implements TankController {
 	}
 
 	private pendingAction: TankAction | null = null;
+	private lastObs: TankObservation | null = null;
 
 	private async runInferenceAsync(input: Float32Array): Promise<void> {
 		if (!this.session) return;
+		if (this.inferenceInFlight) {
+			// Keep only the most recent input to avoid unbounded queue growth.
+			this.queuedInput = input;
+			return;
+		}
+
+		this.inferenceInFlight = true;
 		try {
 			const tensor = new ort.Tensor('float32', input, [1, OBS_SIZE]);
 			const feeds = { observation: tensor };
 			const results = await this.session.run(feeds);
-			const output = results['logits'];
+			const output = results['action_mean'] ?? results['logits'];
 			const data = output.data as Float32Array;
 			this.pendingAction = this.decodeAction(Array.from(data));
 		} catch (err) {
 			console.error('ONNX inference error:', err);
+		} finally {
+			this.inferenceInFlight = false;
+			if (this.queuedInput) {
+				const nextInput = this.queuedInput;
+				this.queuedInput = null;
+				void this.runInferenceAsync(nextInput);
+			}
 		}
 	}
 
 	private decodeAction(logits: number[]): TankAction {
-		// Logits layout: [move(9), aim(16), fire(2), bomb(2)] = 29 total
-		// Take argmax within each group
-		let offset = 0;
-		const choices: number[] = [];
-		for (const dim of ACTION_DIMS) {
-			const group = logits.slice(offset, offset + dim);
-			let bestIdx = 0;
-			let bestVal = group[0];
-			for (let i = 1; i < group.length; i++) {
-				if (group[i] > bestVal) {
-					bestVal = group[i];
-					bestIdx = i;
-				}
-			}
-			choices.push(bestIdx);
-			offset += dim;
+		if (logits.length < ACTION_DIM) {
+			return {
+				move: 'none',
+				aimAngle: this.lastObs?.self.aimAngle ?? 0,
+				fire: false,
+				plantBomb: false,
+			};
 		}
 
-		const moveIdx = choices[0];
-		const aimBin = choices[1];
-		const fireChoice = choices[2];
-		const bombChoice = choices[3];
+		const moveSignal = Math.max(-1, Math.min(1, logits[0]));
+		const aimSignal = Math.max(-1, Math.min(1, logits[1]));
+		const fireSignal = Math.max(-1, Math.min(1, logits[2]));
+		const bombSignal = Math.max(-1, Math.min(1, logits[3]));
+
+		const moveIdx = Math.max(0, Math.min(8, Math.round((moveSignal + 1) * 0.5 * 8)));
+
+		// Enemy-relative aim encoding: aim_signal=0 → pointed at nearest enemy
+		// aim_signal=±1 → pointed 180° away from enemy
+		const obs = this.lastObs;
+		let aimAngle: number;
+		if (obs) {
+			const s = obs.self;
+			const sx = s.x + s.size / 2;
+			const sy = s.y + s.size / 2;
+			const aliveEnemies = obs.enemies.filter((e) => !e.destroyed);
+			if (aliveEnemies.length > 0) {
+				const nearest = aliveEnemies.reduce((best, e) => {
+					const dx = e.x + e.size / 2 - sx;
+					const dy = e.y + e.size / 2 - sy;
+					const bdx = best.x + best.size / 2 - sx;
+					const bdy = best.y + best.size / 2 - sy;
+					return dx * dx + dy * dy < bdx * bdx + bdy * bdy ? e : best;
+				});
+				const angleToEnemy = Math.atan2(nearest.y + nearest.size / 2 - sy, nearest.x + nearest.size / 2 - sx);
+				aimAngle = angleToEnemy + aimSignal * Math.PI;
+			} else {
+				aimAngle = s.aimAngle;
+			}
+		} else {
+			aimAngle = 0;
+		}
 
 		return {
 			move: MOVE_INTENTS[moveIdx],
-			aimAngle: (aimBin / NUM_AIM_BINS) * 2 * Math.PI,
-			fire: fireChoice === 1,
-			plantBomb: bombChoice === 1,
+			aimAngle,
+			fire: fireSignal > FIRE_THRESHOLD,
+			plantBomb: bombSignal > BOMB_THRESHOLD,
 		};
 	}
 
@@ -124,9 +162,8 @@ export class NeuralNetController implements TankController {
 		result[idx + 5] = Math.min(obs.self.shotCooldownTicks / 300, 1);
 		result[idx + 6] = obs.self.activeAmmo / Math.max(obs.self.maxAmmo, 1);
 		result[idx + 7] = obs.self.maxAmmo / 5;
-		idx += SELF_DIM;
 
-		// Enemies sorted by distance
+		// Derived aim features
 		const sx = obs.self.x + obs.self.size / 2;
 		const sy = obs.self.y + obs.self.size / 2;
 		const livingEnemies = obs.enemies
@@ -137,6 +174,26 @@ export class NeuralNetController implements TankController {
 				return da - db;
 			});
 
+		if (livingEnemies.length > 0) {
+			const nearest = livingEnemies[0];
+			const ex = nearest.x + nearest.size / 2;
+			const ey = nearest.y + nearest.size / 2;
+			const angleToEnemy = Math.atan2(ey - sy, ex - sx);
+			const distToEnemy = Math.sqrt((ex - sx) ** 2 + (ey - sy) ** 2);
+			const aimAngle = obs.self.aimAngle;
+			const aimError = Math.atan2(Math.sin(aimAngle - angleToEnemy), Math.cos(aimAngle - angleToEnemy));
+			const arenaDiag = Math.sqrt(ARENA_WIDTH ** 2 + ARENA_HEIGHT ** 2);
+			result[idx + 8] = angleToEnemy / (2 * Math.PI) + 0.5;
+			result[idx + 9] = Math.min(distToEnemy / arenaDiag, 1.0);
+			result[idx + 10] = (aimError / Math.PI) * 0.5 + 0.5;
+		} else {
+			result[idx + 8] = 0.5;
+			result[idx + 9] = 0.0;
+			result[idx + 10] = 0.5;
+		}
+		idx += SELF_DIM;
+
+		// Enemies sorted by distance (reuse livingEnemies computed above)
 		for (let i = 0; i < MAX_ENEMIES; i++) {
 			if (i < livingEnemies.length) {
 				const e = livingEnemies[i];
