@@ -12,6 +12,7 @@ interface GridNode {
 	h: number;
 	f: number;
 	parent: GridNode | null;
+	closed: number; // generation counter — matches currentGeneration when closed
 }
 
 export type NavigationMode = 'simple' | 'astar' | 'astar-avoidance';
@@ -22,6 +23,11 @@ export class NavigationPlanner {
 	private readonly gridXLength: number;
 	private readonly gridYLength: number;
 	private readonly grid: GridNode[][];
+
+	// Reusable buffers to avoid allocations in hot paths
+	private readonly neighborBuf: GridNode[] = new Array(8);
+	private readonly openSet = new MinPriorityQueue<GridNode>();
+	private currentGeneration = 0;
 
 	constructor(
 		private arena: ArenaState,
@@ -52,6 +58,7 @@ export class NavigationPlanner {
 					h: 0,
 					f: Number.POSITIVE_INFINITY,
 					parent: null,
+					closed: -1,
 				};
 			}
 		}
@@ -176,11 +183,17 @@ export class NavigationPlanner {
 
 	private getRandomNodeInRadius(target: GridNode, radius: number, rng: SeededRandom): GridNode {
 		const candidates: GridNode[] = [];
-		for (let x = 0; x < this.gridXLength; x++) {
-			for (let y = 0; y < this.gridYLength; y++) {
+		const r2lo = (radius - 1) * (radius - 1);
+		const r2hi = (radius + 1) * (radius + 1);
+		const xMin = Math.max(0, Math.ceil(target.x - radius - 1));
+		const xMax = Math.min(this.gridXLength - 1, Math.floor(target.x + radius + 1));
+		const yMin = Math.max(0, Math.ceil(target.y - radius - 1));
+		const yMax = Math.min(this.gridYLength - 1, Math.floor(target.y + radius + 1));
+		for (let x = xMin; x <= xMax; x++) {
+			for (let y = yMin; y <= yMax; y++) {
 				const node = this.grid[x][y];
-				const distance = Math.sqrt((node.x - target.x) ** 2 + (node.y - target.y) ** 2);
-				if (distance <= radius + 1 && distance >= radius - 1 && node.walkable) {
+				const d2 = (node.x - target.x) * (node.x - target.x) + (node.y - target.y) * (node.y - target.y);
+				if (d2 <= r2hi && d2 >= r2lo && node.walkable) {
 					candidates.push(node);
 				}
 			}
@@ -190,11 +203,16 @@ export class NavigationPlanner {
 
 	private getRandomNodeWithinRadius(target: GridNode, radius: number, rng: SeededRandom): GridNode {
 		const candidates: GridNode[] = [];
-		for (let x = 0; x < this.gridXLength; x++) {
-			for (let y = 0; y < this.gridYLength; y++) {
+		const r2 = radius * radius;
+		const xMin = Math.max(0, Math.ceil(target.x - radius));
+		const xMax = Math.min(this.gridXLength - 1, Math.floor(target.x + radius));
+		const yMin = Math.max(0, Math.ceil(target.y - radius));
+		const yMax = Math.min(this.gridYLength - 1, Math.floor(target.y + radius));
+		for (let x = xMin; x <= xMax; x++) {
+			for (let y = yMin; y <= yMax; y++) {
 				const node = this.grid[x][y];
-				const distance = Math.sqrt((node.x - target.x) ** 2 + (node.y - target.y) ** 2);
-				if (distance <= radius && node.walkable) {
+				const d2 = (node.x - target.x) * (node.x - target.x) + (node.y - target.y) * (node.y - target.y);
+				if (d2 <= r2 && node.walkable) {
 					candidates.push(node);
 				}
 			}
@@ -223,12 +241,18 @@ export class NavigationPlanner {
 		}
 
 		const candidates: GridNode[] = [];
-		for (let x = 0; x < this.gridXLength; x++) {
-			for (let y = 0; y < this.gridYLength; y++) {
+		const r2lo = closeApproach ? 0 : (radius - 1) * (radius - 1);
+		const r2hi = closeApproach ? radius * radius : (radius + 1) * (radius + 1);
+		const scanRadius = closeApproach ? radius : radius + 1;
+		const xMin = Math.max(0, Math.ceil(target.x - scanRadius));
+		const xMax = Math.min(this.gridXLength - 1, Math.floor(target.x + scanRadius));
+		const yMin = Math.max(0, Math.ceil(target.y - scanRadius));
+		const yMax = Math.min(this.gridYLength - 1, Math.floor(target.y + scanRadius));
+		for (let x = xMin; x <= xMax; x++) {
+			for (let y = yMin; y <= yMax; y++) {
 				const node = this.grid[x][y];
-				const distance = Math.sqrt((node.x - target.x) ** 2 + (node.y - target.y) ** 2);
-				const inRange = closeApproach ? distance <= radius : distance <= radius + 1 && distance >= radius - 1;
-				if (inRange && node.walkable && !node.dangerous) {
+				const d2 = (node.x - target.x) * (node.x - target.x) + (node.y - target.y) * (node.y - target.y);
+				if (d2 >= r2lo && d2 <= r2hi && node.walkable && !node.dangerous) {
 					candidates.push(node);
 				}
 			}
@@ -252,46 +276,47 @@ export class NavigationPlanner {
 	}
 
 	private markDangerous(centerX: number, centerY: number, buffer: number): void {
-		for (let dx = -buffer; dx <= buffer; dx++) {
-			for (let dy = -buffer; dy <= buffer; dy++) {
-				const nx = centerX + dx;
-				const ny = centerY + dy;
-				if (this.isWithinBounds(nx, ny)) {
-					this.grid[nx][ny].dangerous = true;
-				}
+		const xMin = Math.max(0, centerX - buffer);
+		const xMax = Math.min(this.gridXLength - 1, centerX + buffer);
+		const yMin = Math.max(0, centerY - buffer);
+		const yMax = Math.min(this.gridYLength - 1, centerY + buffer);
+		for (let nx = xMin; nx <= xMax; nx++) {
+			for (let ny = yMin; ny <= yMax; ny++) {
+				this.grid[nx][ny].dangerous = true;
 			}
 		}
 	}
 
 	private aStar(start: GridNode, target: GridNode): GridNode[] | null {
+		this.currentGeneration += 1;
+		const gen = this.currentGeneration;
+		const openSet = this.openSet;
+		openSet.clear();
+
 		start.g = 0;
-		start.h = this.getHeuristic(start, target);
+		start.h = this.heuristic(start, target);
 		start.f = start.h;
-		const openSet = new MinPriorityQueue<GridNode>();
 		openSet.push(start, start.f);
-		const closedSet = new Set<GridNode>();
+
 		while (openSet.size > 0) {
-			const currentEntry = openSet.pop();
-			if (!currentEntry) {
+			if (!openSet.pop()) {
 				break;
 			}
-			const current = currentEntry.value;
-			if (closedSet.has(current) || currentEntry.priority !== current.f) {
+			const current = openSet.popValue as GridNode;
+			const currentPriority = openSet.popPriority;
+
+			if (current.closed === gen || currentPriority !== current.f) {
 				continue;
 			}
 			if (current.x === target.x && current.y === target.y) {
-				const path: GridNode[] = [];
-				let cursor: GridNode | null = current;
-				while (cursor !== null) {
-					path.unshift(cursor);
-					cursor = cursor.parent;
-				}
-				return path;
+				return this.reconstructPath(current);
 			}
 
-			closedSet.add(current);
-			for (const neighbor of this.getWalkableNeighbors(current)) {
-				if (closedSet.has(neighbor)) {
+			current.closed = gen;
+			const neighborCount = this.fillWalkableNeighbors(current);
+			for (let i = 0; i < neighborCount; i++) {
+				const neighbor = this.neighborBuf[i];
+				if (neighbor.closed === gen) {
 					continue;
 				}
 				const tentativeG = current.g + (neighbor.x === current.x || neighbor.y === current.y ? 1 : Math.SQRT2);
@@ -300,7 +325,7 @@ export class NavigationPlanner {
 				}
 				neighbor.parent = current;
 				neighbor.g = tentativeG;
-				neighbor.h = this.getHeuristic(neighbor, target);
+				neighbor.h = this.heuristic(neighbor, target);
 				neighbor.f = neighbor.g + neighbor.h;
 				openSet.push(neighbor, neighbor.f);
 			}
@@ -308,25 +333,45 @@ export class NavigationPlanner {
 		return null;
 	}
 
-	private getHeuristic(node: GridNode, target: GridNode): number {
-		return Math.hypot(node.x - target.x, node.y - target.y);
+	private reconstructPath(end: GridNode): GridNode[] {
+		const path: GridNode[] = [];
+		let cursor: GridNode | null = end;
+		while (cursor !== null) {
+			path.push(cursor);
+			cursor = cursor.parent;
+		}
+		path.reverse();
+		return path;
 	}
 
-	private getWalkableNeighbors(node: GridNode): GridNode[] {
-		const neighbors: GridNode[] = [];
+	private heuristic(node: GridNode, target: GridNode): number {
+		const dx = node.x - target.x;
+		const dy = node.y - target.y;
+		return Math.sqrt(dx * dx + dy * dy);
+	}
+
+	/** Fill neighborBuf with walkable neighbors, return count. Zero allocations. */
+	private fillWalkableNeighbors(node: GridNode): number {
+		let count = 0;
+		const nx = node.x;
+		const ny = node.y;
+		const gx = this.gridXLength;
+		const gy = this.gridYLength;
+		const grid = this.grid;
 		for (let dx = -1; dx <= 1; dx++) {
+			const x = nx + dx;
+			if (x < 0 || x >= gx) continue;
 			for (let dy = -1; dy <= 1; dy++) {
-				if (dx === 0 && dy === 0) {
-					continue;
-				}
-				const x = node.x + dx;
-				const y = node.y + dy;
-				if (this.isWithinBounds(x, y) && this.grid[x][y].walkable) {
-					neighbors.push(this.grid[x][y]);
+				if (dx === 0 && dy === 0) continue;
+				const y = ny + dy;
+				if (y < 0 || y >= gy) continue;
+				const candidate = grid[x][y];
+				if (candidate.walkable) {
+					this.neighborBuf[count++] = candidate;
 				}
 			}
 		}
-		return neighbors;
+		return count;
 	}
 
 	private isWithinBounds(x: number, y: number): boolean {

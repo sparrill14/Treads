@@ -1,4 +1,4 @@
-import { projectileObstacleResponse, tankIntersectsBlast } from './geometry';
+import { tankIntersectsBlast } from './geometry';
 import {
 	SIMULATION_TICK_SECONDS,
 	type ArenaState,
@@ -21,7 +21,7 @@ export function stepProjectile(
 ): void {
 	const tickDx = projectile.vx * SIMULATION_TICK_SECONDS;
 	const tickDy = projectile.vy * SIMULATION_TICK_SECONDS;
-	const tickDistance = Math.hypot(tickDx, tickDy);
+	const tickDistance = Math.sqrt(tickDx * tickDx + tickDy * tickDy);
 	const substeps = Math.max(1, Math.ceil(tickDistance / MIN_PROJECTILE_SUBSTEP_DISTANCE));
 
 	for (let step = 0; step < substeps; step++) {
@@ -53,16 +53,34 @@ export function stepProjectile(
 		}
 
 		for (const obstacle of obstacles) {
-			const response = projectileObstacleResponse(projectile, obstacle);
-			if (response.hit) {
+			if (
+				projectile.x > obstacle.x &&
+				projectile.x < obstacle.x + obstacle.width &&
+				projectile.y > obstacle.y &&
+				projectile.y < obstacle.y + obstacle.height
+			) {
 				if (!allowBounces) {
 					projectile.bounces = projectile.maxBounces + 1;
 					return;
 				}
-				projectile.x = response.x;
-				projectile.y = response.y;
-				projectile.vx = response.vx;
-				projectile.vy = response.vy;
+				const fromLeft = Math.abs(projectile.x - obstacle.x);
+				const fromRight = Math.abs(projectile.x - (obstacle.x + obstacle.width));
+				const fromTop = Math.abs(projectile.y - obstacle.y);
+				const fromBottom = Math.abs(projectile.y - (obstacle.y + obstacle.height));
+				const minDistance = Math.min(fromLeft, fromRight, fromTop, fromBottom);
+				if (minDistance === fromTop) {
+					projectile.y = obstacle.y - 1;
+					projectile.vy = -projectile.vy;
+				} else if (minDistance === fromBottom) {
+					projectile.y = obstacle.y + obstacle.height + 1;
+					projectile.vy = -projectile.vy;
+				} else if (minDistance === fromLeft) {
+					projectile.x = obstacle.x - 1;
+					projectile.vx = -projectile.vx;
+				} else {
+					projectile.x = obstacle.x + obstacle.width + 1;
+					projectile.vx = -projectile.vx;
+				}
 				projectile.bounces += 1;
 			}
 		}
@@ -81,6 +99,8 @@ export function projectileHitsTank(projectile: ProjectileStateView, tank: TankSt
 	return dx * dx + dy * dy <= projectile.radius * projectile.radius;
 }
 
+const PREDICTION_MAX_TICKS = 600;
+
 export function predictProjectileWillHitTank(
 	projectile: ProjectileStateView,
 	tank: TankStateView,
@@ -88,7 +108,10 @@ export function predictProjectileWillHitTank(
 	obstacles: ObstacleStateView[]
 ): boolean {
 	const predictedProjectile: ProjectileStateView = { ...projectile };
-	while (predictedProjectile.bounces <= predictedProjectile.maxBounces) {
+	for (let tick = 0; tick < PREDICTION_MAX_TICKS; tick++) {
+		if (predictedProjectile.bounces > predictedProjectile.maxBounces) {
+			return false;
+		}
 		stepProjectile(predictedProjectile, arena, obstacles, true);
 		if (projectileHitsTank(predictedProjectile, tank)) {
 			return true;
