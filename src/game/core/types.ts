@@ -15,6 +15,15 @@ export interface ArenaState {
 	height: number;
 }
 
+export interface MatchRules {
+	tankHitPoints: number;
+	projectileDamage: number;
+	bombDamage: number;
+	invulnerabilityTicks: number;
+	projectileBounces: boolean;
+	turretSpeedMultiplier: number;
+}
+
 export interface TankAction {
 	move: MoveIntent;
 	aimAngle: number;
@@ -47,6 +56,9 @@ export interface TankStateView {
 	aimAngle: number;
 	aimTargetX: number | null;
 	aimTargetY: number | null;
+	health: number;
+	maxHealth: number;
+	invulnerabilityTicksRemaining: number;
 	destroyed: boolean;
 	ammoType: AmmoType;
 	maxAmmo: number;
@@ -122,6 +134,7 @@ export interface GameState {
 	tick: number;
 	tickRate: number;
 	status: MatchStatus;
+	rules: MatchRules;
 	arena: ArenaState;
 	playerTankId: string;
 	nextEntityId: number;
@@ -182,6 +195,13 @@ export interface TankDestroyedEvent extends SimulationEventBase {
 	audioCue: AudioCue;
 }
 
+export interface ReplayTankState {
+	health: number;
+	maxHealth: number;
+	invulnerabilityTicksRemaining: number;
+	destroyed: boolean;
+}
+
 export type SimulationEvent =
 	| ProjectileFiredEvent
 	| ProjectileDestroyedEvent
@@ -203,11 +223,13 @@ export interface SimulationStepResult {
 	actions: Record<string, TankAction>;
 	events: SimulationEvent[];
 	records: ControllerStepRecord[];
+	replayTankStates: Record<string, ReplayTankState>;
 }
 
 export interface ReplayTick {
 	tick: number;
 	actions: Record<string, TankAction>;
+	tanks: Record<string, ReplayTankState>;
 }
 
 export interface ReplayData {

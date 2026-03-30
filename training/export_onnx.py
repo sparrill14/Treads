@@ -49,7 +49,7 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
         (dummy_input,),
         onnx_path,
         export_params=True,
-        opset_version=11,
+        opset_version=17,
         do_constant_folding=True,
         input_names=["observation"],
         output_names=["action_mean"],
@@ -57,6 +57,7 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
             "observation": {0: "batch_size"},
             "action_mean": {0: "batch_size"},
         },
+        dynamo=False,
     )
     print(f"ONNX model saved to {onnx_path}")
 
@@ -83,9 +84,17 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("model_path", nargs="?", default=None)
+    parser.add_argument("onnx_path", nargs="?", default=None)
+    args = parser.parse_args()
+
     output_dir = os.path.join(os.path.dirname(__file__), "output")
-    model_path = os.path.join(output_dir, "treads_ppo.zip")
-    if not os.path.exists(model_path):
+    model_path = args.model_path
+    if not model_path:
         model_path = os.path.join(output_dir, "treads_ppo_best.zip")
-    onnx_path = os.path.join(output_dir, "treads_policy.onnx")
+    onnx_path = args.onnx_path
+    if not onnx_path:
+        onnx_path = os.path.join(output_dir, "treads_policy.onnx")
     export_to_onnx(model_path, onnx_path)

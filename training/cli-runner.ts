@@ -125,7 +125,7 @@ async function runEpisode(level: number, seed: number, maxTicks: number, saveRep
 		[playerTankId]: playerController,
 	};
 
-	const simulation = new Simulation(initialState, controllers);
+	const simulation = new Simulation(initialState, controllers, { debugFreeze: false });
 	const replayRecorder = new ReplayRecorder(levelConfig, seed);
 
 	writeLine({

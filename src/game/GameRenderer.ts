@@ -165,6 +165,14 @@ export class GameRenderer {
 
 		this.context.fillStyle = tank.color;
 		this.context.fillRect(x, y, tank.size, tank.size);
+		if (tank.invulnerabilityTicksRemaining > 0) {
+			this.context.save();
+			this.context.strokeStyle = 'rgba(255,255,255,0.9)';
+			this.context.lineWidth = 3;
+			this.context.setLineDash([4, 3]);
+			this.context.strokeRect(x - 2, y - 2, tank.size + 4, tank.size + 4);
+			this.context.restore();
+		}
 		this.context.strokeStyle = 'black';
 		this.context.lineWidth = 2;
 		this.context.strokeRect(x, y, tank.size, tank.size);
@@ -199,6 +207,22 @@ export class GameRenderer {
 			this.context.lineTo(tank.aimTargetX + markerSize, tank.aimTargetY - markerSize);
 			this.context.stroke();
 		}
+
+		this.drawHealthBar(x, y, tank);
+	}
+
+	private drawHealthBar(x: number, y: number, tank: DeepReadonly<TankStateView>): void {
+		const barWidth = tank.size;
+		const barHeight = 5;
+		const barX = x;
+		const barY = y - 10;
+		this.context.fillStyle = 'rgba(0,0,0,0.55)';
+		this.context.fillRect(barX - 1, barY - 1, barWidth + 2, barHeight + 2);
+		this.context.fillStyle = '#4b1f1f';
+		this.context.fillRect(barX, barY, barWidth, barHeight);
+		const ratio = tank.maxHealth > 0 ? tank.health / tank.maxHealth : 0;
+		this.context.fillStyle = ratio > 0.66 ? '#47c96d' : ratio > 0.33 ? '#f1c94a' : '#db5b5b';
+		this.context.fillRect(barX, barY, barWidth * ratio, barHeight);
 	}
 
 	private drawParticles(): void {
@@ -236,9 +260,17 @@ export class GameRenderer {
 		// Draw diagnostics badge
 		ctx.font = '12px monospace';
 		ctx.fillStyle = 'rgba(0,0,0,0.6)';
-		ctx.fillRect(0, 0, 110, 20);
+		ctx.fillRect(0, 0, 230, 20 + state.tanks.length * 14);
 		ctx.fillStyle = '#0f0';
 		ctx.fillText('DIAGNOSTICS ON', 5, 14);
+		ctx.fillStyle = '#fff';
+		state.tanks.forEach((tank, index) => {
+			ctx.fillText(
+				`${tank.id} HP ${tank.health}/${tank.maxHealth} invul=${tank.invulnerabilityTicksRemaining}`,
+				5,
+				32 + index * 14
+			);
+		});
 
 		for (const tank of state.tanks) {
 			if (tank.destroyed) continue;

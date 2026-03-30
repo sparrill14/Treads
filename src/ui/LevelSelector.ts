@@ -23,7 +23,7 @@ export class LevelSelector {
 	private sliderWidth: number = Math.min(window.innerWidth * 0.8, 600);
 	private audioManager: AudioManager;
 	private aiMode = false;
-	private neuralNetController: NeuralNetController | null = null;
+	private neuralNetControllers: NeuralNetController[] = [];
 	private replayViewer: ReplayViewer | null = null;
 	private trainingDashboard: TrainingDashboard | null = null;
 
@@ -55,11 +55,12 @@ export class LevelSelector {
 		const config = LEVEL_CONFIGS[configIndex];
 
 		const controllerOverrides: Record<string, TankController> = {};
-		if (this.aiMode && this.neuralNetController) {
-			// Override all enemy controllers with the neural net controller
-			const nnController = this.neuralNetController;
+		if (this.aiMode && this.neuralNetControllers.length > 0) {
+			// Each enemy needs its own controller instance to avoid shared async inference state.
 			config.enemies.forEach((_enemy, index) => {
-				controllerOverrides[`enemy-${index}`] = nnController;
+				if (index < this.neuralNetControllers.length) {
+					controllerOverrides[`enemy-${index}`] = this.neuralNetControllers[index];
+				}
 			});
 		}
 
@@ -95,9 +96,13 @@ export class LevelSelector {
 			btn.textContent = 'AI Mode: Loading...';
 			btn.disabled = true;
 			try {
-				if (!this.neuralNetController) {
-					this.neuralNetController = new NeuralNetController('models/treads_policy.onnx');
-					await this.neuralNetController.loadModel();
+				if (this.neuralNetControllers.length === 0) {
+					const maxEnemies = LEVEL_CONFIGS.reduce((max, level) => Math.max(max, level.enemies.length), 0);
+					this.neuralNetControllers = Array.from(
+						{ length: Math.max(maxEnemies, 1) },
+						() => new NeuralNetController('models/treads_policy.onnx')
+					);
+					await Promise.all(this.neuralNetControllers.map(async (controller) => controller.loadModel()));
 				}
 				this.aiMode = true;
 				btn.textContent = 'AI Mode: ON';

@@ -1,9 +1,9 @@
 import { ReplayController } from '../controllers/ReplayController';
+import type { LevelConfig } from '../LevelConfig';
 import { createInitialGameState } from './MatchFactory';
 import { Simulation } from './Simulation';
 import { cloneJson } from './stateUtils';
 import type { GameState, ReplayData, SimulationStepResult, TankController } from './types';
-import type { LevelConfig } from '../LevelConfig';
 
 export class ReplayRecorder {
 	private readonly replay: ReplayData;
@@ -20,6 +20,7 @@ export class ReplayRecorder {
 		this.replay.ticks.push({
 			tick: stepResult.tick,
 			actions: cloneJson(stepResult.actions),
+			tanks: cloneJson(stepResult.replayTankStates),
 		});
 	}
 

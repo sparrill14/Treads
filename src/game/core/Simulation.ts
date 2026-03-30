@@ -10,13 +10,29 @@ import {
 import { projectileHitsTank, stepProjectile } from './physics';
 import { SeededRandom } from './prng';
 import { getBombSpec, getProjectileSpec } from './specs';
-import { cloneGameState, cloneJson, createReadonlySnapshot, type DeepReadonly, freezeObservation } from './stateUtils';
+import {
+	blankBomb,
+	blankObstacle,
+	blankProjectile,
+	blankTank,
+	cloneGameState,
+	cloneJson,
+	copyArena,
+	copyBomb,
+	copyObstacle,
+	copyProjectile,
+	copyTank,
+	createReadonlySnapshot,
+	type DeepReadonly,
+	freezeObservation,
+} from './stateUtils';
 import type {
 	BombStateView,
 	ControllerStepRecord,
 	GameState,
 	MatchInit,
 	MoveIntent,
+	ObstacleStateView,
 	ProjectileStateView,
 	SimulationEvent,
 	SimulationStepResult,
@@ -37,7 +53,64 @@ const NO_OP_ACTION: TankAction = {
 // Prevent degenerate same-origin projectile self-cancellation while preserving intended projectile interactions.
 const MIN_SAFE_SHOT_COOLDOWN_TICKS = 3;
 const MIN_BOMB_COOLDOWN_TICKS = 15;
-const MAX_TURRET_ROTATION_RADIANS_PER_TICK = 0.3;
+const BASE_MAX_TURRET_ROTATION_RADIANS_PER_TICK = 0.3;
+
+interface SharedObservationViews {
+	tick: number;
+	arena: GameState['arena'];
+	obstacles: GameState['obstacles'];
+	projectiles: GameState['projectiles'];
+	bombs: GameState['bombs'];
+	playerTeam: GameState['tanks'];
+	enemyTeam: GameState['tanks'];
+}
+
+export interface SimulationOptions {
+	/** When true, observations are deep-frozen for mutation safety (browser/debug). Default: true. */
+	debugFreeze?: boolean;
+	/** When true, accumulate per-phase timing stats in step(). Default: false. */
+	profiling?: boolean;
+}
+
+// Preallocated per-tank observation buffer used when debugFreeze is off.
+interface TankObsBuffer {
+	obs: TankObservation;
+	selfBuf: TankStateView;
+	enemyBufs: TankStateView[];
+	projBufs: ProjectileStateView[];
+	bombBufs: BombStateView[];
+	obstacleBufs: ObstacleStateView[];
+	arenaBuf: GameState['arena'];
+}
+
+// Profiling accumulator
+interface ProfilingStats {
+	ticks: number;
+	observationNs: number;
+	controllerNs: number;
+	actionNs: number;
+	projectileNs: number;
+	bombNs: number;
+	refreshNs: number;
+	statusNs: number;
+	recordNs: number;
+	totalNs: number;
+}
+
+function emptyProfilingStats(): ProfilingStats {
+	return {
+		ticks: 0,
+		observationNs: 0,
+		controllerNs: 0,
+		actionNs: 0,
+		projectileNs: 0,
+		bombNs: 0,
+		refreshNs: 0,
+		statusNs: 0,
+		recordNs: 0,
+		totalNs: 0,
+	};
+}
 
 export class Simulation {
 	private state: GameState;
@@ -45,10 +118,31 @@ export class Simulation {
 	private snapshotCache: DeepReadonly<GameState> | null = null;
 	private invalidMoveWarnings = new Set<string>();
 
-	constructor(initialState: GameState, controllers: Record<string, TankController>) {
+	// Options
+	private readonly debugFreeze: boolean;
+	private readonly profiling: boolean;
+
+	// Preallocated observation buffers (Fix 3) — keyed by tank id.
+	private obsBuffers = new Map<string, TankObsBuffer>();
+
+	// Shared-views scratch space (reused each step to avoid re-allocation)
+	private sharedArena: GameState['arena'] = { width: 0, height: 0 };
+	private sharedObstacles: ObstacleStateView[] = [];
+	private sharedProjectiles: ProjectileStateView[] = [];
+	private sharedBombs: BombStateView[] = [];
+	private sharedPlayerTeam: TankStateView[] = [];
+	private sharedEnemyTeam: TankStateView[] = [];
+
+	// Profiling
+	private profilingStats: ProfilingStats = emptyProfilingStats();
+
+	constructor(initialState: GameState, controllers: Record<string, TankController>, options?: SimulationOptions) {
+		this.debugFreeze = options?.debugFreeze ?? true;
+		this.profiling = options?.profiling ?? false;
 		this.state = cloneGameState(initialState);
 		this.controllers = { ...controllers };
 		this.refreshDerivedState();
+		this.allocateObservationBuffers();
 		this.resetControllers();
 	}
 
@@ -70,40 +164,226 @@ export class Simulation {
 				actions: {},
 				events: [],
 				records: [],
+				replayTankStates: {},
 			};
 		}
 
+		const profiling = this.profiling;
+		let t0 = 0,
+			t1 = 0,
+			t2 = 0,
+			t3 = 0,
+			t4 = 0,
+			t5 = 0,
+			t6 = 0;
+		if (profiling) t0 = performance.now();
+
+		// ── observation building ──
 		const observations: Record<string, TankObservation> = {};
 		const actions: Record<string, TankAction> = {};
+		const sharedViews = this.buildSharedObservationViews();
 		for (const tank of this.state.tanks) {
 			if (tank.destroyed) {
 				continue;
 			}
-			const observation = this.buildObservation(tank.id);
+			const observation = this.buildObservation(tank.id, sharedViews);
 			observations[tank.id] = observation;
+		}
+		if (profiling) t1 = performance.now();
+
+		// ── controller act() calls ──
+		for (const tank of this.state.tanks) {
+			if (tank.destroyed) {
+				continue;
+			}
 			const controller = this.controllers[tank.controllerId];
 			actions[tank.id] = this.sanitizeAction(
-				controller?.act(observation) ?? { ...NO_OP_ACTION, aimAngle: tank.aimAngle },
+				controller?.act(observations[tank.id]) ?? { ...NO_OP_ACTION, aimAngle: tank.aimAngle },
 				tank
 			);
 		}
+		if (profiling) t2 = performance.now();
 
+		// ── action resolution (movement, firing, projectiles, bombs) ──
 		const events: SimulationEvent[] = [];
 		const rng = new SeededRandom(this.state.rngState);
 		this.applyActions(actions, events, rng);
 		this.state.rngState = rng.getState();
+		if (profiling) t3 = performance.now();
+
+		// ── refresh derived state ──
 		this.refreshDerivedState();
+		if (profiling) t4 = performance.now();
+
+		// ── update status ──
 		this.updateStatus();
+		if (profiling) t5 = performance.now();
+
 		this.snapshotCache = null;
+
+		// ── build records ──
 		const records = this.buildRecords(observations, actions);
+		if (profiling) t6 = performance.now();
+
 		const completedTick = this.state.tick;
 		this.state.tick += 1;
+
+		if (profiling) {
+			const tEnd = performance.now();
+			const s = this.profilingStats;
+			s.ticks += 1;
+			s.observationNs += t1 - t0;
+			s.controllerNs += t2 - t1;
+			s.actionNs += t3 - t2;
+			s.refreshNs += t4 - t3;
+			s.statusNs += t5 - t4;
+			s.recordNs += t6 - t5;
+			s.totalNs += tEnd - t0;
+		}
+
 		return {
 			tick: completedTick,
 			actions,
 			events,
 			records,
+			replayTankStates: Object.fromEntries(
+				this.state.tanks.map((tank) => [
+					tank.id,
+					{
+						health: tank.health,
+						maxHealth: tank.maxHealth,
+						invulnerabilityTicksRemaining: tank.invulnerabilityTicksRemaining,
+						destroyed: tank.destroyed,
+					},
+				])
+			),
 		};
+	}
+
+	public printProfilingReport(): void {
+		const s = this.profilingStats;
+		if (s.ticks === 0) {
+			console.log('  No profiling data collected.');
+			return;
+		}
+		const pct = (v: number) => ((v / s.totalNs) * 100).toFixed(1);
+		const ms = (v: number) => v.toFixed(1);
+		console.log(`  Profiling over ${s.ticks} ticks (${ms(s.totalNs)} ms total):`);
+		console.log(`    Observation building: ${ms(s.observationNs)} ms (${pct(s.observationNs)}%)`);
+		console.log(`    Controller act():     ${ms(s.controllerNs)} ms (${pct(s.controllerNs)}%)`);
+		console.log(`    Action resolution:    ${ms(s.actionNs)} ms (${pct(s.actionNs)}%)`);
+		console.log(`    Refresh derived:      ${ms(s.refreshNs)} ms (${pct(s.refreshNs)}%)`);
+		console.log(`    Status update:        ${ms(s.statusNs)} ms (${pct(s.statusNs)}%)`);
+		console.log(`    Record building:      ${ms(s.recordNs)} ms (${pct(s.recordNs)}%)`);
+		console.log(`    Per tick avg:         ${(s.totalNs / s.ticks).toFixed(3)} ms`);
+	}
+
+	public resetProfiling(): void {
+		this.profilingStats = emptyProfilingStats();
+	}
+
+	private buildSharedObservationViews(): SharedObservationViews {
+		if (this.debugFreeze) {
+			// Legacy path: full deep-clone for mutation safety when freeze is on
+			return {
+				tick: this.state.tick,
+				arena: cloneJson(this.state.arena),
+				obstacles: cloneJson(this.state.obstacles),
+				projectiles: cloneJson(this.state.projectiles),
+				bombs: cloneJson(this.state.bombs),
+				playerTeam: cloneJson(this.state.tanks.filter((tank) => tank.team === 'player')),
+				enemyTeam: cloneJson(this.state.tanks.filter((tank) => tank.team === 'enemy')),
+			};
+		}
+
+		// Optimized path: typed copy into reusable scratch arrays
+		copyArena(this.state.arena, this.sharedArena);
+
+		const obstacles = this.state.obstacles;
+		this.ensureArrayCapacity(this.sharedObstacles, obstacles.length, blankObstacle);
+		for (let i = 0; i < obstacles.length; i++) {
+			copyObstacle(obstacles[i], this.sharedObstacles[i]);
+		}
+
+		const projectiles = this.state.projectiles;
+		this.ensureArrayCapacity(this.sharedProjectiles, projectiles.length, blankProjectile);
+		for (let i = 0; i < projectiles.length; i++) {
+			copyProjectile(projectiles[i], this.sharedProjectiles[i]);
+		}
+
+		const bombs = this.state.bombs;
+		this.ensureArrayCapacity(this.sharedBombs, bombs.length, blankBomb);
+		for (let i = 0; i < bombs.length; i++) {
+			copyBomb(bombs[i], this.sharedBombs[i]);
+		}
+
+		let pCount = 0,
+			eCount = 0;
+		for (const tank of this.state.tanks) {
+			if (tank.team === 'player') {
+				this.ensureArrayCapacity(this.sharedPlayerTeam, pCount + 1, blankTank);
+				copyTank(tank, this.sharedPlayerTeam[pCount++]);
+			} else {
+				this.ensureArrayCapacity(this.sharedEnemyTeam, eCount + 1, blankTank);
+				copyTank(tank, this.sharedEnemyTeam[eCount++]);
+			}
+		}
+
+		return {
+			tick: this.state.tick,
+			arena: this.sharedArena,
+			obstacles: this.sharedObstacles.slice(0, obstacles.length),
+			projectiles: this.sharedProjectiles.slice(0, projectiles.length),
+			bombs: this.sharedBombs.slice(0, bombs.length),
+			playerTeam: this.sharedPlayerTeam.slice(0, pCount),
+			enemyTeam: this.sharedEnemyTeam.slice(0, eCount),
+		};
+	}
+
+	/** Grow a preallocated array if needed (never shrink). */
+	private ensureArrayCapacity<T>(arr: T[], needed: number, factory: () => T): void {
+		while (arr.length < needed) {
+			arr.push(factory());
+		}
+	}
+
+	/** Preallocate one observation buffer per live tank (Fix 3). */
+	private allocateObservationBuffers(): void {
+		const maxEnemies = this.state.tanks.length;
+		const maxProjectiles = 32; // generous cap — grows if needed
+		const maxBombs = 16;
+		const maxObstacles = this.state.obstacles.length;
+
+		for (const tank of this.state.tanks) {
+			const selfBuf = blankTank();
+			const enemyBufs: TankStateView[] = [];
+			for (let i = 0; i < maxEnemies; i++) enemyBufs.push(blankTank());
+			const projBufs: ProjectileStateView[] = [];
+			for (let i = 0; i < maxProjectiles; i++) projBufs.push(blankProjectile());
+			const bombBufs: BombStateView[] = [];
+			for (let i = 0; i < maxBombs; i++) bombBufs.push(blankBomb());
+			const obstacleBufs: ObstacleStateView[] = [];
+			for (let i = 0; i < maxObstacles; i++) obstacleBufs.push(blankObstacle());
+			const arenaBuf = { width: 0, height: 0 };
+
+			this.obsBuffers.set(tank.id, {
+				obs: {
+					tick: 0,
+					self: selfBuf,
+					enemies: enemyBufs,
+					projectiles: projBufs,
+					bombs: bombBufs,
+					obstacles: obstacleBufs,
+					arena: arenaBuf,
+				},
+				selfBuf,
+				enemyBufs,
+				projBufs,
+				bombBufs,
+				obstacleBufs,
+				arenaBuf,
+			});
+		}
 	}
 
 	private resetControllers(): void {
@@ -125,18 +405,62 @@ export class Simulation {
 		};
 	}
 
-	private buildObservation(tankId: string): TankObservation {
+	private buildObservation(tankId: string, sharedViews: SharedObservationViews): TankObservation {
 		const self = this.requireTank(tankId);
-		const observation = {
-			tick: this.state.tick,
-			self: cloneJson(self),
-			enemies: cloneJson(this.state.tanks.filter((tank) => tank.team !== self.team)),
-			projectiles: cloneJson(this.state.projectiles),
-			bombs: cloneJson(this.state.bombs),
-			obstacles: cloneJson(this.state.obstacles),
-			arena: cloneJson(this.state.arena),
-		};
-		return freezeObservation(observation);
+
+		if (this.debugFreeze) {
+			// Legacy path: clone self, freeze entire observation for mutation safety.
+			const observation: TankObservation = {
+				tick: sharedViews.tick,
+				self: cloneJson(self),
+				enemies: self.team === 'player' ? sharedViews.enemyTeam : sharedViews.playerTeam,
+				projectiles: sharedViews.projectiles,
+				bombs: sharedViews.bombs,
+				obstacles: sharedViews.obstacles,
+				arena: sharedViews.arena,
+			};
+			return freezeObservation(observation);
+		}
+
+		// Optimized path: copy into preallocated buffer (Fix 3).
+		// Controllers MUST treat the returned observation as read-only and
+		// MUST NOT hold references to it across ticks.
+		const buf = this.obsBuffers.get(tankId);
+		if (!buf) throw new Error(`No observation buffer for tank: ${tankId}`);
+		buf.obs.tick = sharedViews.tick;
+		copyTank(self, buf.selfBuf);
+
+		const enemies = self.team === 'player' ? sharedViews.enemyTeam : sharedViews.playerTeam;
+		this.ensureArrayCapacity(buf.enemyBufs, enemies.length, blankTank);
+		for (let i = 0; i < enemies.length; i++) {
+			copyTank(enemies[i], buf.enemyBufs[i]);
+		}
+		buf.obs.enemies = buf.enemyBufs.slice(0, enemies.length);
+
+		const projs = sharedViews.projectiles;
+		this.ensureArrayCapacity(buf.projBufs, projs.length, blankProjectile);
+		for (let i = 0; i < projs.length; i++) {
+			copyProjectile(projs[i], buf.projBufs[i]);
+		}
+		buf.obs.projectiles = buf.projBufs.slice(0, projs.length);
+
+		const bombs = sharedViews.bombs;
+		this.ensureArrayCapacity(buf.bombBufs, bombs.length, blankBomb);
+		for (let i = 0; i < bombs.length; i++) {
+			copyBomb(bombs[i], buf.bombBufs[i]);
+		}
+		buf.obs.bombs = buf.bombBufs.slice(0, bombs.length);
+
+		const obstacles = sharedViews.obstacles;
+		this.ensureArrayCapacity(buf.obstacleBufs, obstacles.length, blankObstacle);
+		for (let i = 0; i < obstacles.length; i++) {
+			copyObstacle(obstacles[i], buf.obstacleBufs[i]);
+		}
+		buf.obs.obstacles = buf.obstacleBufs.slice(0, obstacles.length);
+
+		copyArena(sharedViews.arena, buf.arenaBuf);
+
+		return buf.obs;
 	}
 
 	private sanitizeAction(action: TankAction, tank: TankStateView): TankAction {
@@ -165,6 +489,9 @@ export class Simulation {
 			if (tank.destroyed) {
 				continue;
 			}
+			if (tank.invulnerabilityTicksRemaining > 0) {
+				tank.invulnerabilityTicksRemaining -= 1;
+			}
 			if (tank.shotCooldownTicks > 0) {
 				tank.shotCooldownTicks -= 1;
 			}
@@ -173,7 +500,11 @@ export class Simulation {
 			}
 			const action = actions[tank.id] ?? { ...NO_OP_ACTION, aimAngle: tank.aimAngle };
 			const targetAim = normalizeAngle(action.aimAngle);
-			tank.aimAngle = rotateAngleTowards(tank.aimAngle, targetAim, MAX_TURRET_ROTATION_RADIANS_PER_TICK);
+			tank.aimAngle = rotateAngleTowards(
+				tank.aimAngle,
+				targetAim,
+				BASE_MAX_TURRET_ROTATION_RADIANS_PER_TICK * this.state.rules.turretSpeedMultiplier
+			);
 			if (action.aimTarget) {
 				tank.aimTargetX = action.aimTarget.x;
 				tank.aimTargetY = action.aimTarget.y;
@@ -277,7 +608,7 @@ export class Simulation {
 			if (destroyedProjectileIds.has(projectile.id)) {
 				continue;
 			}
-			stepProjectile(projectile, this.state.arena, this.state.obstacles);
+			stepProjectile(projectile, this.state.arena, this.state.obstacles, this.state.rules.projectileBounces);
 			if (projectile.bounces > projectile.maxBounces) {
 				this.markProjectileDestroyed(projectile, destroyedProjectileIds, events, rng);
 			}
@@ -333,7 +664,7 @@ export class Simulation {
 			for (const tank of this.getProjectileTargets(projectile)) {
 				if (!tank.destroyed && projectileHitsTank(projectile, tank)) {
 					this.markProjectileDestroyed(projectile, destroyedProjectileIds, events, rng);
-					this.destroyTank(tank, events, rng);
+					this.applyDamage(tank, this.state.rules.projectileDamage, events, rng);
 					break;
 				}
 			}
@@ -376,8 +707,19 @@ export class Simulation {
 		});
 		for (const tank of this.getBombTargets(bomb)) {
 			if (!tank.destroyed && this.tankInBlast(tank, bomb)) {
-				this.destroyTank(tank, events, rng);
+				this.applyDamage(tank, this.state.rules.bombDamage, events, rng);
 			}
+		}
+	}
+
+	private applyDamage(tank: TankStateView, amount: number, events: SimulationEvent[], rng: SeededRandom): void {
+		if (tank.destroyed || amount <= 0 || tank.invulnerabilityTicksRemaining > 0) {
+			return;
+		}
+		tank.health = Math.max(0, tank.health - amount);
+		tank.invulnerabilityTicksRemaining = this.state.rules.invulnerabilityTicks;
+		if (tank.health <= 0) {
+			this.destroyTank(tank, events, rng);
 		}
 	}
 
@@ -386,17 +728,11 @@ export class Simulation {
 	}
 
 	private getProjectileTargets(projectile: ProjectileStateView): TankStateView[] {
-		if (projectile.team === 'enemy') {
-			return this.state.tanks.filter((tank) => tank.team === 'player');
-		}
-		return this.state.tanks;
+		return this.state.tanks.filter((tank) => tank.team !== projectile.team);
 	}
 
 	private getBombTargets(bomb: BombStateView): TankStateView[] {
-		if (bomb.team === 'enemy') {
-			return this.state.tanks.filter((tank) => tank.team === 'player');
-		}
-		return this.state.tanks;
+		return this.state.tanks.filter((tank) => tank.team !== bomb.team);
 	}
 
 	private markProjectileDestroyed(
@@ -424,6 +760,8 @@ export class Simulation {
 		if (tank.destroyed) {
 			return;
 		}
+		tank.health = 0;
+		tank.invulnerabilityTicksRemaining = 0;
 		tank.destroyed = true;
 		events.push({
 			type: 'tank-destroyed',
@@ -455,22 +793,35 @@ export class Simulation {
 	}
 
 	private calculateReward(observation: TankObservation, postStepTank: TankStateView): number {
-		let reward = 0;
-		if (!observation.self.destroyed && postStepTank.destroyed) {
-			reward -= 1;
+		let reward = -0.005;
+		const selfDamageTaken = Math.max(0, observation.self.health - postStepTank.health);
+		if (selfDamageTaken > 0) {
+			reward -= 0.3 * selfDamageTaken;
 		}
+		if (!observation.self.destroyed && postStepTank.destroyed) {
+			reward -= 2;
+		}
+		const opponentHealthBefore = observation.enemies
+			.filter((enemy) => !enemy.destroyed)
+			.reduce((total, enemy) => total + enemy.health, 0);
 		const livingOpponentsBefore = observation.enemies.filter((enemy) => !enemy.destroyed).length;
+		const opponentHealthAfter = this.state.tanks
+			.filter((tank) => tank.team !== observation.self.team && !tank.destroyed)
+			.reduce((total, tank) => total + tank.health, 0);
 		const livingOpponentsAfter = this.state.tanks.filter(
 			(tank) => tank.team !== observation.self.team && !tank.destroyed
 		).length;
+		if (opponentHealthAfter < opponentHealthBefore) {
+			reward += 0.3 * (opponentHealthBefore - opponentHealthAfter);
+		}
 		if (livingOpponentsAfter < livingOpponentsBefore) {
-			reward += livingOpponentsBefore - livingOpponentsAfter;
+			reward += 2 * (livingOpponentsBefore - livingOpponentsAfter);
 		}
 		if (this.state.status === 'player_win') {
-			reward += observation.self.team === 'player' ? 10 : -10;
+			reward += observation.self.team === 'player' ? 5 : -3;
 		}
 		if (this.state.status === 'enemy_win') {
-			reward += observation.self.team === 'enemy' ? 10 : -10;
+			reward += observation.self.team === 'enemy' ? 5 : -3;
 		}
 		return reward;
 	}

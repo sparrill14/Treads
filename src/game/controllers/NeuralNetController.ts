@@ -3,19 +3,31 @@ import type { MatchInit, MoveIntent, TankAction, TankController, TankObservation
 
 const ARENA_WIDTH = 1000;
 const ARENA_HEIGHT = 500;
-const MAX_ENEMIES = 3;
-const MAX_PROJECTILES = 5;
-const MAX_OBSTACLES = 3;
-const SELF_DIM = 11;
-const ENEMY_DIM = 5;
+const MAX_ENEMIES = 6;
+const MAX_PROJECTILES = 10;
+const MAX_OBSTACLES = 5;
+const MAX_BOMBS = 6;
+const SELF_DIM = 12;
+const ENEMY_DIM = 6;
 const PROJ_DIM = 5;
 const OBS_DIM = 4;
-const OBS_SIZE = SELF_DIM + MAX_ENEMIES * ENEMY_DIM + MAX_PROJECTILES * PROJ_DIM + MAX_OBSTACLES * OBS_DIM;
+const BOMB_DIM = 5;
+const SUMMARY_DIM = 6;
+const MAX_FUSE_TICKS = 360;
+const MAX_BLAST_RADIUS = 100;
+const OBS_SIZE =
+	SELF_DIM +
+	MAX_ENEMIES * ENEMY_DIM +
+	MAX_PROJECTILES * PROJ_DIM +
+	MAX_OBSTACLES * OBS_DIM +
+	MAX_BOMBS * BOMB_DIM +
+	SUMMARY_DIM;
 
 // Continuous action means: [move_signal, aim_signal, fire_signal, bomb_signal] in [-1, 1]
 const ACTION_DIM = 4;
-const FIRE_THRESHOLD = -0.2;
+const FIRE_THRESHOLD = 0.0;
 const BOMB_THRESHOLD = 0.8;
+const AIM_OFFSET_LIMIT = Math.PI / 18;
 
 const MOVE_INTENTS: MoveIntent[] = ['none', 'n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
 
@@ -115,8 +127,7 @@ export class NeuralNetController implements TankController {
 
 		const moveIdx = Math.max(0, Math.min(8, Math.round((moveSignal + 1) * 0.5 * 8)));
 
-		// Enemy-relative aim encoding: aim_signal=0 → pointed at nearest enemy
-		// aim_signal=±1 → pointed 180° away from enemy
+		// Enemy-relative aim encoding: aim_signal=0 points at nearest enemy.
 		const obs = this.lastObs;
 		let aimAngle: number;
 		if (obs) {
@@ -133,7 +144,7 @@ export class NeuralNetController implements TankController {
 					return dx * dx + dy * dy < bdx * bdx + bdy * bdy ? e : best;
 				});
 				const angleToEnemy = Math.atan2(nearest.y + nearest.size / 2 - sy, nearest.x + nearest.size / 2 - sx);
-				aimAngle = angleToEnemy + aimSignal * Math.PI;
+				aimAngle = angleToEnemy + aimSignal * AIM_OFFSET_LIMIT;
 			} else {
 				aimAngle = s.aimAngle;
 			}
@@ -162,6 +173,7 @@ export class NeuralNetController implements TankController {
 		result[idx + 5] = Math.min(obs.self.shotCooldownTicks / 300, 1);
 		result[idx + 6] = obs.self.activeAmmo / Math.max(obs.self.maxAmmo, 1);
 		result[idx + 7] = obs.self.maxAmmo / 5;
+		result[idx + 8] = obs.self.health / Math.max(obs.self.maxHealth, 1);
 
 		// Derived aim features
 		const sx = obs.self.x + obs.self.size / 2;
@@ -183,13 +195,13 @@ export class NeuralNetController implements TankController {
 			const aimAngle = obs.self.aimAngle;
 			const aimError = Math.atan2(Math.sin(aimAngle - angleToEnemy), Math.cos(aimAngle - angleToEnemy));
 			const arenaDiag = Math.sqrt(ARENA_WIDTH ** 2 + ARENA_HEIGHT ** 2);
-			result[idx + 8] = angleToEnemy / (2 * Math.PI) + 0.5;
-			result[idx + 9] = Math.min(distToEnemy / arenaDiag, 1.0);
-			result[idx + 10] = (aimError / Math.PI) * 0.5 + 0.5;
+			result[idx + 9] = angleToEnemy / (2 * Math.PI) + 0.5;
+			result[idx + 10] = Math.min(distToEnemy / arenaDiag, 1.0);
+			result[idx + 11] = (aimError / Math.PI) * 0.5 + 0.5;
 		} else {
-			result[idx + 8] = 0.5;
-			result[idx + 9] = 0.0;
-			result[idx + 10] = 0.5;
+			result[idx + 9] = 0.5;
+			result[idx + 10] = 0.0;
+			result[idx + 11] = 0.5;
 		}
 		idx += SELF_DIM;
 
@@ -202,6 +214,7 @@ export class NeuralNetController implements TankController {
 				result[idx + 2] = e.aimAngle / (2 * Math.PI);
 				result[idx + 3] = e.speed / 100;
 				result[idx + 4] = 0; // alive
+				result[idx + 5] = e.health / Math.max(e.maxHealth, 1);
 			}
 			idx += ENEMY_DIM;
 		}
@@ -241,6 +254,69 @@ export class NeuralNetController implements TankController {
 				result[idx + 3] = o.height / ARENA_HEIGHT;
 			}
 			idx += OBS_DIM;
+		}
+
+		// Bombs sorted by distance
+		const bombs = [...obs.bombs].sort((a, b) => {
+			const da = (a.x - sx) ** 2 + (a.y - sy) ** 2;
+			const db = (b.x - sx) ** 2 + (b.y - sy) ** 2;
+			return da - db;
+		});
+
+		for (let i = 0; i < MAX_BOMBS; i++) {
+			if (i < bombs.length) {
+				const b = bombs[i];
+				result[idx] = b.x / ARENA_WIDTH;
+				result[idx + 1] = b.y / ARENA_HEIGHT;
+				result[idx + 2] = Math.min(b.fuseTicksRemaining / MAX_FUSE_TICKS, 1.0);
+				result[idx + 3] = Math.min(b.blastRadius / MAX_BLAST_RADIUS, 1.0);
+				result[idx + 4] = b.team === 'enemy' ? 1 : 0;
+			}
+			idx += BOMB_DIM;
+		}
+
+		const arenaDiag = Math.sqrt(ARENA_WIDTH ** 2 + ARENA_HEIGHT ** 2);
+		result[idx] = Math.min(livingEnemies.length / MAX_ENEMIES, 1.0);
+
+		if (livingEnemies.length > 0) {
+			let farthestEnemyDistSq = 0;
+			for (const e of livingEnemies) {
+				const dx = e.x + e.size / 2 - sx;
+				const dy = e.y + e.size / 2 - sy;
+				const dSq = dx * dx + dy * dy;
+				if (dSq > farthestEnemyDistSq) farthestEnemyDistSq = dSq;
+			}
+			result[idx + 1] = Math.min(Math.sqrt(farthestEnemyDistSq) / arenaDiag, 1.0);
+		} else {
+			result[idx + 1] = 0;
+		}
+
+		result[idx + 2] = Math.min(obs.projectiles.length / MAX_PROJECTILES, 1.0);
+		if (obs.projectiles.length > 0) {
+			let farthestProjDistSq = 0;
+			for (const p of obs.projectiles) {
+				const dx = p.x - sx;
+				const dy = p.y - sy;
+				const dSq = dx * dx + dy * dy;
+				if (dSq > farthestProjDistSq) farthestProjDistSq = dSq;
+			}
+			result[idx + 3] = Math.min(Math.sqrt(farthestProjDistSq) / arenaDiag, 1.0);
+		} else {
+			result[idx + 3] = 0;
+		}
+
+		result[idx + 4] = Math.min(obs.bombs.length / MAX_BOMBS, 1.0);
+		if (obs.bombs.length > 0) {
+			let farthestBombDistSq = 0;
+			for (const b of obs.bombs) {
+				const dx = b.x - sx;
+				const dy = b.y - sy;
+				const dSq = dx * dx + dy * dy;
+				if (dSq > farthestBombDistSq) farthestBombDistSq = dSq;
+			}
+			result[idx + 5] = Math.min(Math.sqrt(farthestBombDistSq) / arenaDiag, 1.0);
+		} else {
+			result[idx + 5] = 0;
 		}
 
 		// Clamp to [0, 1]

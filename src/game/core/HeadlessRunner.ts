@@ -1,9 +1,9 @@
-import { createMatchBootstrap } from './MatchFactory';
-import { DatasetCollector } from './Dataset';
-import { ReplayRecorder } from './Replay';
-import { Simulation } from './Simulation';
-import type { DatasetSample, GameState, ReplayData, TankController } from './types';
 import type { LevelConfig } from '../LevelConfig';
+import { DatasetCollector } from './Dataset';
+import { createMatchBootstrap } from './MatchFactory';
+import { ReplayRecorder } from './Replay';
+import { Simulation, type SimulationOptions } from './Simulation';
+import type { DatasetSample, GameState, ReplayData, TankController } from './types';
 
 export interface HeadlessRunOptions {
 	levelConfig: LevelConfig;
@@ -13,6 +13,7 @@ export interface HeadlessRunOptions {
 	controllerOverrides?: Record<string, TankController>;
 	recordReplay?: boolean;
 	collectDataset?: boolean;
+	simulationOptions?: SimulationOptions;
 }
 
 export interface HeadlessRunResult {
@@ -30,7 +31,7 @@ export function runHeadlessMatch(options: HeadlessRunOptions): HeadlessRunResult
 		...bootstrap.controllers,
 		...(options.controllerOverrides ?? {}),
 	};
-	const simulation = new Simulation(bootstrap.initialState, controllers);
+	const simulation = new Simulation(bootstrap.initialState, controllers, options.simulationOptions);
 	const replayRecorder = options.recordReplay ? new ReplayRecorder(options.levelConfig, options.seed) : null;
 	const datasetCollector = options.collectDataset ? new DatasetCollector() : null;
 	for (let tick = 0; tick < options.ticks; tick++) {

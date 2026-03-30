@@ -65,8 +65,15 @@ export class GameCanvas {
 			currentState = this.simulation.getState();
 		}
 
+		// Once the match is terminal, stop accumulating interpolation time.
+		if (currentState.status !== 'running') {
+			this.accumulatorMs = 0;
+		}
+
+		const alpha = Math.max(0, Math.min(1, this.accumulatorMs / this.tickMs));
+
 		this.gameRenderer.updateVisuals(frameDelta / 1000);
-		this.gameRenderer.render(currentState, this.previousState, this.accumulatorMs / this.tickMs);
+		this.gameRenderer.render(currentState, this.previousState, alpha);
 		this.animationFrameID = requestAnimationFrame(this.gameLoop.bind(this));
 	}
 

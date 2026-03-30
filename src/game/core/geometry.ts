@@ -107,6 +107,7 @@ export function deriveAimTarget(
 
 export function getMoveDelta(move: MoveIntent, speed: number, tickSeconds: number): { dx: number; dy: number } {
 	const moveDistance = speed * tickSeconds;
+	const diagonalMoveDistance = moveDistance / Math.SQRT2;
 	switch (move) {
 		case 'n':
 			return { dx: 0, dy: -moveDistance };
@@ -117,13 +118,13 @@ export function getMoveDelta(move: MoveIntent, speed: number, tickSeconds: numbe
 		case 'w':
 			return { dx: -moveDistance, dy: 0 };
 		case 'ne':
-			return { dx: moveDistance, dy: -moveDistance };
+			return { dx: diagonalMoveDistance, dy: -diagonalMoveDistance };
 		case 'nw':
-			return { dx: -moveDistance, dy: -moveDistance };
+			return { dx: -diagonalMoveDistance, dy: -diagonalMoveDistance };
 		case 'se':
-			return { dx: moveDistance, dy: moveDistance };
+			return { dx: diagonalMoveDistance, dy: diagonalMoveDistance };
 		case 'sw':
-			return { dx: -moveDistance, dy: moveDistance };
+			return { dx: -diagonalMoveDistance, dy: diagonalMoveDistance };
 		default:
 			return { dx: 0, dy: 0 };
 	}

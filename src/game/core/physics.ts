@@ -1,39 +1,84 @@
-import { SIMULATION_TICK_SECONDS, type ArenaState, type ObstacleStateView, type ProjectileStateView, type TankStateView } from './types';
 import { projectileObstacleResponse, tankIntersectsBlast } from './geometry';
+import {
+	SIMULATION_TICK_SECONDS,
+	type ArenaState,
+	type ObstacleStateView,
+	type ProjectileStateView,
+	type TankStateView,
+} from './types';
 
-export function stepProjectile(projectile: ProjectileStateView, arena: ArenaState, obstacles: ObstacleStateView[]): void {
-	projectile.x += projectile.vx * SIMULATION_TICK_SECONDS;
-	projectile.y += projectile.vy * SIMULATION_TICK_SECONDS;
+const MIN_PROJECTILE_SUBSTEP_DISTANCE = 4;
 
-	if (projectile.x <= 0 || projectile.x > arena.width) {
-		projectile.vx = -projectile.vx;
-		projectile.bounces += 1;
-	}
+function clamp(value: number, min: number, max: number): number {
+	return Math.max(min, Math.min(value, max));
+}
 
-	if (projectile.y <= 0 || projectile.y > arena.height) {
-		projectile.vy = -projectile.vy;
-		projectile.bounces += 1;
-	}
+export function stepProjectile(
+	projectile: ProjectileStateView,
+	arena: ArenaState,
+	obstacles: ObstacleStateView[],
+	allowBounces: boolean
+): void {
+	const tickDx = projectile.vx * SIMULATION_TICK_SECONDS;
+	const tickDy = projectile.vy * SIMULATION_TICK_SECONDS;
+	const tickDistance = Math.hypot(tickDx, tickDy);
+	const substeps = Math.max(1, Math.ceil(tickDistance / MIN_PROJECTILE_SUBSTEP_DISTANCE));
 
-	for (const obstacle of obstacles) {
-		const response = projectileObstacleResponse(projectile, obstacle);
-		if (response.hit) {
-			projectile.x = response.x;
-			projectile.y = response.y;
-			projectile.vx = response.vx;
-			projectile.vy = response.vy;
+	for (let step = 0; step < substeps; step++) {
+		projectile.x += tickDx / substeps;
+		projectile.y += tickDy / substeps;
+
+		const minX = projectile.radius;
+		const maxX = arena.width - projectile.radius;
+		if (projectile.x <= minX || projectile.x >= maxX) {
+			if (!allowBounces) {
+				projectile.bounces = projectile.maxBounces + 1;
+				return;
+			}
+			projectile.x = clamp(projectile.x, minX, maxX);
+			projectile.vx = -projectile.vx;
 			projectile.bounces += 1;
+		}
+
+		const minY = projectile.radius;
+		const maxY = arena.height - projectile.radius;
+		if (projectile.y <= minY || projectile.y >= maxY) {
+			if (!allowBounces) {
+				projectile.bounces = projectile.maxBounces + 1;
+				return;
+			}
+			projectile.y = clamp(projectile.y, minY, maxY);
+			projectile.vy = -projectile.vy;
+			projectile.bounces += 1;
+		}
+
+		for (const obstacle of obstacles) {
+			const response = projectileObstacleResponse(projectile, obstacle);
+			if (response.hit) {
+				if (!allowBounces) {
+					projectile.bounces = projectile.maxBounces + 1;
+					return;
+				}
+				projectile.x = response.x;
+				projectile.y = response.y;
+				projectile.vx = response.vx;
+				projectile.vy = response.vy;
+				projectile.bounces += 1;
+			}
+		}
+
+		if (projectile.bounces > projectile.maxBounces) {
+			return;
 		}
 	}
 }
 
 export function projectileHitsTank(projectile: ProjectileStateView, tank: TankStateView): boolean {
-	return (
-		projectile.x > tank.x &&
-		projectile.x < tank.x + tank.size &&
-		projectile.y > tank.y &&
-		projectile.y < tank.y + tank.size
-	);
+	const closestX = clamp(projectile.x, tank.x, tank.x + tank.size);
+	const closestY = clamp(projectile.y, tank.y, tank.y + tank.size);
+	const dx = projectile.x - closestX;
+	const dy = projectile.y - closestY;
+	return dx * dx + dy * dy <= projectile.radius * projectile.radius;
 }
 
 export function predictProjectileWillHitTank(
@@ -44,7 +89,7 @@ export function predictProjectileWillHitTank(
 ): boolean {
 	const predictedProjectile: ProjectileStateView = { ...projectile };
 	while (predictedProjectile.bounces <= predictedProjectile.maxBounces) {
-		stepProjectile(predictedProjectile, arena, obstacles);
+		stepProjectile(predictedProjectile, arena, obstacles, true);
 		if (projectileHitsTank(predictedProjectile, tank)) {
 			return true;
 		}

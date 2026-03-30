@@ -22,21 +22,32 @@ CLI_RUNNER_PATH = os.path.join(
 ARENA_WIDTH = 1000.0
 ARENA_HEIGHT = 500.0
 
-# Observation dimensions:
+# Observation dimensions (Fix 2+3: expanded caps, bombs, summary features):
 # self: x, y, aimAngle, speed, destroyed, shotCooldown, activeAmmo, maxAmmo,
-#       angleToEnemy, distToEnemy, aimError (11)
-# up to 3 enemies: x, y, aimAngle, speed, destroyed (5 each = 15)
-# up to 5 projectiles: x, y, vx, vy, team_is_enemy (5 each = 25)
-# up to 3 obstacles: x, y, w, h (4 each = 12)
-# Total: 11 + 15 + 25 + 12 = 63
-MAX_ENEMIES = 3
-MAX_PROJECTILES = 5
-MAX_OBSTACLES = 3
-SELF_DIM = 11
-ENEMY_DIM = 5
+#       health_norm, angleToEnemy, distToEnemy, aimError (12)
+# up to 6 enemies: x, y, aimAngle, speed, destroyed, health_norm (6 each = 36)
+# up to 10 projectiles: x, y, vx, vy, team_is_enemy (5 each = 50)
+# up to 5 obstacles: x, y, w, h (4 each = 20)
+# up to 6 bombs: x, y, fuse_norm, blast_norm, team_is_enemy (5 each = 30)
+# 6 summary: enemy_count, enemy_farthest_dist, proj_count, bomb_count,
+#            closest_enemy_bomb_dist, farthest_proj_dist
+# Total: 12 + 36 + 50 + 20 + 30 + 6 = 154
+MAX_ENEMIES = 6       # Level 7 has 5 enemies; +1 buffer
+MAX_PROJECTILES = 10  # Level 8: 3×3=9 super shots; +1 buffer
+MAX_OBSTACLES = 5     # Level 7 has 4 obstacles; +1 buffer
+MAX_BOMBS = 6         # Level 6: 9 theoretical; cap at 6 live
+SELF_DIM = 12
+ENEMY_DIM = 6
 PROJ_DIM = 5
 OBS_DIM = 4
-OBS_SIZE = SELF_DIM + MAX_ENEMIES * ENEMY_DIM + MAX_PROJECTILES * PROJ_DIM + MAX_OBSTACLES * OBS_DIM
+BOMB_DIM = 5          # x, y, fuse_norm, blast_norm, team_is_enemy
+SUMMARY_DIM = 6       # entity count + farthest-dist summaries
+OBS_SIZE = (
+    SELF_DIM + MAX_ENEMIES * ENEMY_DIM + MAX_PROJECTILES * PROJ_DIM
+    + MAX_OBSTACLES * OBS_DIM + MAX_BOMBS * BOMB_DIM + SUMMARY_DIM
+)
+MAX_FUSE_TICKS = 360.0    # max fuse ticks for any bomb type
+MAX_BLAST_RADIUS = 100.0  # normalize blast radius by this value
 
 # Move intents mapping
 MOVE_INTENTS = ["none", "n", "s", "e", "w", "ne", "nw", "se", "sw"]
@@ -50,6 +61,10 @@ def _obstacle_center_distance_sq(o: Dict[str, Any], sx: float, sy: float) -> flo
     return (float(o["x"]) + float(o["width"]) / 2 - sx) ** 2 + (
         float(o["y"]) + float(o["height"]) / 2 - sy
     ) ** 2
+
+
+def _bomb_distance_sq(b: Dict[str, Any], sx: float, sy: float) -> float:
+    return (float(b["x"]) - sx) ** 2 + (float(b["y"]) - sy) ** 2
 
 
 class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
@@ -66,12 +81,9 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         self._buffer = ""
         self._init_data = None
         self._last_obs_raw = None
-        self._prev_enemy_health_count = 0
-        self._prev_distance_to_enemy = float("inf")
-        self._prev_aim_error = math.pi  # worst case: aimed opposite
-        self._prev_has_los = False  # line-of-sight to nearest enemy
-        self._prev_active_ammo = 0
-        self._prev_move_intent = "none"
+        self._prev_enemy_alive_count = 0
+        self._prev_enemy_health_total = 0
+        self._prev_self_health = 0
         self._step_count = 0
         self._save_replay = False
         self._persistent = True  # use persistent mode by default
@@ -192,6 +204,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         result[idx + 5] = min(self_data["shotCooldownTicks"] / 300.0, 1.0)
         result[idx + 6] = self_data["activeAmmo"] / max(self_data["maxAmmo"], 1)
         result[idx + 7] = self_data["maxAmmo"] / 5.0
+        result[idx + 8] = self_data["health"] / max(self_data["maxHealth"], 1)
 
         # Derived aim features (critical for learning)
         sx = self_data["x"] + self_data["size"] / 2
@@ -212,14 +225,14 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
                 math.sin(aim_angle - angle_to_enemy),
                 math.cos(aim_angle - angle_to_enemy),
             )
-            result[idx + 8] = angle_to_enemy / (2 * math.pi) + 0.5  # normalize to [0,1]
+            result[idx + 9] = angle_to_enemy / (2 * math.pi) + 0.5  # normalize to [0,1]
             arena_diag = math.sqrt(ARENA_WIDTH**2 + ARENA_HEIGHT**2)
-            result[idx + 9] = min(dist_to_enemy / arena_diag, 1.0)
-            result[idx + 10] = aim_error / math.pi * 0.5 + 0.5  # normalize to [0,1]
+            result[idx + 10] = min(dist_to_enemy / arena_diag, 1.0)
+            result[idx + 11] = aim_error / math.pi * 0.5 + 0.5  # normalize to [0,1]
         else:
-            result[idx + 8] = 0.5
-            result[idx + 9] = 0.0
-            result[idx + 10] = 0.5
+            result[idx + 9] = 0.5
+            result[idx + 10] = 0.0
+            result[idx + 11] = 0.5
         idx += SELF_DIM
 
         # Enemies (up to MAX_ENEMIES)
@@ -239,6 +252,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
                 result[idx + 2] = e["aimAngle"] / (2 * math.pi)
                 result[idx + 3] = e["speed"] / 100.0
                 result[idx + 4] = 0.0  # alive
+                result[idx + 5] = e["health"] / max(e["maxHealth"], 1)
             # else zeros (no enemy)
             idx += ENEMY_DIM
 
@@ -267,117 +281,94 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
                 result[idx + 3] = o["height"] / ARENA_HEIGHT
             idx += OBS_DIM
 
+        # Fix 2: Bombs (up to MAX_BOMBS, sorted by distance to self)
+        arena_diag = math.sqrt(ARENA_WIDTH ** 2 + ARENA_HEIGHT ** 2)
+        bombs = cast(List[Dict[str, Any]], obs_raw.get("bombs", []))
+        bombs.sort(key=lambda b: _bomb_distance_sq(b, sx, sy))
+        for i in range(MAX_BOMBS):
+            if i < len(bombs):
+                b = bombs[i]
+                result[idx] = b["x"] / ARENA_WIDTH
+                result[idx + 1] = b["y"] / ARENA_HEIGHT
+                result[idx + 2] = min(float(b["fuseTicksRemaining"]) / MAX_FUSE_TICKS, 1.0)
+                result[idx + 3] = min(float(b["blastRadius"]) / MAX_BLAST_RADIUS, 1.0)
+                result[idx + 4] = 1.0 if b["team"] == "enemy" else 0.0
+            idx += BOMB_DIM
+
+        # Fix 3: Summary features — entity counts + farthest-distance cues
+        alive_enemies = [e for e in obs_raw["enemies"] if not e["destroyed"]]
+        # [0] alive enemy count (normalized)
+        result[idx] = min(len(alive_enemies) / max(MAX_ENEMIES, 1), 1.0)
+        # [1] distance to farthest alive enemy (normalized)
+        if alive_enemies:
+            farthest_sq = max(
+                (e["x"] + e["size"] / 2 - sx) ** 2 + (e["y"] + e["size"] / 2 - sy) ** 2
+                for e in alive_enemies
+            )
+            result[idx + 1] = min(math.sqrt(farthest_sq) / arena_diag, 1.0)
+        else:
+            result[idx + 1] = 0.0
+        # [2] projectile count (normalized)
+        all_projs = cast(List[Dict[str, Any]], obs_raw.get("projectiles", []))
+        result[idx + 2] = min(len(all_projs) / max(MAX_PROJECTILES, 1), 1.0)
+        # [3] bomb count (normalized)
+        result[idx + 3] = min(len(bombs) / max(MAX_BOMBS, 1), 1.0)
+        # [4] closest enemy bomb distance (threat indicator; 1.0 = no threat)
+        enemy_bombs = [b for b in bombs if b.get("team") == "enemy"]
+        if enemy_bombs:
+            closest_bomb_sq = min(_bomb_distance_sq(b, sx, sy) for b in enemy_bombs)
+            result[idx + 4] = min(math.sqrt(closest_bomb_sq) / arena_diag, 1.0)
+        else:
+            result[idx + 4] = 1.0
+        # [5] farthest projectile distance (spread indicator)
+        if all_projs:
+            farthest_proj_sq = max(
+                (p["x"] - sx) ** 2 + (p["y"] - sy) ** 2 for p in all_projs
+            )
+            result[idx + 5] = min(math.sqrt(farthest_proj_sq) / arena_diag, 1.0)
+        else:
+            result[idx + 5] = 0.0
+        idx += SUMMARY_DIM
+
         return np.clip(result, 0.0, 1.0)
 
     def _compute_reward(self, obs_raw: Dict[str, Any], action_dict: Optional[Dict[str, Any]] = None, done_msg: Optional[Dict[str, Any]] = None) -> float:
-        """Compute step reward using potential-based shaping.
-
-        Potential-based shaping (γφ(s') - φ(s)) is guaranteed not to change
-        the optimal policy.  Two potentials are used:
-          φ_dist = -distance_to_nearest_enemy / arena_diag
-          φ_aim  = -|aim_error| / π
-        On top of that, sparse event rewards (kill/win/death) provide the
-        signal for what actually matters.
-        """
-        reward = 0.0
-        track_aim_threshold = math.radians(15)
-
-        # --- Kill event (primary sparse reward) ---
+        """Compute HP-based combat reward used by the modern training pipeline."""
+        reward = -0.001
         alive_enemies = sum(
             1 for e in obs_raw["enemies"] if not e["destroyed"]
         )
-        enemies_killed = self._prev_enemy_health_count - alive_enemies
+        enemy_health_total = sum(
+            float(e["health"]) for e in obs_raw["enemies"] if not e["destroyed"]
+        )
+        self_health = float(obs_raw["self"]["health"])
+
+        damage_dealt = self._prev_enemy_health_total - enemy_health_total
+        if damage_dealt > 0:
+            reward += 0.3 * damage_dealt
+
+        damage_taken = self._prev_self_health - self_health
+        if damage_taken > 0:
+            reward -= 0.3 * damage_taken
+
+        enemies_killed = self._prev_enemy_alive_count - alive_enemies
         if enemies_killed > 0:
-            reward += 30.0 * enemies_killed
-        self._prev_enemy_health_count = alive_enemies
+            reward += 2.0 * enemies_killed
 
-        # --- Potential-based shaping ---
-        enemies = [e for e in obs_raw["enemies"] if not e["destroyed"]]
-        if enemies:
-            sx = obs_raw["self"]["x"] + obs_raw["self"]["size"] / 2
-            sy = obs_raw["self"]["y"] + obs_raw["self"]["size"] / 2
-            nearest = min(
-                enemies,
-                key=lambda e: (e["x"] + e["size"] / 2 - sx) ** 2
-                + (e["y"] + e["size"] / 2 - sy) ** 2,
-            )
-            ex = nearest["x"] + nearest["size"] / 2
-            ey = nearest["y"] + nearest["size"] / 2
-            dist = math.sqrt((ex - sx) ** 2 + (ey - sy) ** 2)
-            arena_diag = math.sqrt(ARENA_WIDTH**2 + ARENA_HEIGHT**2)
+        self._prev_enemy_alive_count = alive_enemies
+        self._prev_enemy_health_total = enemy_health_total
+        self._prev_self_health = self_health
 
-            # LOS: compute first so we can scale other rewards by visibility
-            has_los = self._has_clear_los(obs_raw, sx, sy, ex, ey)
-            los_multiplier = 1.0 if has_los else 0.1
+        if done_msg is not None:
+            if done_msg.get("win"):
+                reward += 5.0
+            elif done_msg.get("loss"):
+                reward -= 3.0
+            elif done_msg.get("draw"):
+                reward -= 1.0
 
-            # Distance potential: reward approaching, penalise retreating
-            # Only fully rewarded when we have clear LOS (avoids misleading obstacle-blocked moves)
-            dist_delta = (self._prev_distance_to_enemy - dist) / arena_diag
-            reward += dist_delta * 5.0 * los_multiplier
-            self._prev_distance_to_enemy = dist
-
-            # Aim potential: reward reducing aim error (only meaningful with LOS)
-            aim_angle = obs_raw["self"]["aimAngle"]
-            to_enemy = math.atan2(ey - sy, ex - sx)
-            aim_error = abs(
-                math.atan2(
-                    math.sin(aim_angle - to_enemy),
-                    math.cos(aim_angle - to_enemy),
-                )
-            )
-            aim_delta = (self._prev_aim_error - aim_error) / math.pi
-            reward += aim_delta * 1.0 * los_multiplier
-            self._prev_aim_error = aim_error
-
-            # Sustained tracking reward when aim stays close to target.
-            if aim_error <= track_aim_threshold:
-                reward += 0.01
-
-            # Pursuit vs retreat shaping using threat proxy in this one-hit game.
-            under_threat = any(
-                (p.get("team") == "enemy")
-                and ((p["x"] - sx) ** 2 + (p["y"] - sy) ** 2 <= 140.0**2)
-                for p in obs_raw.get("projectiles", [])
-            )
-            if not under_threat and dist_delta > 0:
-                reward += dist_delta * 1.5
-            elif under_threat and dist_delta < 0:
-                reward += (-dist_delta) * 1.5
-
-            # Bullet proximity: dense signal bridging fire→hit gap.
-            friendly_projs = [
-                p for p in obs_raw.get("projectiles", [])
-                if p.get("team") != "enemy"
-            ]
-            if friendly_projs:
-                for p in friendly_projs:
-                    p_dist = math.sqrt((p["x"] - ex) ** 2 + (p["y"] - ey) ** 2)
-                    if p_dist < 200:
-                        reward += 0.3 * (1 - p_dist / 200)
-
-            # LOS rewards: strong bonus for gaining/maintaining clear line of sight
-            if has_los and not self._prev_has_los:
-                reward += 5.0  # gained LOS: big bonus
-            elif not has_los and self._prev_has_los:
-                reward -= 2.0  # lost LOS: penalty
-            if has_los:
-                reward += 0.05  # per-tick bonus for maintaining clear LOS
-            self._prev_has_los = has_los
-
-            # Bomb misuse penalty: discourage planting when no enemy is near useful blast range.
-            if action_dict and action_dict.get("plantBomb"):
-                bomb_kind = obs_raw["self"].get("bombType")
-                blast_radius = 80.0 if bomb_kind == "love" else 50.0
-                useful_radius = blast_radius * 2.0
-                if dist > useful_radius:
-                    reward -= 0.08
-
-        # Penalize movement jitter (frequent direction thrashing).
-        if action_dict:
-            move_now = action_dict.get("move", "none")
-            if move_now != "none" and self._prev_move_intent != "none" and move_now != self._prev_move_intent:
-                reward -= 0.01
-            self._prev_move_intent = move_now
+        if obs_raw["self"].get("destroyed"):
+            reward -= 2.0
 
         return reward
 
@@ -448,46 +439,10 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         self._last_obs_raw = obs_msg["observation"]
 
         # Init tracking
-        enemies = [
-            e for e in self._last_obs_raw["enemies"] if not e["destroyed"]
-        ]
-        self._prev_enemy_health_count = len(enemies)
-        if enemies:
-            sx = self._last_obs_raw["self"]["x"] + self._last_obs_raw["self"]["size"] / 2
-            sy = self._last_obs_raw["self"]["y"] + self._last_obs_raw["self"]["size"] / 2
-            self._prev_distance_to_enemy = min(
-                math.sqrt(
-                    (e["x"] + e["size"] / 2 - sx) ** 2
-                    + (e["y"] + e["size"] / 2 - sy) ** 2
-                )
-                for e in enemies
-            )
-            # Init aim error to enemy
-            nearest = min(
-                enemies,
-                key=lambda e: (e["x"] + e["size"] / 2 - sx) ** 2
-                + (e["y"] + e["size"] / 2 - sy) ** 2,
-            )
-            ex = nearest["x"] + nearest["size"] / 2
-            ey = nearest["y"] + nearest["size"] / 2
-            to_enemy = math.atan2(ey - sy, ex - sx)
-            aim_angle = self._last_obs_raw["self"]["aimAngle"]
-            self._prev_aim_error = abs(
-                math.atan2(
-                    math.sin(aim_angle - to_enemy),
-                    math.cos(aim_angle - to_enemy),
-                )
-            )
-            self._prev_has_los = self._has_clear_los(
-                self._last_obs_raw, sx, sy, ex, ey
-            )
-        else:
-            self._prev_distance_to_enemy = 0.0
-            self._prev_aim_error = 0.0
-            self._prev_has_los = False
-
-        self._prev_active_ammo = self._last_obs_raw["self"]["activeAmmo"]
-        self._prev_move_intent = "none"
+        enemies = [e for e in self._last_obs_raw["enemies"] if not e["destroyed"]]
+        self._prev_enemy_alive_count = len(enemies)
+        self._prev_enemy_health_total = sum(float(e["health"]) for e in enemies)
+        self._prev_self_health = float(self._last_obs_raw["self"]["health"])
 
         return self._normalize_obs(self._last_obs_raw), {}
 
@@ -521,16 +476,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         msg = self._read_message()
 
         if msg["type"] == "result":
-            # Match ended — the terminal tick had no observation, so
-            # _compute_reward was never called.  Account for any kills
-            # that happened on this final tick.
-            reward = 0.0
-            if msg["win"]:
-                # On win, all previously-alive enemies were killed this tick
-                reward += 30.0 * self._prev_enemy_health_count
-                reward += 15.0  # win bonus
-            elif msg["loss"]:
-                reward -= 1.0  # small death penalty
+            reward = self._compute_reward(self._last_obs_raw, done_msg=msg) if self._last_obs_raw is not None else 0.0
             # Use last obs
             assert self._last_obs_raw is not None
             obs = self._normalize_obs(self._last_obs_raw)
@@ -547,7 +493,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         assert self._last_obs_raw is not None
         reward = self._compute_reward(self._last_obs_raw, action_dict=action_dict)
         if done:
-            reward -= 1.0  # small death penalty
+            reward -= 2.0
 
         obs = self._normalize_obs(self._last_obs_raw)
 

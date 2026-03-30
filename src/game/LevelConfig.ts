@@ -29,10 +29,20 @@ export interface PlayerConfig {
 	y: number;
 }
 
+export interface MatchRulesConfig {
+	tankHitPoints?: number;
+	projectileDamage?: number;
+	bombDamage?: number;
+	invulnerabilityTicks?: number;
+	projectileBounces?: boolean;
+	turretSpeedMultiplier?: number;
+}
+
 export interface LevelConfig {
 	obstacles: ObstacleConfig[];
 	enemies: EnemyConfig[];
 	player: PlayerConfig;
+	rules?: MatchRulesConfig;
 }
 
 export const LEVEL_CONFIGS: LevelConfig[] = [

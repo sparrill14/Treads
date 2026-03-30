@@ -1,13 +1,7 @@
-import { predictProjectileWillHitTank } from '../core/physics';
+import { predictProjectileWillHitTank, stepProjectile } from '../core/physics';
 import { SeededRandom } from '../core/prng';
+import type { ArenaState, BombStateView, ObstacleStateView, ProjectileStateView, TankStateView } from '../core/types';
 import { MinPriorityQueue } from './MinPriorityQueue';
-import type {
-	ArenaState,
-	BombStateView,
-	ObstacleStateView,
-	ProjectileStateView,
-	TankStateView,
-} from '../core/types';
 
 interface GridNode {
 	x: number;
@@ -24,11 +18,15 @@ export type NavigationMode = 'simple' | 'astar' | 'astar-avoidance';
 
 export class NavigationPlanner {
 	private readonly gridCellWidth = 30;
+	private readonly projectileDangerHorizonTicks = 24;
 	private readonly gridXLength: number;
 	private readonly gridYLength: number;
 	private readonly grid: GridNode[][];
 
-	constructor(private arena: ArenaState, private obstacles: ObstacleStateView[]) {
+	constructor(
+		private arena: ArenaState,
+		private obstacles: ObstacleStateView[]
+	) {
 		this.gridXLength = Math.floor(arena.width / this.gridCellWidth);
 		this.gridYLength = Math.floor(arena.height / this.gridCellWidth);
 		this.grid = [];
@@ -72,7 +70,9 @@ export class NavigationPlanner {
 		const start = this.getNodeFromTank(currentTank);
 		const target = this.getNodeFromTank(targetTank);
 		const getDestination = (): GridNode =>
-			closeApproach ? this.getRandomNodeWithinRadius(target, aggressionFactor, rng) : this.getRandomNodeInRadius(target, aggressionFactor, rng);
+			closeApproach
+				? this.getRandomNodeWithinRadius(target, aggressionFactor, rng)
+				: this.getRandomNodeInRadius(target, aggressionFactor, rng);
 		if (mode === 'simple') {
 			const destination = getDestination();
 			return this.findSimplePath(start, destination).map((node) => ({ x: node.x, y: node.y }));
@@ -121,8 +121,14 @@ export class NavigationPlanner {
 	}
 
 	private getNodeFromTank(tank: TankStateView): GridNode {
-		const xCoordinate = Math.max(0, Math.min(Math.floor((tank.x + tank.size / 2) / this.gridCellWidth), this.gridXLength - 1));
-		const yCoordinate = Math.max(0, Math.min(Math.floor((tank.y + tank.size / 2) / this.gridCellWidth), this.gridYLength - 1));
+		const xCoordinate = Math.max(
+			0,
+			Math.min(Math.floor((tank.x + tank.size / 2) / this.gridCellWidth), this.gridXLength - 1)
+		);
+		const yCoordinate = Math.max(
+			0,
+			Math.min(Math.floor((tank.y + tank.size / 2) / this.gridCellWidth), this.gridYLength - 1)
+		);
 		return this.grid[xCoordinate][yCoordinate];
 	}
 
@@ -207,8 +213,7 @@ export class NavigationPlanner {
 	): GridNode {
 		for (const projectile of projectiles) {
 			if (predictProjectileWillHitTank(projectile, currentTank, this.arena, this.obstacles)) {
-				const node = this.getNodeFromPoint(projectile.x, projectile.y);
-				this.markDangerous(node.x, node.y, 1);
+				this.markProjectileDangerTrail(projectile);
 			}
 		}
 		for (const bomb of bombs) {
@@ -232,6 +237,18 @@ export class NavigationPlanner {
 			return this.getRandomNodeInRadius(target, radius, rng);
 		}
 		return rng.pick(candidates);
+	}
+
+	private markProjectileDangerTrail(projectile: ProjectileStateView): void {
+		const simulated: ProjectileStateView = { ...projectile };
+		for (let tick = 0; tick < this.projectileDangerHorizonTicks; tick++) {
+			if (simulated.bounces > simulated.maxBounces) {
+				break;
+			}
+			const node = this.getNodeFromPoint(simulated.x, simulated.y);
+			this.markDangerous(node.x, node.y, 1);
+			stepProjectile(simulated, this.arena, this.obstacles, true);
+		}
 	}
 
 	private markDangerous(centerX: number, centerY: number, buffer: number): void {

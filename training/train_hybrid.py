@@ -36,6 +36,14 @@ ROLLOUT_WORKER_PATH = os.path.join(
     os.path.dirname(__file__), "..", ".training-dist", "training", "rollout-worker.js"
 )
 
+# ---- Curriculum configuration ----
+DEFAULT_CURRICULUM: List[Dict[str, Any]] = [
+    {"name": "Phase 1 (target practice)", "scenario_ids": [111, 112, 113], "advance_after_episodes": 1500, "required_win_rate": 0.40},
+    {"name": "Phase 2 (live fire fundamentals)", "scenario_ids": [121, 122, 123], "advance_after_episodes": 4000, "required_win_rate": 0.40},
+    {"name": "Phase 3 (bounce and bombs)", "scenario_ids": [301, 302, 303], "advance_after_episodes": 9000, "required_win_rate": 0.40},
+    {"name": "Phase 4 (full game)", "scenario_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9], "advance_after_episodes": None, "required_win_rate": 0.40},
+]
+
 
 class HybridTrainer:
     """Orchestrates hybrid TS rollout collection + Python PPO training."""
@@ -43,6 +51,7 @@ class HybridTrainer:
     def __init__(
         self,
         levels: Optional[List[int]] = None,
+        curriculum: Optional[List[Dict[str, Any]]] = None,
         n_steps: int = 4096,
         batch_size: int = 512,
         n_epochs: int = 10,
@@ -58,7 +67,15 @@ class HybridTrainer:
         replay_episode_interval: int = 250,
         seed: int = 42,
     ) -> None:
-        self.levels = levels or [1]
+        self._explicit_levels = levels is not None
+        self.curriculum: List[Dict[str, Any]] = curriculum or DEFAULT_CURRICULUM
+        self.current_phase_index = 0
+        self.phase_episode_wins: List[int] = []
+        self.phase_start_episode = 0
+        if self._explicit_levels:
+            self.levels: List[int] = list(levels)  # type: ignore[arg-type]
+        else:
+            self.levels = list(self.curriculum[0]["scenario_ids"])
         self.n_steps = n_steps
         self.gamma = gamma
         self.gae_lambda = gae_lambda
@@ -161,6 +178,35 @@ class HybridTrainer:
         ready = self._read_msg()
         assert ready["type"] == "ready", f"Expected ready, got {ready}"
 
+    def _get_curriculum_phase(self) -> Dict[str, Any]:
+        return self.curriculum[self.current_phase_index]
+
+    def _get_curriculum_levels(self) -> List[int]:
+        return list(self._get_curriculum_phase()["scenario_ids"])
+
+    def _phase_recent_win_rate(self) -> float:
+        if not self.phase_episode_wins:
+            return 0.0
+        window = self.phase_episode_wins[-500:]
+        return float(np.mean(window))
+
+    def _maybe_advance_curriculum(self) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], float]]:
+        if self._explicit_levels or self.current_phase_index >= len(self.curriculum) - 1:
+            return None
+        current = self._get_curriculum_phase()
+        advance_after = current.get("advance_after_episodes")
+        if advance_after is None or self.total_episodes < int(advance_after):
+            return None
+        win_rate = self._phase_recent_win_rate()
+        if win_rate < float(current.get("required_win_rate", 0.40)):
+            return None
+        previous = current
+        self.current_phase_index += 1
+        self.levels = self._get_curriculum_levels()
+        self.phase_episode_wins = []
+        self.phase_start_episode = self.total_episodes
+        return previous, self._get_curriculum_phase(), win_rate
+
     def _send_msg(self, msg: Dict[str, Any]) -> None:
         """Send JSON message to worker."""
         assert self.worker is not None and self.worker.stdin is not None
@@ -215,21 +261,21 @@ class HybridTrainer:
         if not breakdowns:
             return 0.0, 0.0, 0.0
 
-        terminal_keys = ["kill", "terminalWin", "terminalLoss"]
-        terminal_abs = 0.0
+        combat_keys = ["hit", "hurt", "kill", "death", "terminalWin", "terminalLoss", "timeout"]
+        combat_abs = 0.0
         shaping_abs = 0.0
         for b in breakdowns:
             for key, value in b.items():
                 val = abs(float(value))
-                if key in terminal_keys:
-                    terminal_abs += val
+                if key in combat_keys:
+                    combat_abs += val
                 else:
                     shaping_abs += val
 
-        total_abs = terminal_abs + shaping_abs
+        total_abs = combat_abs + shaping_abs
         if total_abs <= 1e-8:
             return 0.0, 0.0, 0.0
-        return terminal_abs * 100.0 / total_abs, shaping_abs * 100.0 / total_abs, total_abs
+        return combat_abs * 100.0 / total_abs, shaping_abs * 100.0 / total_abs, total_abs
 
     def _populate_buffer(self, rollout: Dict[str, Any]) -> None:
         """Populate SB3's RolloutBuffer from worker rollout data."""
@@ -272,6 +318,21 @@ class HybridTrainer:
         self.episode_wins.extend(ep_wins)
         self.episode_levels.extend(ep_levels)
         self.episode_reward_breakdowns.extend(ep_breakdowns)
+        if not self._explicit_levels:
+            self.phase_episode_wins.extend(ep_wins)
+
+        for offset, ep_reward in enumerate(ep_rewards):
+            absolute_episode = self.total_episodes + offset + 1
+            breakdown = cast(Dict[str, float], ep_breakdowns[offset] if offset < len(ep_breakdowns) else {})
+            scenario_id = ep_levels[offset] if offset < len(ep_levels) else -1
+            win = ep_wins[offset] if offset < len(ep_wins) else 0
+            print(
+                f"  Episode {absolute_episode} | Scenario {scenario_id} | Win={win} | Reward={float(ep_reward):.3f} | "
+                f"tick={float(breakdown.get('tick', 0.0)):.3f} hit={float(breakdown.get('hit', 0.0)):.3f} "
+                f"hurt={float(breakdown.get('hurt', 0.0)):.3f} kill={float(breakdown.get('kill', 0.0)):.3f} "
+                f"death={float(breakdown.get('death', 0.0)):.3f} winR={float(breakdown.get('terminalWin', 0.0)):.3f} "
+                f"lossR={float(breakdown.get('terminalLoss', 0.0)):.3f} timeout={float(breakdown.get('timeout', 0.0)):.3f}"
+            )
         self.total_episodes += len(ep_rewards)
 
         if len(self.episode_rewards) > 0:
@@ -283,14 +344,13 @@ class HybridTrainer:
             elapsed = time.time() - self.start_time
             steps_per_sec = self.total_timesteps / max(elapsed, 1)
 
-            # Per-level win rates
             level_stats = ""
             if len(self.levels) > 1:
                 parts: List[str] = []
                 for lvl in sorted(set(recent_levels)):
                     lvl_wins = [w for w, l in zip(recent_wins, recent_levels) if l == lvl]
                     if lvl_wins:
-                        parts.append(f"L{lvl}:{np.mean(lvl_wins):.2f}")
+                        parts.append(f"S{lvl}:{np.mean(lvl_wins):.2f}")
                 level_stats = " | " + " ".join(parts)
 
             print(
@@ -305,7 +365,7 @@ class HybridTrainer:
 
             if self.episode_reward_breakdowns:
                 recent_breakdowns = self.episode_reward_breakdowns[-50:]
-                keys = ["distance", "aim", "trackAim", "pursuit", "retreat", "jitter", "badBomb", "terminalWin", "terminalLoss"]
+                keys = ["tick", "hit", "hurt", "kill", "death", "terminalWin", "terminalLoss", "timeout"]
                 summary: List[str] = []
                 for key in keys:
                     vals = [float(b.get(key, 0.0)) for b in recent_breakdowns]
@@ -322,11 +382,10 @@ class HybridTrainer:
 
         csv_file: TextIO = open(log_path, "w", newline="")
         csv_writer = csv.writer(csv_file)
-        level_cols = [f"winrate_L{lvl}" for lvl in self.levels]
         csv_writer.writerow([
-            "iteration", "timesteps", "episodes", "avg_reward_50",
-            "avg_winrate_50", *level_cols,
-            "avg_dist_50", "avg_aim_50", "avg_track_50", "avg_pursuit_50", "avg_retreat_50", "avg_jitter_50", "avg_bad_bomb_50",
+            "iteration", "timesteps", "episodes", "curriculum_phase", "active_scenarios", "phase_recent_winrate_500",
+            "avg_reward_50", "avg_winrate_50",
+            "avg_tick_50", "avg_hit_50", "avg_hurt_50", "avg_kill_50", "avg_death_50", "avg_terminal_win_50", "avg_terminal_loss_50", "avg_timeout_50",
             "steps_per_sec", "elapsed_sec"
         ])
 
@@ -335,6 +394,8 @@ class HybridTrainer:
         try:
             while self.total_episodes < target_episodes and self.total_timesteps < max_timesteps:
                 iteration += 1
+
+                curr_phase_name = self._get_curriculum_phase()["name"] if not self._explicit_levels else "Explicit levels"
 
                 # 1. Send current weights to worker
                 t0 = time.perf_counter()
@@ -389,44 +450,54 @@ class HybridTrainer:
                         f"buffer={t_buffer:.2f}s train={t_train:.2f}s"
                     )
 
-                # Compute per-level win rates for CSV
-                recent_wins_50 = self.episode_wins[-50:]
-                recent_levels_50 = self.episode_levels[-50:]
-                level_winrates: List[str] = []
-                for lvl in self.levels:
-                    lvl_wins = [w for w, l in zip(recent_wins_50, recent_levels_50) if l == lvl]
-                    level_winrates.append(f"{np.mean(lvl_wins):.3f}" if lvl_wins else "")
-
                 if self.episode_reward_breakdowns:
                     recent_breakdowns = self.episode_reward_breakdowns[-50:]
-                    avg_dist = np.mean([float(b.get("distance", 0.0)) for b in recent_breakdowns])
-                    avg_aim = np.mean([float(b.get("aim", 0.0)) for b in recent_breakdowns])
-                    avg_track = np.mean([float(b.get("trackAim", 0.0)) for b in recent_breakdowns])
-                    avg_pursuit = np.mean([float(b.get("pursuit", 0.0)) for b in recent_breakdowns])
-                    avg_retreat = np.mean([float(b.get("retreat", 0.0)) for b in recent_breakdowns])
-                    avg_jitter = np.mean([float(b.get("jitter", 0.0)) for b in recent_breakdowns])
-                    avg_bad_bomb = np.mean([float(b.get("badBomb", 0.0)) for b in recent_breakdowns])
+                    avg_tick = np.mean([float(b.get("tick", 0.0)) for b in recent_breakdowns])
+                    avg_hit = np.mean([float(b.get("hit", 0.0)) for b in recent_breakdowns])
+                    avg_hurt = np.mean([float(b.get("hurt", 0.0)) for b in recent_breakdowns])
+                    avg_kill = np.mean([float(b.get("kill", 0.0)) for b in recent_breakdowns])
+                    avg_death = np.mean([float(b.get("death", 0.0)) for b in recent_breakdowns])
+                    avg_terminal_win = np.mean([float(b.get("terminalWin", 0.0)) for b in recent_breakdowns])
+                    avg_terminal_loss = np.mean([float(b.get("terminalLoss", 0.0)) for b in recent_breakdowns])
+                    avg_timeout = np.mean([float(b.get("timeout", 0.0)) for b in recent_breakdowns])
                 else:
-                    avg_dist = avg_aim = avg_track = avg_pursuit = avg_retreat = avg_jitter = avg_bad_bomb = 0.0
+                    avg_tick = avg_hit = avg_hurt = avg_kill = avg_death = avg_terminal_win = avg_terminal_loss = avg_timeout = 0.0
 
                 csv_writer.writerow([
                     iteration,
                     self.total_timesteps,
                     self.total_episodes,
+                    curr_phase_name,
+                    ",".join(str(l) for l in self.levels),
+                    f"{self._phase_recent_win_rate():.3f}" if not self._explicit_levels else "",
                     f"{avg_reward:.3f}" if self.episode_rewards else "0",
                     f"{avg_winrate:.3f}" if self.episode_wins else "0",
-                    *level_winrates,
-                    f"{avg_dist:.3f}",
-                    f"{avg_aim:.3f}",
-                    f"{avg_track:.3f}",
-                    f"{avg_pursuit:.3f}",
-                    f"{avg_retreat:.3f}",
-                    f"{avg_jitter:.3f}",
-                    f"{avg_bad_bomb:.3f}",
+                    f"{avg_tick:.3f}",
+                    f"{avg_hit:.3f}",
+                    f"{avg_hurt:.3f}",
+                    f"{avg_kill:.3f}",
+                    f"{avg_death:.3f}",
+                    f"{avg_terminal_win:.3f}",
+                    f"{avg_terminal_loss:.3f}",
+                    f"{avg_timeout:.3f}",
                     f"{steps_per_sec:.0f}",
                     f"{elapsed:.1f}",
                 ])
                 csv_file.flush()
+
+                phase_transition = self._maybe_advance_curriculum()
+                if phase_transition is not None:
+                    previous_phase, next_phase, trigger_win_rate = phase_transition
+                    recent_breakdowns = self.episode_reward_breakdowns[-50:]
+                    summary_parts: List[str] = []
+                    for key in ["tick", "hit", "hurt", "kill", "death", "terminalWin", "terminalLoss", "timeout"]:
+                        vals = [float(b.get(key, 0.0)) for b in recent_breakdowns]
+                        summary_parts.append(f"{key}={np.mean(vals):.3f}")
+                    print(
+                        f"\n*** Curriculum phase transition at episode {self.total_episodes}: "
+                        f"{previous_phase['name']} -> {next_phase['name']} | trigger win rate={trigger_win_rate:.3f} ***"
+                    )
+                    print("  RewardBreakdown(trigger window): " + " ".join(summary_parts) + "\n")
 
                 # 7. Save best model
                 if len(self.episode_rewards) >= 20 and avg_winrate > self.best_win_rate:
@@ -449,21 +520,25 @@ class HybridTrainer:
                 all_terminal_pct, all_shaping_pct, _ = self._reward_source_percentages(self.episode_reward_breakdowns)
                 late_breakdowns = self.episode_reward_breakdowns[-500:]
                 late_terminal_pct, late_shaping_pct, _ = self._reward_source_percentages(late_breakdowns)
+                all_tick_abs = sum(abs(float(b.get("tick", 0.0))) for b in self.episode_reward_breakdowns)
+                all_abs = sum(sum(abs(float(v)) for v in b.values()) for b in self.episode_reward_breakdowns)
+                tick_share = (all_tick_abs * 100.0 / all_abs) if all_abs > 1e-8 else 0.0
 
                 print(
                     "RewardSource(All): "
-                    f"terminal+kill={all_terminal_pct:.1f}% "
-                    f"shaping={all_shaping_pct:.1f}%"
+                    f"combat+terminal={all_terminal_pct:.1f}% "
+                    f"other={all_shaping_pct:.1f}%"
                 )
                 print(
                     "RewardSource(Late500): "
-                    f"terminal+kill={late_terminal_pct:.1f}% "
-                    f"shaping={late_shaping_pct:.1f}%"
+                    f"combat+terminal={late_terminal_pct:.1f}% "
+                    f"other={late_shaping_pct:.1f}%"
                 )
-                if late_shaping_pct > 30.0:
+                print(f"TickPenaltyShare(All): {tick_share:.1f}%")
+                if tick_share > 10.0:
                     print(
-                        "WARNING: Late-training shaping reward share is >30%; "
-                        "consider further reducing dense shaping weights."
+                        "WARNING: Tick penalty exceeds 10% of total absolute reward; "
+                        "consider reducing the per-tick penalty further."
                     )
 
             csv_file.close()
@@ -499,7 +574,7 @@ class HybridTrainer:
 def train() -> None:
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--levels", type=str, default="1", help="Comma-separated level numbers")
+    parser.add_argument("--levels", type=str, default="", help="Optional comma-separated level numbers; omit to use curriculum")
     parser.add_argument("--timesteps", type=int, default=20_000_000)
     parser.add_argument("--target-episodes", type=int, default=10_000, help="Stop when this many episodes are collected")
     parser.add_argument("--load-model", type=str, default="", help="Optional .zip model path to resume from")
@@ -514,7 +589,7 @@ def train() -> None:
     parser.add_argument("--clip-range", type=float, default=0.10, help="PPO clip range (default: 0.10)")
     args = parser.parse_args()
 
-    levels = [int(x) for x in args.levels.split(",")]
+    levels = [int(x) for x in args.levels.split(",") if x.strip()] if args.levels else None
 
     trainer = HybridTrainer(
         levels=levels,
@@ -534,9 +609,11 @@ def train() -> None:
     )
 
     print(f"Starting hybrid training (rollout in TypeScript, PPO in Python)")
-    print(f"Curriculum levels: {trainer.levels}")
+    if levels is None:
+        print(f"Initial curriculum: {trainer.levels} ({trainer.curriculum[0]['name']})")
+    else:
+        print(f"Explicit scenarios: {trainer.levels} (curriculum disabled)")
     print(f"Gamma: {args.gamma} | EntCoef: {args.ent_coef} | MaxTicks: {args.max_ticks} | ClipRange: {args.clip_range}")
-    print("Inference timing parity: training uses a 1-tick delayed action application to match browser async ONNX inference.")
     print(f"Rollout worker: {ROLLOUT_WORKER_PATH}")
     trainer.train(target_episodes=args.target_episodes, max_timesteps=args.timesteps)
 
