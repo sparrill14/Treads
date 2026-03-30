@@ -18,14 +18,18 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
+import { computeGunBarrelEnd } from '../src/game/core/geometry';
 import { createDefaultControllers, createInitialGameState } from '../src/game/core/MatchFactory';
+import { predictProjectileWillHitTank } from '../src/game/core/physics';
 import { ReplayRecorder } from '../src/game/core/Replay';
 import { Simulation } from '../src/game/core/Simulation';
+import { getProjectileSpec } from '../src/game/core/specs';
 import type { DeepReadonly } from '../src/game/core/stateUtils';
 import type {
 	GameState,
 	MatchInit,
 	MoveIntent,
+	ProjectileStateView,
 	TankAction,
 	TankController,
 	TankObservation,
@@ -67,6 +71,9 @@ const DEATH_REWARD = -2.0;
 const TERMINAL_WIN_REWARD = 5.0;
 const TERMINAL_LOSS_REWARD = -3.0;
 const TIMEOUT_REWARD = -1.0;
+const WASTED_SHOT_PENALTY = -0.05;
+const AIM_JITTER_PENALTY = -0.002;
+const APPROACH_REWARD = 0.0005;
 const MAX_FUSE_TICKS = 360.0; // Max fuse ticks for any bomb type
 const MAX_BLAST_RADIUS = 100.0; // Normalize blast radius by this value
 
@@ -412,6 +419,8 @@ interface RewardTracker {
 	prevEnemyAliveCount: number;
 	prevEnemyHealthTotal: number;
 	prevSelfHealth: number;
+	prevAimAngle: number;
+	prevEnemyDistSq: number;
 }
 
 interface RewardBreakdown {
@@ -423,6 +432,9 @@ interface RewardBreakdown {
 	terminalWin: number;
 	terminalLoss: number;
 	timeout: number;
+	wastedShot: number;
+	aimJitter: number;
+	approach: number;
 }
 
 function createRewardBreakdown(): RewardBreakdown {
@@ -435,6 +447,9 @@ function createRewardBreakdown(): RewardBreakdown {
 		terminalWin: 0,
 		terminalLoss: 0,
 		timeout: 0,
+		wastedShot: 0,
+		aimJitter: 0,
+		approach: 0,
 	};
 }
 
@@ -447,6 +462,9 @@ function mergeRewardBreakdown(target: RewardBreakdown, add: RewardBreakdown): vo
 	target.terminalWin += add.terminalWin;
 	target.terminalLoss += add.terminalLoss;
 	target.timeout += add.timeout;
+	target.wastedShot += add.wastedShot;
+	target.aimJitter += add.aimJitter;
+	target.approach += add.approach;
 }
 
 /**
@@ -501,17 +519,29 @@ function decodeActionSignal(signal: number[], rawObs: TankObservation): { decode
 
 function initRewardTracker(obs: TankObservation): RewardTracker {
 	const alive = obs.enemies.filter((e) => !e.destroyed);
-
+	const sx = obs.self.x + obs.self.size / 2;
+	const sy = obs.self.y + obs.self.size / 2;
+	let nearestDistSq = Infinity;
+	for (const e of alive) {
+		const dx = e.x + e.size / 2 - sx;
+		const dy = e.y + e.size / 2 - sy;
+		const dSq = dx * dx + dy * dy;
+		if (dSq < nearestDistSq) nearestDistSq = dSq;
+	}
 	return {
 		prevEnemyAliveCount: alive.length,
 		prevEnemyHealthTotal: alive.reduce((total, enemy) => total + enemy.health, 0),
 		prevSelfHealth: obs.self.health,
+		prevAimAngle: obs.self.aimAngle,
+		prevEnemyDistSq: nearestDistSq,
 	};
 }
 
 function computeSteppingReward(
 	state: DeepReadonly<GameState>,
-	tracker: RewardTracker
+	tracker: RewardTracker,
+	decodedAction: TankAction,
+	rawObs: TankObservation
 ): { reward: number; breakdown: RewardBreakdown } {
 	let reward = STEP_PENALTY;
 	const breakdown = createRewardBreakdown();
@@ -546,6 +576,80 @@ function computeSteppingReward(
 		breakdown.kill += value;
 	}
 	tracker.prevEnemyAliveCount = aliveEnemies.length;
+
+	// ── Shaping: wasted shot penalty ──
+	// Penalize firing when the projectile won't reach any alive enemy
+	if (decodedAction.fire && aliveEnemies.length > 0) {
+		const s = rawObs.self;
+		if (s.shotCooldownTicks <= 0 && s.activeAmmo < s.maxAmmo) {
+			const projSpec = getProjectileSpec(s.ammoType);
+			const barrelEnd = computeGunBarrelEnd({
+				x: s.x,
+				y: s.y,
+				size: s.size,
+				aimAngle: decodedAction.aimAngle,
+			});
+			const predProj: ProjectileStateView = {
+				id: 'reward-pred',
+				ownerTankId: s.id,
+				team: s.team,
+				kind: s.ammoType,
+				x: barrelEnd.x,
+				y: barrelEnd.y,
+				vx: Math.cos(decodedAction.aimAngle) * projSpec.speed,
+				vy: Math.sin(decodedAction.aimAngle) * projSpec.speed,
+				speed: projSpec.speed,
+				radius: projSpec.radius,
+				bounces: 0,
+				maxBounces: projSpec.maxBounces,
+			};
+			let wouldHitAny = false;
+			for (const enemy of aliveEnemies) {
+				if (predictProjectileWillHitTank(predProj, enemy, rawObs.arena, rawObs.obstacles)) {
+					wouldHitAny = true;
+					break;
+				}
+			}
+			if (!wouldHitAny) {
+				reward += WASTED_SHOT_PENALTY;
+				breakdown.wastedShot += WASTED_SHOT_PENALTY;
+			}
+		}
+	}
+
+	// ── Shaping: aim jitter penalty ──
+	// Penalize rapid aim oscillation proportional to angular change
+	const aimDelta = Math.abs(
+		Math.atan2(
+			Math.sin(decodedAction.aimAngle - tracker.prevAimAngle),
+			Math.cos(decodedAction.aimAngle - tracker.prevAimAngle)
+		)
+	);
+	if (aimDelta > 0.01) {
+		const penalty = AIM_JITTER_PENALTY * aimDelta;
+		reward += penalty;
+		breakdown.aimJitter += penalty;
+	}
+	tracker.prevAimAngle = decodedAction.aimAngle;
+
+	// ── Shaping: approach reward ──
+	// Reward closing distance to nearest alive enemy
+	if (aliveEnemies.length > 0) {
+		const px = player.x + player.size / 2;
+		const py = player.y + player.size / 2;
+		let nearestDistSq = Infinity;
+		for (const e of aliveEnemies) {
+			const dx = e.x + e.size / 2 - px;
+			const dy = e.y + e.size / 2 - py;
+			const dSq = dx * dx + dy * dy;
+			if (dSq < nearestDistSq) nearestDistSq = dSq;
+		}
+		if (nearestDistSq < tracker.prevEnemyDistSq) {
+			reward += APPROACH_REWARD;
+			breakdown.approach += APPROACH_REWARD;
+		}
+		tracker.prevEnemyDistSq = nearestDistSq;
+	}
 
 	return { reward, breakdown };
 }
@@ -693,32 +797,35 @@ function collectRollout(
 		// Check post-step state for reward computation
 		const state = sim.getState();
 		const player = state.tanks.find((t) => t.id === PLAYER_TANK_ID);
+		const lastDecodedAction = rlController.lastDecodedAction;
+		if (!rlController.lastRawObs) throw new Error('lastRawObs is null during reward computation');
+		const lastRawObs = rlController.lastRawObs;
 		episodeTick++;
 
 		let done = false;
 		let stepReward: number;
 
 		if (state.status === 'player_win') {
-			const stepping = computeSteppingReward(state, tracker);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs);
 			stepReward = stepping.reward + TERMINAL_WIN_REWARD;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 			episodeBreakdown.terminalWin += TERMINAL_WIN_REWARD;
 			done = true;
 		} else if (state.status === 'enemy_win' || player?.destroyed) {
-			const stepping = computeSteppingReward(state, tracker);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs);
 			stepReward = stepping.reward + DEATH_REWARD + TERMINAL_LOSS_REWARD;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 			episodeBreakdown.death += DEATH_REWARD;
 			episodeBreakdown.terminalLoss += TERMINAL_LOSS_REWARD;
 			done = true;
 		} else if (episodeTick >= maxTicks) {
-			const stepping = computeSteppingReward(state, tracker);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs);
 			stepReward = stepping.reward + TIMEOUT_REWARD;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 			episodeBreakdown.timeout += TIMEOUT_REWARD;
 			done = true;
 		} else {
-			const stepping = computeSteppingReward(state, tracker);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs);
 			stepReward = stepping.reward;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 		}

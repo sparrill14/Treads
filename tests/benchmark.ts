@@ -20,6 +20,8 @@ import { createMatchBootstrap } from '../src/game/core/MatchFactory';
 import { Simulation } from '../src/game/core/Simulation';
 import { serializeGameState } from '../src/game/core/stateUtils';
 
+import * as physics from '../src/game/core/physics';
+
 const LEVEL = LEVEL_CONFIGS[8]; // Same level as existing tests
 const SEED = 42;
 const DETERMINISM_TICKS = 1000;
@@ -122,4 +124,47 @@ if (runAll || args.includes('--bench')) {
 if (runAll || args.includes('--profile')) {
 	console.log('\nProfiling:');
 	profile();
+}
+
+if (args.includes('--deep-profile')) {
+	console.log('\nDeep profile (act() sub-breakdown):');
+	const DEEP_TICKS = 5_000;
+
+	// Monkey-patch predictProjectileWillHitTank to count calls + time
+	const origPredict = physics.predictProjectileWillHitTank;
+	let predictCalls = 0;
+	let predictNs = 0;
+	(physics as Record<string, unknown>).predictProjectileWillHitTank = function (
+		...fnArgs: Parameters<typeof origPredict>
+	): ReturnType<typeof origPredict> {
+		predictCalls += 1;
+		const t0 = performance.now();
+		const result = origPredict.apply(null, fnArgs);
+		predictNs += performance.now() - t0;
+		return result;
+	};
+
+	// Monkey-patch stepProjectile to count calls
+	const origStep = physics.stepProjectile;
+	let stepCalls = 0;
+	(physics as Record<string, unknown>).stepProjectile = function (
+		...fnArgs: Parameters<typeof origStep>
+	): ReturnType<typeof origStep> {
+		stepCalls += 1;
+		return origStep.apply(null, fnArgs);
+	};
+
+	const sim = buildSimulation({ debugFreeze: false, profiling: true });
+	runTicks(sim, DEEP_TICKS);
+	sim.printProfilingReport();
+
+	console.log(`\n  predictProjectileWillHitTank:`);
+	console.log(`    calls: ${predictCalls} (${(predictCalls / DEEP_TICKS).toFixed(1)}/tick)`);
+	console.log(`    total: ${predictNs.toFixed(2)} ms`);
+	console.log(`    avg:   ${((predictNs / predictCalls) * 1000).toFixed(1)} µs/call`);
+	console.log(`  stepProjectile calls: ${stepCalls} (${(stepCalls / predictCalls).toFixed(1)} per predict)`);
+
+	// Restore
+	(physics as Record<string, unknown>).predictProjectileWillHitTank = origPredict;
+	(physics as Record<string, unknown>).stepProjectile = origStep;
 }
