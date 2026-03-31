@@ -59,7 +59,7 @@ const OBS_SIZE =
 	SUMMARY_DIM;
 const PLAYER_TANK_ID = 'player-0';
 const FIRE_THRESHOLD = 0.0; // Fire only when signal > 0 (was -0.2, Fix 4)
-const BOMB_THRESHOLD = 0.8;
+const BOMB_THRESHOLD = 0.5;
 const AIM_OFFSET_LIMIT = Math.PI / 18;
 const STEP_PENALTY = -0.001;
 const HIT_REWARD = 0.3;
@@ -72,9 +72,11 @@ const TIMEOUT_REWARD = -1.0;
 const AIM_JITTER_PENALTY = -0.01;
 const MOVE_JITTER_PENALTY = -0.003;
 const APPROACH_SCALE = 0.5; // potential-based: total ~0.5 for full diagonal approach (~10% of win reward)
+const DODGE_SCALE = 0.15; // potential-based: reward for staying away from enemy projectiles
 const ARENA_DIAGONAL = Math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * ARENA_HEIGHT);
 const MAX_FUSE_TICKS = 360.0; // Max fuse ticks for any bomb type
 const MAX_BLAST_RADIUS = 100.0; // Normalize blast radius by this value
+const PROJECTILE_SPEED_NORM = 300.0; // Normalizer for projectile velocity (max super=270)
 
 const TRAINING_SCENARIOS: Record<number, LevelConfig> = {
 	111: {
@@ -440,9 +442,9 @@ function normalizeObs(obs: TankObservation): number[] {
 	result[idx + 2] = s.aimAngle / (2 * Math.PI);
 	result[idx + 3] = s.speed / 100.0;
 	result[idx + 4] = s.destroyed ? 1.0 : 0.0;
-	result[idx + 5] = Math.min(s.shotCooldownTicks / 300.0, 1.0);
-	result[idx + 6] = s.activeAmmo / Math.max(s.maxAmmo, 1);
-	result[idx + 7] = s.maxAmmo / 5.0;
+	result[idx + 5] = s.wasLastMoveBlocked ? 1.0 : 0.0;
+	result[idx + 6] = Math.min(s.invulnerabilityTicksRemaining / 8.0, 1.0);
+	result[idx + 7] = Math.min(obs.tick / 1080.0, 1.0);
 	result[idx + 8] = s.health / Math.max(s.maxHealth, 1);
 
 	// Derived aim features
@@ -494,7 +496,7 @@ function normalizeObs(obs: TankObservation): number[] {
 			result[idx + 1] = e.y / ARENA_HEIGHT;
 			result[idx + 2] = e.aimAngle / (2 * Math.PI);
 			result[idx + 3] = e.speed / 100.0;
-			result[idx + 4] = 0.0; // alive
+			result[idx + 4] = e.bombType ? 1.0 : 0.0;
 			result[idx + 5] = e.health / Math.max(e.maxHealth, 1);
 		}
 		idx += ENEMY_DIM;
@@ -513,8 +515,8 @@ function normalizeObs(obs: TankObservation): number[] {
 			const p = projectiles[i];
 			result[idx] = p.x / ARENA_WIDTH;
 			result[idx + 1] = p.y / ARENA_HEIGHT;
-			result[idx + 2] = (p.vx / 300.0) * 0.5 + 0.5;
-			result[idx + 3] = (p.vy / 300.0) * 0.5 + 0.5;
+			result[idx + 2] = (p.vx / PROJECTILE_SPEED_NORM) * 0.5 + 0.5;
+			result[idx + 3] = (p.vy / PROJECTILE_SPEED_NORM) * 0.5 + 0.5;
 			result[idx + 4] = p.team === 'enemy' ? 1.0 : 0.0;
 		}
 		idx += PROJ_DIM;
@@ -624,6 +626,7 @@ interface RewardTracker {
 	prevAimAngle: number;
 	prevEnemyPathDist: number;
 	prevMoveIntent: MoveIntent;
+	prevEnemyProjDist: number;
 }
 
 interface RewardBreakdown {
@@ -638,6 +641,7 @@ interface RewardBreakdown {
 	aimJitter: number;
 	moveJitter: number;
 	approach: number;
+	dodge: number;
 }
 
 function createRewardBreakdown(): RewardBreakdown {
@@ -653,6 +657,7 @@ function createRewardBreakdown(): RewardBreakdown {
 		aimJitter: 0,
 		moveJitter: 0,
 		approach: 0,
+		dodge: 0,
 	};
 }
 
@@ -668,6 +673,7 @@ function mergeRewardBreakdown(target: RewardBreakdown, add: RewardBreakdown): vo
 	target.aimJitter += add.aimJitter;
 	target.moveJitter += add.moveJitter;
 	target.approach += add.approach;
+	target.dodge += add.dodge;
 }
 
 /**
@@ -770,6 +776,20 @@ function initRewardTracker(obs: TankObservation, navPlanner: NavigationPlanner |
 			initialDist = Math.sqrt(nearestDistSq);
 		}
 	}
+	// Initial closest enemy projectile distance for dodge shaping
+	const enemyProjs = obs.projectiles.filter((p) => p.team === 'enemy');
+	let initialProjDist = ARENA_DIAGONAL;
+	if (enemyProjs.length > 0) {
+		let closestProjDistSq = Infinity;
+		for (const p of enemyProjs) {
+			const dx = p.x - sx;
+			const dy = p.y - sy;
+			const dSq = dx * dx + dy * dy;
+			if (dSq < closestProjDistSq) closestProjDistSq = dSq;
+		}
+		initialProjDist = Math.sqrt(closestProjDistSq);
+	}
+
 	return {
 		prevEnemyAliveCount: alive.length,
 		prevEnemyHealthTotal: alive.reduce((total, enemy) => total + enemy.health, 0),
@@ -777,6 +797,7 @@ function initRewardTracker(obs: TankObservation, navPlanner: NavigationPlanner |
 		prevAimAngle: obs.self.aimAngle,
 		prevEnemyPathDist: initialDist,
 		prevMoveIntent: 'none',
+		prevEnemyProjDist: initialProjDist,
 	};
 }
 
@@ -819,6 +840,9 @@ function computeSteppingReward(
 		const value = KILL_REWARD * enemiesKilled;
 		reward += value;
 		breakdown.kill += value;
+		// Reset approach tracking: the nearest enemy changed, so prevDist
+		// was computed against a now-dead enemy. Skip approach delta this tick.
+		tracker.prevEnemyPathDist = -1;
 	}
 	tracker.prevEnemyAliveCount = aliveEnemies.length;
 
@@ -831,7 +855,7 @@ function computeSteppingReward(
 		)
 	);
 	if (aimDelta > 0.005) {
-		const penalty = AIM_JITTER_PENALTY * aimDelta * shapingScale;
+		const penalty = AIM_JITTER_PENALTY * aimDelta;
 		reward += penalty;
 		breakdown.aimJitter += penalty;
 	}
@@ -841,7 +865,7 @@ function computeSteppingReward(
 	// Penalize rapid direction changes (both previous and current must be actual movement)
 	const currentMove = decodedAction.move;
 	if (currentMove !== 'none' && tracker.prevMoveIntent !== 'none' && currentMove !== tracker.prevMoveIntent) {
-		const movePenalty = MOVE_JITTER_PENALTY * shapingScale;
+		const movePenalty = MOVE_JITTER_PENALTY;
 		reward += movePenalty;
 		breakdown.moveJitter += movePenalty;
 	}
@@ -876,13 +900,39 @@ function computeSteppingReward(
 			currDist = Math.sqrt(nearestDistSq);
 		}
 		const prevDist = tracker.prevEnemyPathDist;
-		const approachReward = (APPROACH_SCALE * (prevDist - currDist) * shapingScale) / ARENA_DIAGONAL;
-		if (Math.abs(approachReward) > 1e-8) {
-			reward += approachReward;
-			breakdown.approach += approachReward;
+		// Skip approach delta when prevDist was invalidated by a kill event
+		if (prevDist >= 0) {
+			const approachReward = (APPROACH_SCALE * (prevDist - currDist) * shapingScale) / ARENA_DIAGONAL;
+			if (Math.abs(approachReward) > 1e-8) {
+				reward += approachReward;
+				breakdown.approach += approachReward;
+			}
 		}
 		tracker.prevEnemyPathDist = currDist;
 	}
+
+	// ── Shaping: dodge reward — potential-based on distance to nearest enemy projectile ──
+	// Φ(s) = dist/ARENA_DIAGONAL, reward = Φ(s') - Φ(s) — moving away from incoming fire is positive
+	const enemyProjectiles = state.projectiles.filter((p) => p.team === 'enemy');
+	let currProjDist = ARENA_DIAGONAL;
+	if (enemyProjectiles.length > 0) {
+		const px = player.x + player.size / 2;
+		const py2 = player.y + player.size / 2;
+		let closestProjDistSq = Infinity;
+		for (const p of enemyProjectiles) {
+			const dx = p.x - px;
+			const dy = p.y - py2;
+			const dSq = dx * dx + dy * dy;
+			if (dSq < closestProjDistSq) closestProjDistSq = dSq;
+		}
+		currProjDist = Math.sqrt(closestProjDistSq);
+	}
+	const dodgeReward = (DODGE_SCALE * (currProjDist - tracker.prevEnemyProjDist) * shapingScale) / ARENA_DIAGONAL;
+	if (Math.abs(dodgeReward) > 1e-8) {
+		reward += dodgeReward;
+		breakdown.dodge += dodgeReward;
+	}
+	tracker.prevEnemyProjDist = currProjDist;
 
 	return { reward, breakdown };
 }
@@ -996,6 +1046,7 @@ function collectRollout(
 	const episodeRewardBreakdowns: RewardBreakdown[] = [];
 
 	const rlController = new RLController(mlp);
+	const levelRng = new SeededRandom(seedStart * 31337 + 7);
 	let seed = seedStart;
 	let tracker: RewardTracker | null = null;
 	let episodeTick = 0;
@@ -1008,8 +1059,8 @@ function collectRollout(
 	let navPlanner: NavigationPlanner | null = null;
 
 	function resetEpisode(): Simulation {
-		// Pick scenario from the active curriculum pool based on seed for diversity
-		currentLevel = levels[seed % levels.length];
+		// Pick scenario uniformly at random from the active curriculum pool
+		currentLevel = levels[levelRng.nextInt(0, levels.length - 1)];
 		const baseConfig = resolveScenarioConfig(currentLevel);
 		const levelConfig = applySpawnJitter(baseConfig, seed);
 		const initialState = createInitialGameState(levelConfig, seed);

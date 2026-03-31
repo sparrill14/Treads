@@ -48,6 +48,7 @@ OBS_SIZE = (
 )
 MAX_FUSE_TICKS = 360.0    # max fuse ticks for any bomb type
 MAX_BLAST_RADIUS = 100.0  # normalize blast radius by this value
+PROJECTILE_SPEED_NORM = 300.0  # normalizer for projectile velocity (max super=270)
 
 # Move intents mapping
 MOVE_INTENTS = ["none", "n", "s", "e", "w", "ne", "nw", "se", "sw"]
@@ -201,9 +202,9 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         result[idx + 2] = self_data["aimAngle"] / (2 * math.pi)
         result[idx + 3] = self_data["speed"] / 100.0  # normalize speed
         result[idx + 4] = 1.0 if self_data["destroyed"] else 0.0
-        result[idx + 5] = min(self_data["shotCooldownTicks"] / 300.0, 1.0)
-        result[idx + 6] = self_data["activeAmmo"] / max(self_data["maxAmmo"], 1)
-        result[idx + 7] = self_data["maxAmmo"] / 5.0
+        result[idx + 5] = 1.0 if self_data.get("wasLastMoveBlocked", False) else 0.0
+        result[idx + 6] = min(float(self_data.get("invulnerabilityTicksRemaining", 0)) / 8.0, 1.0)
+        result[idx + 7] = min(float(obs_raw.get("tick", 0)) / 1080.0, 1.0)
         result[idx + 8] = self_data["health"] / max(self_data["maxHealth"], 1)
 
         # Derived aim features (critical for learning)
@@ -251,7 +252,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
                 result[idx + 1] = e["y"] / ARENA_HEIGHT
                 result[idx + 2] = e["aimAngle"] / (2 * math.pi)
                 result[idx + 3] = e["speed"] / 100.0
-                result[idx + 4] = 0.0  # alive
+                result[idx + 4] = 1.0 if e.get("bombType") else 0.0
                 result[idx + 5] = e["health"] / max(e["maxHealth"], 1)
             # else zeros (no enemy)
             idx += ENEMY_DIM
@@ -264,8 +265,8 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
                 p = projectiles[i]
                 result[idx] = p["x"] / ARENA_WIDTH
                 result[idx + 1] = p["y"] / ARENA_HEIGHT
-                result[idx + 2] = p["vx"] / 300.0 * 0.5 + 0.5  # normalize to [0,1]
-                result[idx + 3] = p["vy"] / 300.0 * 0.5 + 0.5
+                result[idx + 2] = p["vx"] / PROJECTILE_SPEED_NORM * 0.5 + 0.5  # normalize to [0,1]
+                result[idx + 3] = p["vy"] / PROJECTILE_SPEED_NORM * 0.5 + 0.5
                 result[idx + 4] = 1.0 if p["team"] == "enemy" else 0.0
             idx += PROJ_DIM
 

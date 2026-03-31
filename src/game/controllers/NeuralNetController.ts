@@ -15,6 +15,7 @@ const BOMB_DIM = 5;
 const SUMMARY_DIM = 6;
 const MAX_FUSE_TICKS = 360;
 const MAX_BLAST_RADIUS = 100;
+const PROJECTILE_SPEED_NORM = 300; // Normalizer for projectile velocity (max super=270)
 const OBS_SIZE =
 	SELF_DIM +
 	MAX_ENEMIES * ENEMY_DIM +
@@ -26,7 +27,7 @@ const OBS_SIZE =
 // Continuous action means: [move_x, move_y, aim_signal, fire_signal, bomb_signal] in [-1, 1]
 const ACTION_DIM = 5;
 const FIRE_THRESHOLD = 0.0;
-const BOMB_THRESHOLD = 0.8;
+const BOMB_THRESHOLD = 0.5;
 const AIM_OFFSET_LIMIT = Math.PI / 18;
 const MOVE_DEAD_ZONE = 0.33;
 
@@ -184,9 +185,9 @@ export class NeuralNetController implements TankController {
 		result[idx + 2] = obs.self.aimAngle / (2 * Math.PI);
 		result[idx + 3] = obs.self.speed / 100;
 		result[idx + 4] = obs.self.destroyed ? 1 : 0;
-		result[idx + 5] = Math.min(obs.self.shotCooldownTicks / 300, 1);
-		result[idx + 6] = obs.self.activeAmmo / Math.max(obs.self.maxAmmo, 1);
-		result[idx + 7] = obs.self.maxAmmo / 5;
+		result[idx + 5] = obs.self.wasLastMoveBlocked ? 1 : 0;
+		result[idx + 6] = Math.min(obs.self.invulnerabilityTicksRemaining / 8, 1);
+		result[idx + 7] = Math.min(obs.tick / 1080, 1);
 		result[idx + 8] = obs.self.health / Math.max(obs.self.maxHealth, 1);
 
 		// Derived aim features
@@ -227,7 +228,7 @@ export class NeuralNetController implements TankController {
 				result[idx + 1] = e.y / ARENA_HEIGHT;
 				result[idx + 2] = e.aimAngle / (2 * Math.PI);
 				result[idx + 3] = e.speed / 100;
-				result[idx + 4] = 0; // alive
+				result[idx + 4] = e.bombType ? 1 : 0;
 				result[idx + 5] = e.health / Math.max(e.maxHealth, 1);
 			}
 			idx += ENEMY_DIM;
@@ -245,8 +246,8 @@ export class NeuralNetController implements TankController {
 				const p = projectiles[i];
 				result[idx] = p.x / ARENA_WIDTH;
 				result[idx + 1] = p.y / ARENA_HEIGHT;
-				result[idx + 2] = (p.vx / 300) * 0.5 + 0.5;
-				result[idx + 3] = (p.vy / 300) * 0.5 + 0.5;
+				result[idx + 2] = (p.vx / PROJECTILE_SPEED_NORM) * 0.5 + 0.5;
+				result[idx + 3] = (p.vy / PROJECTILE_SPEED_NORM) * 0.5 + 0.5;
 				result[idx + 4] = p.team === 'enemy' ? 1 : 0;
 			}
 			idx += PROJ_DIM;
@@ -306,6 +307,23 @@ export class NeuralNetController implements TankController {
 		}
 
 		result[idx + 2] = Math.min(obs.projectiles.length / MAX_PROJECTILES, 1.0);
+		// [3] bomb count (normalized)
+		result[idx + 3] = Math.min(obs.bombs.length / MAX_BOMBS, 1.0);
+		// [4] closest enemy bomb distance (threat indicator; 1.0 = no threat)
+		const enemyBombs = obs.bombs.filter((b) => b.team === 'enemy');
+		if (enemyBombs.length > 0) {
+			let closestBombDistSq = Infinity;
+			for (const b of enemyBombs) {
+				const dx = b.x - sx;
+				const dy = b.y - sy;
+				const dSq = dx * dx + dy * dy;
+				if (dSq < closestBombDistSq) closestBombDistSq = dSq;
+			}
+			result[idx + 4] = Math.min(Math.sqrt(closestBombDistSq) / arenaDiag, 1.0);
+		} else {
+			result[idx + 4] = 1.0;
+		}
+		// [5] farthest projectile distance (spread indicator)
 		if (obs.projectiles.length > 0) {
 			let farthestProjDistSq = 0;
 			for (const p of obs.projectiles) {
@@ -314,21 +332,7 @@ export class NeuralNetController implements TankController {
 				const dSq = dx * dx + dy * dy;
 				if (dSq > farthestProjDistSq) farthestProjDistSq = dSq;
 			}
-			result[idx + 3] = Math.min(Math.sqrt(farthestProjDistSq) / arenaDiag, 1.0);
-		} else {
-			result[idx + 3] = 0;
-		}
-
-		result[idx + 4] = Math.min(obs.bombs.length / MAX_BOMBS, 1.0);
-		if (obs.bombs.length > 0) {
-			let farthestBombDistSq = 0;
-			for (const b of obs.bombs) {
-				const dx = b.x - sx;
-				const dy = b.y - sy;
-				const dSq = dx * dx + dy * dy;
-				if (dSq > farthestBombDistSq) farthestBombDistSq = dSq;
-			}
-			result[idx + 5] = Math.min(Math.sqrt(farthestBombDistSq) / arenaDiag, 1.0);
+			result[idx + 5] = Math.min(Math.sqrt(farthestProjDistSq) / arenaDiag, 1.0);
 		} else {
 			result[idx + 5] = 0;
 		}

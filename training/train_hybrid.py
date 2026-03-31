@@ -311,7 +311,7 @@ class HybridTrainer:
                 "replayDir": self.replay_dir,
                 "episodeOffset": self.total_episodes,
                 "targetEpisodes": target_episodes,
-                "shapingScale": max(0.0, 1.0 - self.total_episodes / max(target_episodes, 1)),
+                "shapingScale": max(0.0, 1.0 - self._phase_recent_win_rate() * 2.0),
             })
         self.seed_counter += self.n_steps
 
@@ -472,7 +472,7 @@ class HybridTrainer:
 
             if self.episode_reward_breakdowns:
                 recent_breakdowns = self.episode_reward_breakdowns[-50:]
-                keys = ["tick", "hit", "hurt", "kill", "death", "terminalWin", "terminalLoss", "timeout", "aimJitter", "moveJitter", "approach"]
+                keys = ["tick", "hit", "hurt", "kill", "death", "terminalWin", "terminalLoss", "timeout", "aimJitter", "moveJitter", "approach", "dodge"]
                 summary: List[str] = []
                 for key in keys:
                     vals = [float(b.get(key, 0.0)) for b in recent_breakdowns]
@@ -492,7 +492,7 @@ class HybridTrainer:
         csv_writer.writerow([
             "iteration", "timesteps", "episodes", "curriculum_phase", "active_scenarios", "phase_recent_winrate_500",
             "avg_reward_50", "avg_winrate_50",
-            "avg_tick_50", "avg_hit_50", "avg_hurt_50", "avg_kill_50", "avg_death_50", "avg_terminal_win_50", "avg_terminal_loss_50", "avg_timeout_50", "avg_aim_jitter_50", "avg_move_jitter_50", "avg_approach_50",
+            "avg_tick_50", "avg_hit_50", "avg_hurt_50", "avg_kill_50", "avg_death_50", "avg_terminal_win_50", "avg_terminal_loss_50", "avg_timeout_50", "avg_aim_jitter_50", "avg_move_jitter_50", "avg_approach_50", "avg_dodge_50",
             "steps_per_sec", "elapsed_sec"
         ])
 
@@ -570,8 +570,9 @@ class HybridTrainer:
                     avg_aim_jitter = np.mean([float(b.get("aimJitter", 0.0)) for b in recent_breakdowns])
                     avg_move_jitter = np.mean([float(b.get("moveJitter", 0.0)) for b in recent_breakdowns])
                     avg_approach = np.mean([float(b.get("approach", 0.0)) for b in recent_breakdowns])
+                    avg_dodge = np.mean([float(b.get("dodge", 0.0)) for b in recent_breakdowns])
                 else:
-                    avg_tick = avg_hit = avg_hurt = avg_kill = avg_death = avg_terminal_win = avg_terminal_loss = avg_timeout = avg_aim_jitter = avg_move_jitter = avg_approach = 0.0
+                    avg_tick = avg_hit = avg_hurt = avg_kill = avg_death = avg_terminal_win = avg_terminal_loss = avg_timeout = avg_aim_jitter = avg_move_jitter = avg_approach = avg_dodge = 0.0
 
                 csv_writer.writerow([
                     iteration,
@@ -593,6 +594,7 @@ class HybridTrainer:
                     f"{avg_aim_jitter:.3f}",
                     f"{avg_move_jitter:.3f}",
                     f"{avg_approach:.3f}",
+                    f"{avg_dodge:.3f}",
                     f"{steps_per_sec:.0f}",
                     f"{elapsed:.1f}",
                 ])
@@ -603,7 +605,7 @@ class HybridTrainer:
                     previous_phase, next_phase, trigger_win_rate = phase_transition
                     recent_breakdowns = self.episode_reward_breakdowns[-50:]
                     summary_parts: List[str] = []
-                    for key in ["tick", "hit", "hurt", "kill", "death", "terminalWin", "terminalLoss", "timeout", "aimJitter", "moveJitter", "approach"]:
+                    for key in ["tick", "hit", "hurt", "kill", "death", "terminalWin", "terminalLoss", "timeout", "aimJitter", "moveJitter", "approach", "dodge"]:
                         vals = [float(b.get(key, 0.0)) for b in recent_breakdowns]
                         summary_parts.append(f"{key}={np.mean(vals):.3f}")
                     print(
@@ -694,12 +696,12 @@ def train() -> None:
     parser.add_argument("--output-dir", type=str, default="", help="Optional output directory override")
     parser.add_argument("--checkpoint-interval", type=int, default=500, help="Checkpoint interval in episodes")
     parser.add_argument("--replay-interval", type=int, default=250, help="Replay save interval in episodes")
-    parser.add_argument("--gamma", type=float, default=0.999, help="Discount factor (default: 0.999)")
-    parser.add_argument("--ent-coef", type=float, default=0.03, help="Entropy coefficient (default: 0.03)")
+    parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor (default: 0.99)")
+    parser.add_argument("--ent-coef", type=float, default=0.015, help="Entropy coefficient (default: 0.015)")
     parser.add_argument("--max-ticks", type=int, default=720, help="Max ticks per episode (default: 720)")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate (default: 1e-4)")
     parser.add_argument("--n-steps", type=int, default=4096, help="Rollout steps per iteration (default: 4096)")
-    parser.add_argument("--clip-range", type=float, default=0.10, help="PPO clip range (default: 0.10)")
+    parser.add_argument("--clip-range", type=float, default=0.15, help="PPO clip range (default: 0.15)")
     cpu_count = os.cpu_count() or 1
     default_workers = max(1, min(cpu_count - 4, 12))  # leave cores for OS + Python; cap at 12
     parser.add_argument("--num-workers", type=int, default=default_workers, help=f"Number of parallel rollout workers (default: {default_workers}, detected {cpu_count} cores)")

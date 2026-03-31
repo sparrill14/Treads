@@ -103,7 +103,7 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
 
     aim_angle = ((aim_signal + 1.0) * 0.5) * 2.0 * np.pi
     fire = fire_signal > 0.0
-    bomb = bomb_signal > 0.8
+    bomb = bomb_signal > 0.5
     print(f"  decoded move={move_dir} aim_angle={aim_angle:.3f} fire={fire} bomb={bomb}")
 
 
