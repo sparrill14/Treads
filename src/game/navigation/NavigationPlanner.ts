@@ -385,4 +385,29 @@ export class NavigationPlanner {
 	private isWithinBounds(x: number, y: number): boolean {
 		return x >= 0 && y >= 0 && x < this.gridXLength && y < this.gridYLength;
 	}
+
+	/**
+	 * Return the A* path distance (in world units) between two points.
+	 * Falls back to Euclidean distance when either point is inside an
+	 * obstacle or no walkable path exists.
+	 */
+	public getPathDistance(fromX: number, fromY: number, toX: number, toY: number): number {
+		const startNode = this.getNodeFromPoint(fromX, fromY);
+		const endNode = this.getNodeFromPoint(toX, toY);
+		if (startNode === endNode) return 0;
+		if (!startNode.walkable || !endNode.walkable) {
+			const dx = toX - fromX;
+			const dy = toY - fromY;
+			return Math.sqrt(dx * dx + dy * dy);
+		}
+		this.reset();
+		const path = this.aStar(startNode, endNode);
+		if (!path) {
+			const dx = toX - fromX;
+			const dy = toY - fromY;
+			return Math.sqrt(dx * dx + dy * dy);
+		}
+		// g of the final node is the optimal cost in grid-cell units
+		return path[path.length - 1].g * this.gridCellWidth;
+	}
 }

@@ -20,6 +20,7 @@ import * as path from 'path';
 import * as readline from 'readline';
 
 import { createDefaultControllers, createInitialGameState } from '../src/game/core/MatchFactory';
+import { SeededRandom } from '../src/game/core/prng';
 import { ReplayRecorder } from '../src/game/core/Replay';
 import { Simulation } from '../src/game/core/Simulation';
 import type { DeepReadonly } from '../src/game/core/stateUtils';
@@ -32,6 +33,7 @@ import type {
 	TankObservation,
 } from '../src/game/core/types';
 import { LEVEL_CONFIGS, type LevelConfig } from '../src/game/LevelConfig';
+import { NavigationPlanner } from '../src/game/navigation/NavigationPlanner';
 import { PolicyMLP, parseWeightsFromStateDict } from './mlp-inference';
 
 // ---- Constants matching treads_env.py ----
@@ -80,13 +82,13 @@ const TRAINING_SCENARIOS: Record<number, LevelConfig> = {
 		player: { x: 220, y: 250 },
 		obstacles: [],
 		enemies: [{ type: 'stationary', x: 520, y: 250, ammo: { type: 'basic', count: 0 } }],
-		rules: { projectileBounces: false, turretSpeedMultiplier: 3 },
+		rules: { projectileBounces: false, turretSpeedMultiplier: 2.5 },
 	},
 	112: {
 		player: { x: 220, y: 180 },
 		obstacles: [],
 		enemies: [{ type: 'stationary', x: 520, y: 320, ammo: { type: 'basic', count: 0 } }],
-		rules: { projectileBounces: false, turretSpeedMultiplier: 3 },
+		rules: { projectileBounces: false, turretSpeedMultiplier: 2.5 },
 	},
 	113: {
 		player: { x: 220, y: 250 },
@@ -100,13 +102,13 @@ const TRAINING_SCENARIOS: Record<number, LevelConfig> = {
 		player: { x: 220, y: 250 },
 		obstacles: [],
 		enemies: [{ type: 'stationary', x: 560, y: 250, ammo: { type: 'basic', count: 1 } }],
-		rules: { projectileBounces: false, turretSpeedMultiplier: 2 },
+		rules: { projectileBounces: false, turretSpeedMultiplier: 1.5 },
 	},
 	122: {
 		player: { x: 220, y: 180 },
 		obstacles: [],
 		enemies: [{ type: 'stationary-random-aim', x: 560, y: 320, ammo: { type: 'basic', count: 1 } }],
-		rules: { projectileBounces: false, turretSpeedMultiplier: 2 },
+		rules: { projectileBounces: false, turretSpeedMultiplier: 1.5 },
 	},
 	123: {
 		player: { x: 220, y: 250 },
@@ -114,7 +116,7 @@ const TRAINING_SCENARIOS: Record<number, LevelConfig> = {
 		enemies: [
 			{ type: 'simple-moving', x: 620, y: 250, ammo: { type: 'basic', count: 0 }, navigator: { type: 'simple' } },
 		],
-		rules: { projectileBounces: false, turretSpeedMultiplier: 2 },
+		rules: { projectileBounces: false, turretSpeedMultiplier: 1.5 },
 	},
 	101: {
 		player: { x: 120, y: 250 },
@@ -195,6 +197,209 @@ const TRAINING_SCENARIOS: Record<number, LevelConfig> = {
 		],
 	},
 	303: {
+		player: { x: 150, y: 260 },
+		obstacles: [
+			{ x: 340, y: 110, width: 280, height: 30 },
+			{ x: 340, y: 360, width: 280, height: 30 },
+		],
+		enemies: [
+			{
+				type: 'super-bomber',
+				x: 800,
+				y: 140,
+				ammo: { type: 'super', count: 0 },
+				bombs: { type: 'love', count: 1 },
+				navigator: { type: 'astar', aggressionFactor: 4 },
+			},
+			{ type: 'stationary-random-aim', x: 860, y: 340, ammo: { type: 'basic', count: 1 } },
+		],
+	},
+	// ---- Phase 1 supplement: armed target practice (turret 2.5x) ----
+	114: {
+		player: { x: 220, y: 250 },
+		obstacles: [],
+		enemies: [{ type: 'stationary', x: 620, y: 250, ammo: { type: 'basic', count: 1 } }],
+		rules: { projectileBounces: false, turretSpeedMultiplier: 2.5 },
+	},
+	// ---- Phase 3: full turret, no obstacles ----
+	131: {
+		player: { x: 200, y: 250 },
+		obstacles: [],
+		enemies: [{ type: 'stationary', x: 700, y: 250, ammo: { type: 'basic', count: 1 } }],
+		rules: { projectileBounces: false },
+	},
+	132: {
+		player: { x: 200, y: 180 },
+		obstacles: [],
+		enemies: [{ type: 'stationary-random-aim', x: 700, y: 320, ammo: { type: 'basic', count: 1 } }],
+		rules: { projectileBounces: false },
+	},
+	133: {
+		player: { x: 200, y: 250 },
+		obstacles: [],
+		enemies: [
+			{ type: 'simple-moving', x: 700, y: 250, ammo: { type: 'basic', count: 1 }, navigator: { type: 'simple' } },
+		],
+		rules: { projectileBounces: false },
+	},
+	// ---- Phase 4: obstacles intro, single enemy ----
+	141: {
+		player: { x: 150, y: 250 },
+		obstacles: [{ x: 450, y: 160, width: 40, height: 180 }],
+		enemies: [{ type: 'stationary', x: 800, y: 250, ammo: { type: 'basic', count: 1 } }],
+		rules: { projectileBounces: false },
+	},
+	142: {
+		player: { x: 150, y: 350 },
+		obstacles: [{ x: 400, y: 120, width: 30, height: 200 }],
+		enemies: [{ type: 'stationary-random-aim', x: 800, y: 150, ammo: { type: 'basic', count: 1 } }],
+		rules: { projectileBounces: false },
+	},
+	143: {
+		player: { x: 150, y: 250 },
+		obstacles: [{ x: 380, y: 200, width: 30, height: 150 }],
+		enemies: [
+			{ type: 'simple-moving', x: 800, y: 250, ammo: { type: 'basic', count: 1 }, navigator: { type: 'simple' } },
+		],
+		rules: { projectileBounces: false },
+	},
+	// ---- Phase 5: multi-enemy + obstacles ----
+	151: {
+		player: { x: 120, y: 250 },
+		obstacles: [{ x: 430, y: 160, width: 40, height: 180 }],
+		enemies: [
+			{ type: 'stationary', x: 780, y: 140, ammo: { type: 'basic', count: 1 } },
+			{ type: 'stationary', x: 860, y: 340, ammo: { type: 'basic', count: 1 } },
+		],
+		rules: { projectileBounces: false },
+	},
+	152: {
+		player: { x: 120, y: 250 },
+		obstacles: [
+			{ x: 360, y: 120, width: 30, height: 260 },
+			{ x: 640, y: 200, width: 30, height: 150 },
+		],
+		enemies: [
+			{ type: 'stationary', x: 800, y: 150, ammo: { type: 'basic', count: 1 } },
+			{ type: 'simple-moving', x: 800, y: 350, ammo: { type: 'basic', count: 1 }, navigator: { type: 'simple' } },
+		],
+		rules: { projectileBounces: false },
+	},
+	153: {
+		player: { x: 100, y: 400 },
+		obstacles: [{ x: 350, y: 200, width: 30, height: 200 }],
+		enemies: [
+			{ type: 'stationary-random-aim', x: 800, y: 120, ammo: { type: 'basic', count: 1 } },
+			{ type: 'simple-moving', x: 850, y: 350, ammo: { type: 'basic', count: 1 }, navigator: { type: 'simple' } },
+		],
+		rules: { projectileBounces: false },
+	},
+	// ---- Phase 6: bouncing shots enabled ----
+	161: {
+		player: { x: 150, y: 250 },
+		obstacles: [{ x: 450, y: 120, width: 35, height: 260 }],
+		enemies: [{ type: 'stationary', x: 800, y: 250, ammo: { type: 'basic', count: 1 } }],
+	},
+	162: {
+		player: { x: 130, y: 210 },
+		obstacles: [{ x: 500, y: 150, width: 30, height: 200 }],
+		enemies: [
+			{ type: 'stationary', x: 780, y: 140, ammo: { type: 'basic', count: 1 } },
+			{ type: 'stationary', x: 860, y: 340, ammo: { type: 'basic', count: 1 } },
+		],
+	},
+	163: {
+		player: { x: 150, y: 300 },
+		obstacles: [
+			{ x: 350, y: 110, width: 200, height: 30 },
+			{ x: 350, y: 360, width: 200, height: 30 },
+		],
+		enemies: [
+			{ type: 'simple-moving', x: 800, y: 200, ammo: { type: 'basic', count: 1 }, navigator: { type: 'simple' } },
+		],
+	},
+	// ---- Phase 7: bomber introduction ----
+	171: {
+		player: { x: 140, y: 250 },
+		obstacles: [{ x: 520, y: 120, width: 35, height: 260 }],
+		enemies: [
+			{
+				type: 'bomber',
+				x: 780,
+				y: 250,
+				ammo: { type: 'basic', count: 0 },
+				bombs: { type: 'basic', count: 1 },
+				navigator: { type: 'astar' },
+			},
+		],
+	},
+	172: {
+		player: { x: 140, y: 250 },
+		obstacles: [{ x: 500, y: 150, width: 30, height: 200 }],
+		enemies: [
+			{
+				type: 'bomber',
+				x: 780,
+				y: 350,
+				ammo: { type: 'basic', count: 0 },
+				bombs: { type: 'basic', count: 1 },
+				navigator: { type: 'astar' },
+			},
+			{ type: 'stationary', x: 820, y: 120, ammo: { type: 'basic', count: 1 } },
+		],
+	},
+	173: {
+		player: { x: 150, y: 260 },
+		obstacles: [
+			{ x: 320, y: 110, width: 250, height: 30 },
+			{ x: 320, y: 360, width: 250, height: 30 },
+		],
+		enemies: [
+			{
+				type: 'bomber',
+				x: 800,
+				y: 200,
+				ammo: { type: 'basic', count: 0 },
+				bombs: { type: 'basic', count: 1 },
+				navigator: { type: 'astar' },
+			},
+		],
+	},
+	// ---- Phase 8: full mix (bombers + shooters + super-bombers) ----
+	181: {
+		player: { x: 140, y: 250 },
+		obstacles: [{ x: 500, y: 150, width: 30, height: 250 }],
+		enemies: [
+			{
+				type: 'bomber',
+				x: 800,
+				y: 150,
+				ammo: { type: 'basic', count: 0 },
+				bombs: { type: 'basic', count: 1 },
+				navigator: { type: 'astar' },
+			},
+			{ type: 'stationary-random-aim', x: 860, y: 350, ammo: { type: 'basic', count: 1 } },
+		],
+	},
+	182: {
+		player: { x: 130, y: 210 },
+		obstacles: [
+			{ x: 300, y: 120, width: 30, height: 260 },
+			{ x: 640, y: 150, width: 30, height: 200 },
+		],
+		enemies: [
+			{
+				type: 'super-bomber',
+				x: 820,
+				y: 150,
+				ammo: { type: 'super', count: 0 },
+				bombs: { type: 'basic', count: 1 },
+				navigator: { type: 'astar' },
+			},
+			{ type: 'stationary', x: 860, y: 340, ammo: { type: 'basic', count: 1 } },
+		],
+	},
+	183: {
 		player: { x: 150, y: 260 },
 		obstacles: [
 			{ x: 340, y: 110, width: 280, height: 30 },
@@ -418,7 +623,7 @@ interface RewardTracker {
 	prevEnemyHealthTotal: number;
 	prevSelfHealth: number;
 	prevAimAngle: number;
-	prevEnemyDistSq: number;
+	prevEnemyPathDist: number;
 	prevMoveIntent: MoveIntent;
 }
 
@@ -516,23 +721,40 @@ function decodeActionSignal(signal: number[], rawObs: TankObservation): { decode
 	};
 }
 
-function initRewardTracker(obs: TankObservation): RewardTracker {
+function initRewardTracker(obs: TankObservation, navPlanner: NavigationPlanner | null): RewardTracker {
 	const alive = obs.enemies.filter((e) => !e.destroyed);
 	const sx = obs.self.x + obs.self.size / 2;
 	const sy = obs.self.y + obs.self.size / 2;
-	let nearestDistSq = Infinity;
-	for (const e of alive) {
-		const dx = e.x + e.size / 2 - sx;
-		const dy = e.y + e.size / 2 - sy;
-		const dSq = dx * dx + dy * dy;
-		if (dSq < nearestDistSq) nearestDistSq = dSq;
+	let initialDist = 0;
+	if (alive.length > 0) {
+		let nearestEnemy = alive[0];
+		let nearestDistSq = Infinity;
+		for (const e of alive) {
+			const dx = e.x + e.size / 2 - sx;
+			const dy = e.y + e.size / 2 - sy;
+			const dSq = dx * dx + dy * dy;
+			if (dSq < nearestDistSq) {
+				nearestDistSq = dSq;
+				nearestEnemy = e;
+			}
+		}
+		if (navPlanner) {
+			initialDist = navPlanner.getPathDistance(
+				sx,
+				sy,
+				nearestEnemy.x + nearestEnemy.size / 2,
+				nearestEnemy.y + nearestEnemy.size / 2
+			);
+		} else {
+			initialDist = Math.sqrt(nearestDistSq);
+		}
 	}
 	return {
 		prevEnemyAliveCount: alive.length,
 		prevEnemyHealthTotal: alive.reduce((total, enemy) => total + enemy.health, 0),
 		prevSelfHealth: obs.self.health,
 		prevAimAngle: obs.self.aimAngle,
-		prevEnemyDistSq: nearestDistSq,
+		prevEnemyPathDist: initialDist,
 		prevMoveIntent: 'none',
 	};
 }
@@ -542,7 +764,8 @@ function computeSteppingReward(
 	tracker: RewardTracker,
 	decodedAction: TankAction,
 	_rawObs: TankObservation,
-	shapingScale: number
+	shapingScale: number,
+	navPlanner: NavigationPlanner | null
 ): { reward: number; breakdown: RewardBreakdown } {
 	let reward = STEP_PENALTY;
 	const breakdown = createRewardBreakdown();
@@ -605,25 +828,39 @@ function computeSteppingReward(
 
 	// ── Shaping: potential-based approach reward (Ng et al. 1999) ──
 	// Φ(s) = -dist/ARENA_DIAGONAL, reward = γ·Φ(s') - Φ(s) ≈ Φ(s') - Φ(s) since γ≈1
-	// Policy-invariant: does not alter the optimal policy, only speeds up learning.
+	// Uses A* pathfinding distance so flanking around obstacles is rewarded correctly.
 	if (aliveEnemies.length > 0) {
 		const px = player.x + player.size / 2;
 		const py = player.y + player.size / 2;
+		let nearestEnemy = aliveEnemies[0];
 		let nearestDistSq = Infinity;
 		for (const e of aliveEnemies) {
 			const dx = e.x + e.size / 2 - px;
 			const dy = e.y + e.size / 2 - py;
 			const dSq = dx * dx + dy * dy;
-			if (dSq < nearestDistSq) nearestDistSq = dSq;
+			if (dSq < nearestDistSq) {
+				nearestDistSq = dSq;
+				nearestEnemy = e;
+			}
 		}
-		const currDist = Math.sqrt(nearestDistSq);
-		const prevDist = Math.sqrt(tracker.prevEnemyDistSq);
+		let currDist: number;
+		if (navPlanner) {
+			currDist = navPlanner.getPathDistance(
+				px,
+				py,
+				nearestEnemy.x + nearestEnemy.size / 2,
+				nearestEnemy.y + nearestEnemy.size / 2
+			);
+		} else {
+			currDist = Math.sqrt(nearestDistSq);
+		}
+		const prevDist = tracker.prevEnemyPathDist;
 		const approachReward = (APPROACH_SCALE * (prevDist - currDist) * shapingScale) / ARENA_DIAGONAL;
 		if (Math.abs(approachReward) > 1e-8) {
 			reward += approachReward;
 			breakdown.approach += approachReward;
 		}
-		tracker.prevEnemyDistSq = nearestDistSq;
+		tracker.prevEnemyPathDist = currDist;
 	}
 
 	return { reward, breakdown };
@@ -693,6 +930,27 @@ interface RolloutData {
 	episode_reward_breakdowns: RewardBreakdown[];
 }
 
+function applySpawnJitter(config: LevelConfig, seed: number): LevelConfig {
+	const JITTER = 40;
+	const TANK_SIZE = 30;
+	const rng = new SeededRandom(seed * 7919 + 13);
+	const jitter = () => rng.nextRange(-JITTER, JITTER);
+	const clampX = (x: number) => Math.max(0, Math.min(ARENA_WIDTH - TANK_SIZE, x));
+	const clampY = (y: number) => Math.max(0, Math.min(ARENA_HEIGHT - TANK_SIZE, y));
+	return {
+		...config,
+		player: {
+			x: clampX(config.player.x + jitter()),
+			y: clampY(config.player.y + jitter()),
+		},
+		enemies: config.enemies.map((e) => ({
+			...e,
+			x: clampX(e.x + jitter()),
+			y: clampY(e.y + jitter()),
+		})),
+	};
+}
+
 function collectRollout(
 	mlp: PolicyMLP,
 	nSteps: number,
@@ -726,15 +984,19 @@ function collectRollout(
 	let episodeBreakdown = createRewardBreakdown();
 	let replayRecorder: ReplayRecorder | null = null;
 	let completedEpisodes = 0;
+	let navPlanner: NavigationPlanner | null = null;
 
 	function resetEpisode(): Simulation {
 		// Pick scenario from the active curriculum pool based on seed for diversity
 		currentLevel = levels[seed % levels.length];
-		const levelConfig = resolveScenarioConfig(currentLevel);
+		const baseConfig = resolveScenarioConfig(currentLevel);
+		const levelConfig = applySpawnJitter(baseConfig, seed);
 		const initialState = createInitialGameState(levelConfig, seed);
 		const controllers = createDefaultControllers(levelConfig);
 		controllers[PLAYER_TANK_ID] = rlController;
 		replayRecorder = new ReplayRecorder(levelConfig, seed);
+		// Create nav planner for A*-based approach distance (handles obstacles)
+		navPlanner = new NavigationPlanner(initialState.arena, initialState.obstacles);
 		tracker = null;
 		episodeTick = 0;
 		episodeReward = 0;
@@ -767,7 +1029,7 @@ function collectRollout(
 		// Initialize reward tracker from first observation
 		if (tracker === null) {
 			if (!rlController.lastRawObs) throw new Error('lastRawObs is null after step');
-			tracker = initRewardTracker(rlController.lastRawObs);
+			tracker = initRewardTracker(rlController.lastRawObs, navPlanner);
 		}
 
 		// Check post-step state for reward computation
@@ -782,26 +1044,26 @@ function collectRollout(
 		let stepReward: number;
 
 		if (state.status === 'player_win') {
-			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner);
 			stepReward = stepping.reward + TERMINAL_WIN_REWARD;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 			episodeBreakdown.terminalWin += TERMINAL_WIN_REWARD;
 			done = true;
 		} else if (state.status === 'enemy_win' || player?.destroyed) {
-			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner);
 			stepReward = stepping.reward + DEATH_REWARD + TERMINAL_LOSS_REWARD;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 			episodeBreakdown.death += DEATH_REWARD;
 			episodeBreakdown.terminalLoss += TERMINAL_LOSS_REWARD;
 			done = true;
 		} else if (episodeTick >= maxTicks) {
-			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner);
 			stepReward = stepping.reward + TIMEOUT_REWARD;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 			episodeBreakdown.timeout += TIMEOUT_REWARD;
 			done = true;
 		} else {
-			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner);
 			stepReward = stepping.reward;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 		}

@@ -139,7 +139,7 @@ if (args.includes('--deep-profile')) {
 	): ReturnType<typeof origPredict> {
 		predictCalls += 1;
 		const t0 = performance.now();
-		const result = origPredict.apply(null, fnArgs);
+		const result = origPredict(...fnArgs);
 		predictNs += performance.now() - t0;
 		return result;
 	};
@@ -151,7 +151,7 @@ if (args.includes('--deep-profile')) {
 		...fnArgs: Parameters<typeof origStep>
 	): ReturnType<typeof origStep> {
 		stepCalls += 1;
-		return origStep.apply(null, fnArgs);
+		return origStep(...fnArgs);
 	};
 
 	const sim = buildSimulation({ debugFreeze: false, profiling: true });
