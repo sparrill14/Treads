@@ -18,7 +18,7 @@ interface GridNode {
 export type NavigationMode = 'simple' | 'astar' | 'astar-avoidance';
 
 export class NavigationPlanner {
-	private readonly gridCellWidth = 30;
+	private readonly gridCellWidth = 15;
 	private readonly projectileDangerHorizonTicks = 24;
 	private readonly gridXLength: number;
 	private readonly gridYLength: number;
@@ -31,10 +31,14 @@ export class NavigationPlanner {
 
 	constructor(
 		private arena: ArenaState,
-		private obstacles: ObstacleStateView[]
+		private obstacles: ObstacleStateView[],
+		tankSize = 30
 	) {
 		this.gridXLength = Math.floor(arena.width / this.gridCellWidth);
 		this.gridYLength = Math.floor(arena.height / this.gridCellWidth);
+		// Inflate obstacles by half the tank size so A* paths keep the tank
+		// body clear of obstacle edges (configuration-space approach).
+		const padding = tankSize / 2;
 		this.grid = [];
 		for (let x = 0; x < this.gridXLength; x++) {
 			this.grid[x] = [];
@@ -48,10 +52,10 @@ export class NavigationPlanner {
 					y,
 					walkable: !obstacles.some(
 						(obstacle) =>
-							cellRight > obstacle.x &&
-							cellLeft < obstacle.x + obstacle.width &&
-							cellBottom > obstacle.y &&
-							cellTop < obstacle.y + obstacle.height
+							cellRight > obstacle.x - padding &&
+							cellLeft < obstacle.x + obstacle.width + padding &&
+							cellBottom > obstacle.y - padding &&
+							cellTop < obstacle.y + obstacle.height + padding
 					),
 					dangerous: false,
 					g: Number.POSITIVE_INFINITY,
@@ -366,9 +370,13 @@ export class NavigationPlanner {
 				const y = ny + dy;
 				if (y < 0 || y >= gy) continue;
 				const candidate = grid[x][y];
-				if (candidate.walkable) {
-					this.neighborBuf[count++] = candidate;
+				if (!candidate.walkable) continue;
+				// Prevent corner-cutting: diagonal moves require both
+				// adjacent cardinal cells to be walkable.
+				if (dx !== 0 && dy !== 0) {
+					if (!grid[nx + dx][ny].walkable || !grid[nx][ny + dy].walkable) continue;
 				}
+				this.neighborBuf[count++] = candidate;
 			}
 		}
 		return count;

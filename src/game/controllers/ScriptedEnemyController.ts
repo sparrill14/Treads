@@ -1,9 +1,17 @@
-import { NavigationPlanner, type NavigationMode } from '../navigation/NavigationPlanner';
 import { aimAngleAtTarget, computeGunBarrelEnd, deriveAimTarget, normalizeAngle } from '../core/geometry';
 import { bombWouldHitTank, predictProjectileWillHitTank } from '../core/physics';
 import { mixSeed, SeededRandom } from '../core/prng';
 import { getBombSpec, getProjectileSpec } from '../core/specs';
-import type { MatchInit, MoveIntent, ProjectileStateView, TankAction, TankController, TankObservation, TankStateView } from '../core/types';
+import type {
+	MatchInit,
+	MoveIntent,
+	ProjectileStateView,
+	TankAction,
+	TankController,
+	TankObservation,
+	TankStateView,
+} from '../core/types';
+import { NavigationPlanner, type NavigationMode } from '../navigation/NavigationPlanner';
 
 interface ScriptedEnemyControllerOptions {
 	navigationMode: NavigationMode | 'stationary';
@@ -24,7 +32,8 @@ export class ScriptedEnemyController implements TankController {
 
 	public reset(initial: MatchInit): void {
 		this.selfId = initial.selfId;
-		this.planner = new NavigationPlanner(initial.arena, initial.obstacles);
+		const selfTank = initial.tanks.find((t) => t.id === initial.selfId);
+		this.planner = new NavigationPlanner(initial.arena, initial.obstacles, selfTank?.size);
 		const salt = [...this.selfId].reduce((sum, character) => sum + character.charCodeAt(0), 0);
 		this.rng = new SeededRandom(mixSeed(initial.seed, salt));
 		this.path = [];
@@ -42,12 +51,12 @@ export class ScriptedEnemyController implements TankController {
 			plantBomb: this.shouldPlantBomb(obs, target),
 			aimTarget: target
 				? deriveAimTarget(
-					aimAngle,
-					obs.self.x + obs.self.size / 2,
-					obs.self.y + obs.self.size / 2,
-					obs.arena,
-					Math.max(obs.arena.width, obs.arena.height)
-				)
+						aimAngle,
+						obs.self.x + obs.self.size / 2,
+						obs.self.y + obs.self.size / 2,
+						obs.arena,
+						Math.max(obs.arena.width, obs.arena.height)
+					)
 				: undefined,
 		};
 	}
