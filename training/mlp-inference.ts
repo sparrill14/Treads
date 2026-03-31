@@ -5,7 +5,7 @@
  * Architecture matches SB3's MlpPolicy with net_arch=[256, 256]:
  *   obs → policyNet: Linear(63→256) → Tanh → Linear(256→256) → Tanh → policy_features
  *   obs → valueNet:  Linear(63→256) → Tanh → Linear(256→256) → Tanh → value_features
- *   policy_features → action_net Linear(256→29) → action_logits
+ *   policy_features → action_net Linear(256→5) → action_mean [move_x, move_y, aim, fire, bomb]
  *   value_features  → value_net  Linear(256→1)  → value
  */
 
@@ -104,8 +104,8 @@ function sampleStandardNormal(rng: () => number): number {
  *   mlp_extractor.value_net.0.bias     [256]
  *   mlp_extractor.value_net.2.weight   [256, 256]
  *   mlp_extractor.value_net.2.bias     [256]
- *   action_net.weight                  [29, 256]
- *   action_net.bias                    [29]
+ *   action_net.weight                  [5, 256]
+ *   action_net.bias                    [5]
  *   value_net.weight                   [1, 256]
  *   value_net.bias                     [1]
  */

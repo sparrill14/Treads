@@ -57,7 +57,6 @@ const OBS_SIZE =
 	MAX_OBSTACLES * OBS_DIM +
 	MAX_BOMBS * BOMB_DIM +
 	SUMMARY_DIM;
-const MOVE_INTENTS: MoveIntent[] = ['none', 'n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
 const PLAYER_TANK_ID = 'player-0';
 const FIRE_THRESHOLD = 0.0; // Fire only when signal > 0 (was -0.2, Fix 4)
 const BOMB_THRESHOLD = 0.8;
@@ -673,15 +672,37 @@ function mergeRewardBreakdown(target: RewardBreakdown, add: RewardBreakdown): vo
 
 /**
  * Decodes NN action signals into a TankAction.
- * aim_signal ∈ [-1, 1] is interpreted as a small offset from angle-to-nearest-enemy:
+ * Action layout: [move_x, move_y, aim_signal, fire_signal, bomb_signal]
+ *
+ * Movement: 2D continuous (move_x, move_y) mapped to 9 discrete intents.
+ *   Geometrically meaningful: nearby values → nearby directions.
+ *   Center (0,0) → 'none'; thresholds at ±0.33 for cardinal/diagonal.
+ *
+ * Aim: aim_signal ∈ [-1, 1] is a small offset from angle-to-nearest-enemy.
  *   aim_signal = 0  → aimed directly at enemy
- *   aim_signal = ±1 → aimed 10° off target
- * This keeps the action learnable while still requiring the policy to correct for motion and geometry.
- * When no living enemy exists, falls back to current aim angle.
+ *   aim_signal = ±1 → aimed ±10° off target
  */
 function decodeActionSignal(signal: number[], rawObs: TankObservation): { decoded: TankAction; clamped: number[] } {
 	const clamped = signal.map((v) => Math.max(-1, Math.min(1, v)));
-	const moveIdx = Math.max(0, Math.min(8, Math.round((clamped[0] + 1) * 0.5 * 8)));
+
+	// 2D movement decode: (move_x, move_y) → MoveIntent
+	const mx = clamped[0];
+	const my = clamped[1];
+	const MOVE_DEAD_ZONE = 0.33;
+	const goE = mx > MOVE_DEAD_ZONE;
+	const goW = mx < -MOVE_DEAD_ZONE;
+	const goS = my > MOVE_DEAD_ZONE;
+	const goN = my < -MOVE_DEAD_ZONE;
+	let moveIntent: MoveIntent;
+	if (goN && goE) moveIntent = 'ne';
+	else if (goN && goW) moveIntent = 'nw';
+	else if (goS && goE) moveIntent = 'se';
+	else if (goS && goW) moveIntent = 'sw';
+	else if (goN) moveIntent = 'n';
+	else if (goS) moveIntent = 's';
+	else if (goE) moveIntent = 'e';
+	else if (goW) moveIntent = 'w';
+	else moveIntent = 'none';
 
 	// Enemy-relative aim encoding
 	const s = rawObs.self;
@@ -704,7 +725,7 @@ function decodeActionSignal(signal: number[], rawObs: TankObservation): { decode
 		const ex = nearest.x + nearest.size / 2;
 		const ey = nearest.y + nearest.size / 2;
 		const angleToEnemy = Math.atan2(ey - sy, ex - sx);
-		aimAngle = angleToEnemy + clamped[1] * AIM_OFFSET_LIMIT;
+		aimAngle = angleToEnemy + clamped[2] * AIM_OFFSET_LIMIT;
 	} else {
 		// No living enemy: hold current aim
 		aimAngle = s.aimAngle;
@@ -713,10 +734,10 @@ function decodeActionSignal(signal: number[], rawObs: TankObservation): { decode
 	return {
 		clamped,
 		decoded: {
-			move: MOVE_INTENTS[moveIdx],
+			move: moveIntent,
 			aimAngle,
-			fire: clamped[2] > FIRE_THRESHOLD,
-			plantBomb: clamped[3] > BOMB_THRESHOLD,
+			fire: clamped[3] > FIRE_THRESHOLD,
+			plantBomb: clamped[4] > BOMB_THRESHOLD,
 		},
 	};
 }

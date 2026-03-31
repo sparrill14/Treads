@@ -1,7 +1,7 @@
 """
 Export the trained SB3 PPO model to ONNX format for use in the browser.
 Handles continuous control action space: outputs action means for
-[move_signal, aim_signal, fire_signal, bomb_signal] in [-1, 1].
+[move_x, move_y, aim_signal, fire_signal, bomb_signal] in [-1, 1].
 """
 
 import os
@@ -71,16 +71,40 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
     action_mean: NDArray[np.float32] = output_arr[0].astype(np.float32)
     print(f"ONNX verification - output shape: {output_arr.shape}, action dims: {len(action_mean)}")
 
-    move_signal = float(np.clip(action_mean[0], -1.0, 1.0))
-    aim_signal = float(np.clip(action_mean[1], -1.0, 1.0))
-    fire_signal = float(np.clip(action_mean[2], -1.0, 1.0))
-    bomb_signal = float(np.clip(action_mean[3], -1.0, 1.0))
-    move_idx = int(round(((move_signal + 1.0) * 0.5) * 8.0))
-    move_idx = max(0, min(8, move_idx))
+    MOVE_DEAD_ZONE = 0.33
+    mx = float(np.clip(action_mean[0], -1.0, 1.0))
+    my = float(np.clip(action_mean[1], -1.0, 1.0))
+    aim_signal = float(np.clip(action_mean[2], -1.0, 1.0))
+    fire_signal = float(np.clip(action_mean[3], -1.0, 1.0))
+    bomb_signal = float(np.clip(action_mean[4], -1.0, 1.0))
+
+    go_e = mx > MOVE_DEAD_ZONE
+    go_w = mx < -MOVE_DEAD_ZONE
+    go_s = my > MOVE_DEAD_ZONE
+    go_n = my < -MOVE_DEAD_ZONE
+    if go_n and go_e:
+        move_dir = "ne"
+    elif go_n and go_w:
+        move_dir = "nw"
+    elif go_s and go_e:
+        move_dir = "se"
+    elif go_s and go_w:
+        move_dir = "sw"
+    elif go_n:
+        move_dir = "n"
+    elif go_s:
+        move_dir = "s"
+    elif go_e:
+        move_dir = "e"
+    elif go_w:
+        move_dir = "w"
+    else:
+        move_dir = "none"
+
     aim_angle = ((aim_signal + 1.0) * 0.5) * 2.0 * np.pi
-    fire = fire_signal > 0
-    bomb = bomb_signal > 0
-    print(f"  decoded move_idx={move_idx} aim_angle={aim_angle:.3f} fire={fire} bomb={bomb}")
+    fire = fire_signal > 0.0
+    bomb = bomb_signal > 0.8
+    print(f"  decoded move={move_dir} aim_angle={aim_angle:.3f} fire={fire} bomb={bomb}")
 
 
 if __name__ == "__main__":

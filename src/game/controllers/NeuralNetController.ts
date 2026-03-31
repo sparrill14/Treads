@@ -23,13 +23,12 @@ const OBS_SIZE =
 	MAX_BOMBS * BOMB_DIM +
 	SUMMARY_DIM;
 
-// Continuous action means: [move_signal, aim_signal, fire_signal, bomb_signal] in [-1, 1]
-const ACTION_DIM = 4;
+// Continuous action means: [move_x, move_y, aim_signal, fire_signal, bomb_signal] in [-1, 1]
+const ACTION_DIM = 5;
 const FIRE_THRESHOLD = 0.0;
 const BOMB_THRESHOLD = 0.8;
 const AIM_OFFSET_LIMIT = Math.PI / 18;
-
-const MOVE_INTENTS: MoveIntent[] = ['none', 'n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+const MOVE_DEAD_ZONE = 0.33;
 
 export class NeuralNetController implements TankController {
 	private session: ort.InferenceSession | null = null;
@@ -120,12 +119,27 @@ export class NeuralNetController implements TankController {
 			};
 		}
 
-		const moveSignal = Math.max(-1, Math.min(1, logits[0]));
-		const aimSignal = Math.max(-1, Math.min(1, logits[1]));
-		const fireSignal = Math.max(-1, Math.min(1, logits[2]));
-		const bombSignal = Math.max(-1, Math.min(1, logits[3]));
+		const mx = Math.max(-1, Math.min(1, logits[0]));
+		const my = Math.max(-1, Math.min(1, logits[1]));
+		const aimSignal = Math.max(-1, Math.min(1, logits[2]));
+		const fireSignal = Math.max(-1, Math.min(1, logits[3]));
+		const bombSignal = Math.max(-1, Math.min(1, logits[4]));
 
-		const moveIdx = Math.max(0, Math.min(8, Math.round((moveSignal + 1) * 0.5 * 8)));
+		// 2D movement decode: (move_x, move_y) → MoveIntent
+		const goE = mx > MOVE_DEAD_ZONE;
+		const goW = mx < -MOVE_DEAD_ZONE;
+		const goS = my > MOVE_DEAD_ZONE;
+		const goN = my < -MOVE_DEAD_ZONE;
+		let moveIntent: MoveIntent;
+		if (goN && goE) moveIntent = 'ne';
+		else if (goN && goW) moveIntent = 'nw';
+		else if (goS && goE) moveIntent = 'se';
+		else if (goS && goW) moveIntent = 'sw';
+		else if (goN) moveIntent = 'n';
+		else if (goS) moveIntent = 's';
+		else if (goE) moveIntent = 'e';
+		else if (goW) moveIntent = 'w';
+		else moveIntent = 'none';
 
 		// Enemy-relative aim encoding: aim_signal=0 points at nearest enemy.
 		const obs = this.lastObs;
@@ -153,7 +167,7 @@ export class NeuralNetController implements TankController {
 		}
 
 		return {
-			move: MOVE_INTENTS[moveIdx],
+			move: moveIntent,
 			aimAngle,
 			fire: fireSignal > FIRE_THRESHOLD,
 			plantBomb: bombSignal > BOMB_THRESHOLD,

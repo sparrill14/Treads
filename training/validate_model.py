@@ -37,8 +37,9 @@ LEVEL_TO_OPPONENT_KIND = {
 }
 
 MOVE_COUNT = len(MOVE_INTENTS)
-FIRE_THRESHOLD = -0.2
+FIRE_THRESHOLD = 0.0
 BOMB_THRESHOLD = 0.8
+MOVE_DEAD_ZONE = 0.33
 
 
 @dataclass
@@ -57,13 +58,14 @@ DecodedAction = Dict[str, Any]
 
 
 def _decode_action(continuous_action: Any, obs_raw: Optional[ObsDict]) -> DecodedAction:
-    """Decode 4D continuous action using enemy-relative aim encoding.
+    """Decode 5D continuous action using 2D movement and enemy-relative aim encoding.
 
-    aim_signal = 0  → pointed directly at nearest enemy
-    aim_signal = ±1 → pointed 180° away from enemy
+    Action layout: [move_x, move_y, aim_signal, fire_signal, bomb_signal]
+    Movement: 2D (move_x, move_y) mapped to 9 discrete intents via dead-zone thresholds.
+    Aim: aim_signal = 0 → pointed at nearest enemy, ±1 → ±10° offset.
     """
     a = np.asarray(continuous_action, dtype=np.float32).reshape(-1)
-    if a.shape[0] < 4:
+    if a.shape[0] < 5:
         aim = float(obs_raw["self"]["aimAngle"]) if obs_raw is not None else 0.0
         return {
             "move": 0,
@@ -72,12 +74,35 @@ def _decode_action(continuous_action: Any, obs_raw: Optional[ObsDict]) -> Decode
             "plant_bomb": 0,
         }
 
-    move_signal = float(np.clip(a[0], -1.0, 1.0))
-    aim_signal = float(np.clip(a[1], -1.0, 1.0))
-    fire_signal = float(np.clip(a[2], -1.0, 1.0))
-    bomb_signal = float(np.clip(a[3], -1.0, 1.0))
+    mx = float(np.clip(a[0], -1.0, 1.0))
+    my = float(np.clip(a[1], -1.0, 1.0))
+    aim_signal = float(np.clip(a[2], -1.0, 1.0))
+    fire_signal = float(np.clip(a[3], -1.0, 1.0))
+    bomb_signal = float(np.clip(a[4], -1.0, 1.0))
 
-    move_idx = int(np.clip(round((move_signal + 1.0) * 0.5 * (MOVE_COUNT - 1)), 0, MOVE_COUNT - 1))
+    # 2D movement decode
+    go_e = mx > MOVE_DEAD_ZONE
+    go_w = mx < -MOVE_DEAD_ZONE
+    go_s = my > MOVE_DEAD_ZONE
+    go_n = my < -MOVE_DEAD_ZONE
+    if go_n and go_e:
+        move_idx = MOVE_INTENTS.index("ne")
+    elif go_n and go_w:
+        move_idx = MOVE_INTENTS.index("nw")
+    elif go_s and go_e:
+        move_idx = MOVE_INTENTS.index("se")
+    elif go_s and go_w:
+        move_idx = MOVE_INTENTS.index("sw")
+    elif go_n:
+        move_idx = MOVE_INTENTS.index("n")
+    elif go_s:
+        move_idx = MOVE_INTENTS.index("s")
+    elif go_e:
+        move_idx = MOVE_INTENTS.index("e")
+    elif go_w:
+        move_idx = MOVE_INTENTS.index("w")
+    else:
+        move_idx = 0  # none
 
     # Enemy-relative aim encoding
     raw_obs: ObsDict = obs_raw or {}
@@ -97,7 +122,7 @@ def _decode_action(continuous_action: Any, obs_raw: Optional[ObsDict]) -> Decode
         ex = float(nearest["x"]) + float(nearest["size"]) / 2
         ey = float(nearest["y"]) + float(nearest["size"]) / 2
         angle_to_enemy = math.atan2(ey - sy, ex - sx)
-        aim_angle = angle_to_enemy + aim_signal * math.pi
+        aim_angle = angle_to_enemy + aim_signal * (math.pi / 18)
     else:
         aim_angle = float(raw_obs["self"]["aimAngle"]) if obs_raw is not None else 0.0
 

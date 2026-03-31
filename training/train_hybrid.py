@@ -62,11 +62,11 @@ class HybridTrainer:
         n_steps: int = 4096,
         batch_size: int = 512,
         n_epochs: int = 10,
-        gamma: float = 0.995,
+        gamma: float = 0.99,
         gae_lambda: float = 0.95,
         learning_rate: float = 1e-4,
         clip_range: float = 0.15,
-        ent_coef: float = 0.08,
+        ent_coef: float = 0.015,
         max_episode_steps: int = 1080,
         output_dir: Optional[str] = None,
         load_model_path: Optional[str] = None,
@@ -106,8 +106,8 @@ class HybridTrainer:
             def __init__(self) -> None:
                 super().__init__()
                 self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(OBS_SIZE,), dtype=np.float32)
-                # [move_signal, aim_signal, fire_signal, bomb_signal] in [-1, 1]
-                self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+                # [move_x, move_y, aim_signal, fire_signal, bomb_signal] in [-1, 1]
+                self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32)
 
             def reset(
                 self,
