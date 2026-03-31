@@ -18,6 +18,7 @@ import csv
 import json
 import time
 import subprocess
+import threading
 from typing import Any, Dict, List, Optional, TextIO, Tuple, cast
 import numpy as np
 import torch
@@ -67,6 +68,7 @@ class HybridTrainer:
         checkpoint_episode_interval: int = 500,
         replay_episode_interval: int = 250,
         seed: int = 42,
+        num_workers: int = 1,
     ) -> None:
         self._explicit_levels = levels is not None
         self.curriculum: List[Dict[str, Any]] = curriculum or DEFAULT_CURRICULUM
@@ -85,6 +87,7 @@ class HybridTrainer:
         self.seed_counter = seed
         self.checkpoint_episode_interval = checkpoint_episode_interval
         self.replay_episode_interval = replay_episode_interval
+        self.num_workers = max(1, num_workers)
 
         self.output_dir = output_dir or os.path.join(os.path.dirname(__file__), "output")
         os.makedirs(self.output_dir, exist_ok=True)
@@ -150,9 +153,9 @@ class HybridTrainer:
         # Set up SB3 logger (required for model.train())
         self.model.set_logger(configure(self.output_dir, ["stdout"]))
 
-        # Start rollout worker
-        self.worker: Optional[subprocess.Popen[str]] = None
-        self._start_worker()
+        # Start rollout workers
+        self.workers: List[subprocess.Popen[str]] = []
+        self._start_workers()
 
         # Logging state
         self.total_timesteps = 0
@@ -165,19 +168,23 @@ class HybridTrainer:
         self.best_win_rate = 0.0
         self.start_time = time.time()
 
-    def _start_worker(self) -> None:
-        """Start the Node.js rollout worker process."""
-        self.worker = subprocess.Popen(
-            ["node", ROLLOUT_WORKER_PATH],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        )
-        # Wait for ready
-        ready = self._read_msg()
-        assert ready["type"] == "ready", f"Expected ready, got {ready}"
+    def _start_workers(self) -> None:
+        """Start the Node.js rollout worker processes."""
+        self.workers = []
+        for _ in range(self.num_workers):
+            proc = subprocess.Popen(
+                ["node", ROLLOUT_WORKER_PATH],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+            self.workers.append(proc)
+        # Wait for all workers to be ready
+        for i, w in enumerate(self.workers):
+            ready = self._read_msg_from(w)
+            assert ready["type"] == "ready", f"Worker {i}: expected ready, got {ready}"
 
     def _get_curriculum_phase(self) -> Dict[str, Any]:
         return self.curriculum[self.current_phase_index]
@@ -208,22 +215,32 @@ class HybridTrainer:
         self.phase_start_episode = self.total_episodes
         return previous, self._get_curriculum_phase(), win_rate
 
-    def _send_msg(self, msg: Dict[str, Any]) -> None:
-        """Send JSON message to worker."""
-        assert self.worker is not None and self.worker.stdin is not None
-        self.worker.stdin.write(json.dumps(msg) + "\n")
-        self.worker.stdin.flush()
+    @staticmethod
+    def _send_msg_to(proc: subprocess.Popen[str], msg: Dict[str, Any]) -> None:
+        """Send JSON message to a specific worker."""
+        assert proc.stdin is not None
+        proc.stdin.write(json.dumps(msg) + "\n")
+        proc.stdin.flush()
 
-    def _read_msg(self) -> Dict[str, Any]:
-        """Read JSON message from worker."""
-        assert self.worker is not None and self.worker.stdout is not None
-        line = self.worker.stdout.readline()
+    @staticmethod
+    def _read_msg_from(proc: subprocess.Popen[str]) -> Dict[str, Any]:
+        """Read JSON message from a specific worker."""
+        assert proc.stdout is not None
+        line = proc.stdout.readline()
         if not line:
             stderr = ""
-            if self.worker.stderr is not None:
-                stderr = self.worker.stderr.read()
+            if proc.stderr is not None:
+                stderr = proc.stderr.read()
             raise RuntimeError(f"Worker process died. stderr: {stderr}")
         return cast(Dict[str, Any], json.loads(line.strip()))
+
+    def _send_msg(self, msg: Dict[str, Any]) -> None:
+        """Send JSON message to the first worker (legacy helper)."""
+        self._send_msg_to(self.workers[0], msg)
+
+    def _read_msg(self) -> Dict[str, Any]:
+        """Read JSON message from the first worker (legacy helper)."""
+        return self._read_msg_from(self.workers[0])
 
     def _extract_weights(self) -> Dict[str, Any]:
         """Extract model weights as nested lists for JSON transfer."""
@@ -233,29 +250,86 @@ class HybridTrainer:
         return state_dict
 
     def _send_weights(self) -> None:
-        """Send current model weights to the rollout worker."""
+        """Send current model weights to all rollout workers."""
         weights = self._extract_weights()
-        self._send_msg({"type": "set_weights", "state_dict": weights})
-        ack = self._read_msg()
-        assert ack["type"] == "weights_set", f"Expected weights_set, got {ack}"
+        msg: Dict[str, Any] = {"type": "set_weights", "state_dict": weights}
+        for w in self.workers:
+            self._send_msg_to(w, msg)
+        for i, w in enumerate(self.workers):
+            ack = self._read_msg_from(w)
+            assert ack["type"] == "weights_set", f"Worker {i}: expected weights_set, got {ack}"
 
     def _collect_rollout(self, target_episodes: int) -> Dict[str, Any]:
-        """Request rollout collection from the worker."""
-        self.seed_counter += self.n_steps  # advance seed to avoid repeats
-        self._send_msg({
-            "type": "collect",
-            "n_steps": self.n_steps,
-            "levels": self.levels,
-            "maxTicks": self.max_episode_steps,
-            "seedStart": self.seed_counter,
-            "replayEveryEpisodes": self.replay_episode_interval,
-            "replayDir": self.replay_dir,
-            "episodeOffset": self.total_episodes,
-            "targetEpisodes": target_episodes,
-        })
-        rollout = self._read_msg()
-        assert rollout["type"] == "rollout", f"Expected rollout, got {rollout.get('type')}"
-        return rollout
+        """Request rollout collection from workers (parallel when num_workers > 1)."""
+        num_w = len(self.workers)
+        # Divide steps across workers; give remainder to last worker
+        base_steps = self.n_steps // num_w
+        remainder = self.n_steps % num_w
+
+        # Send collect commands to all workers (non-blocking writes)
+        for i, w in enumerate(self.workers):
+            worker_steps = base_steps + (1 if i < remainder else 0)
+            worker_seed = self.seed_counter + i * base_steps
+            self._send_msg_to(w, {
+                "type": "collect",
+                "n_steps": worker_steps,
+                "levels": self.levels,
+                "maxTicks": self.max_episode_steps,
+                "seedStart": worker_seed,
+                "replayEveryEpisodes": self.replay_episode_interval,
+                "replayDir": self.replay_dir,
+                "episodeOffset": self.total_episodes,
+                "targetEpisodes": target_episodes,
+            })
+        self.seed_counter += self.n_steps
+
+        # Read results from all workers in parallel using threads
+        results: List[Optional[Dict[str, Any]]] = [None] * num_w
+        errors: List[Optional[Exception]] = [None] * num_w
+
+        def read_worker(idx: int) -> None:
+            try:
+                results[idx] = self._read_msg_from(self.workers[idx])
+            except Exception as e:
+                errors[idx] = e
+
+        if num_w == 1:
+            read_worker(0)
+        else:
+            threads = [threading.Thread(target=read_worker, args=(i,)) for i in range(num_w)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+        for i, err in enumerate(errors):
+            if err is not None:
+                raise RuntimeError(f"Worker {i} failed: {err}")
+
+        # Merge rollout data from all workers
+        merged = results[0]
+        assert merged is not None and merged["type"] == "rollout", f"Worker 0: expected rollout, got {merged}"
+        if num_w > 1:
+            for i in range(1, num_w):
+                r = results[i]
+                assert r is not None and r["type"] == "rollout", f"Worker {i}: expected rollout, got {r}"
+                merged["obs"].extend(r["obs"])
+                merged["actions"].extend(r["actions"])
+                merged["rewards"].extend(r["rewards"])
+                merged["episode_starts"].extend(r["episode_starts"])
+                merged["values"].extend(r["values"])
+                merged["log_probs"].extend(r["log_probs"])
+                merged["episode_rewards"].extend(r.get("episode_rewards", []))
+                merged["episode_lengths"].extend(r.get("episode_lengths", []))
+                merged["episode_wins"].extend(r.get("episode_wins", []))
+                merged["episode_levels"].extend(r.get("episode_levels", []))
+                merged["episode_reward_breakdowns"].extend(r.get("episode_reward_breakdowns", []))
+                # Use last worker's bootstrap values
+                merged["last_obs"] = r["last_obs"]
+                merged["last_done"] = r["last_done"]
+                merged["last_value"] = r["last_value"]
+            merged["n_steps"] = self.n_steps
+        return merged
 
     @staticmethod
     def _reward_source_percentages(breakdowns: List[Dict[str, Any]]) -> Tuple[float, float, float]:
@@ -560,14 +634,14 @@ class HybridTrainer:
             self.close()
 
     def close(self) -> None:
-        """Clean up worker process."""
-        if self.worker:
+        """Clean up all worker processes."""
+        for w in self.workers:
             try:
-                self._send_msg({"type": "exit"})
-                self.worker.wait(timeout=5)
+                self._send_msg_to(w, {"type": "exit"})
+                w.wait(timeout=5)
             except Exception:
-                self.worker.kill()
-            self.worker = None
+                w.kill()
+        self.workers = []
 
     def send_weights(self) -> None:
         """Public wrapper used by diagnostics/scripts."""
@@ -598,13 +672,22 @@ def train() -> None:
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate (default: 1e-4)")
     parser.add_argument("--n-steps", type=int, default=4096, help="Rollout steps per iteration (default: 4096)")
     parser.add_argument("--clip-range", type=float, default=0.10, help="PPO clip range (default: 0.10)")
+    cpu_count = os.cpu_count() or 1
+    default_workers = max(1, min(cpu_count - 4, 12))  # leave cores for OS + Python; cap at 12
+    parser.add_argument("--num-workers", type=int, default=default_workers, help=f"Number of parallel rollout workers (default: {default_workers}, detected {cpu_count} cores)")
     args = parser.parse_args()
+
+    # Scale n_steps so each worker gets at least 2048 steps (enough for 1-2 full episodes)
+    min_steps_per_worker = 2048
+    effective_n_steps = max(args.n_steps, args.num_workers * min_steps_per_worker)
+    if effective_n_steps != args.n_steps:
+        print(f"Auto-scaling n_steps: {args.n_steps} -> {effective_n_steps} ({args.num_workers} workers x {min_steps_per_worker} min steps/worker)")
 
     levels = [int(x) for x in args.levels.split(",") if x.strip()] if args.levels else None
 
     trainer = HybridTrainer(
         levels=levels,
-        n_steps=args.n_steps,
+        n_steps=effective_n_steps,
         batch_size=512,
         n_epochs=10,
         gamma=args.gamma,
@@ -617,9 +700,11 @@ def train() -> None:
         load_model_path=args.load_model or None,
         checkpoint_episode_interval=args.checkpoint_interval,
         replay_episode_interval=args.replay_interval,
+        num_workers=args.num_workers,
     )
 
-    print(f"Starting hybrid training (rollout in TypeScript, PPO in Python)")
+    print(f"Starting hybrid training (rollout in TypeScript, PPO in Python, {args.num_workers} worker(s))")
+    print(f"n_steps: {effective_n_steps} ({effective_n_steps // args.num_workers} per worker)")
     if levels is None:
         print(f"Initial curriculum: {trainer.levels} ({trainer.curriculum[0]['name']})")
     else:
