@@ -18,7 +18,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
-import { computeGunBarrelEnd } from '../src/game/core/geometry';
+
 import { createDefaultControllers, createInitialGameState } from '../src/game/core/MatchFactory';
 import { ReplayRecorder } from '../src/game/core/Replay';
 import { Simulation } from '../src/game/core/Simulation';
@@ -27,7 +27,6 @@ import type {
 	GameState,
 	MatchInit,
 	MoveIntent,
-	ObstacleStateView,
 	TankAction,
 	TankController,
 	TankObservation,
@@ -69,11 +68,10 @@ const DEATH_REWARD = -2.0;
 const TERMINAL_WIN_REWARD = 5.0;
 const TERMINAL_LOSS_REWARD = -3.0;
 const TIMEOUT_REWARD = -1.0;
-const WASTED_SHOT_PENALTY = -0.15;
-const AIM_JITTER_PENALTY = -0.03;
+const AIM_JITTER_PENALTY = -0.01;
 const MOVE_JITTER_PENALTY = -0.003;
-const APPROACH_REWARD = 0.002;
-const WASTED_BOMB_PENALTY = -0.3;
+const APPROACH_SCALE = 0.5; // potential-based: total ~0.5 for full diagonal approach (~10% of win reward)
+const ARENA_DIAGONAL = Math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * ARENA_HEIGHT);
 const MAX_FUSE_TICKS = 360.0; // Max fuse ticks for any bomb type
 const MAX_BLAST_RADIUS = 100.0; // Normalize blast radius by this value
 
@@ -433,11 +431,9 @@ interface RewardBreakdown {
 	terminalWin: number;
 	terminalLoss: number;
 	timeout: number;
-	wastedShot: number;
 	aimJitter: number;
 	moveJitter: number;
 	approach: number;
-	wastedBomb: number;
 }
 
 function createRewardBreakdown(): RewardBreakdown {
@@ -450,11 +446,9 @@ function createRewardBreakdown(): RewardBreakdown {
 		terminalWin: 0,
 		terminalLoss: 0,
 		timeout: 0,
-		wastedShot: 0,
 		aimJitter: 0,
 		moveJitter: 0,
 		approach: 0,
-		wastedBomb: 0,
 	};
 }
 
@@ -467,11 +461,9 @@ function mergeRewardBreakdown(target: RewardBreakdown, add: RewardBreakdown): vo
 	target.terminalWin += add.terminalWin;
 	target.terminalLoss += add.terminalLoss;
 	target.timeout += add.timeout;
-	target.wastedShot += add.wastedShot;
 	target.aimJitter += add.aimJitter;
 	target.moveJitter += add.moveJitter;
 	target.approach += add.approach;
-	target.wastedBomb += add.wastedBomb;
 }
 
 /**
@@ -545,65 +537,11 @@ function initRewardTracker(obs: TankObservation): RewardTracker {
 	};
 }
 
-/**
- * Test if line segment (x1,y1)→(x2,y2) intersects any obstacle rectangle.
- * Uses separating-axis test for segment vs AABB.
- */
-function segmentIntersectsAnyObstacle(
-	x1: number,
-	y1: number,
-	x2: number,
-	y2: number,
-	obstacles: readonly ObstacleStateView[]
-): boolean {
-	for (const obs of obstacles) {
-		if (segmentIntersectsRect(x1, y1, x2, y2, obs.x, obs.y, obs.x + obs.width, obs.y + obs.height)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-/** Cohen-Sutherland-style segment vs AABB intersection test. */
-function segmentIntersectsRect(
-	x1: number,
-	y1: number,
-	x2: number,
-	y2: number,
-	rx1: number,
-	ry1: number,
-	rx2: number,
-	ry2: number
-): boolean {
-	// Liang-Barsky algorithm
-	const dx = x2 - x1;
-	const dy = y2 - y1;
-	const p = [-dx, dx, -dy, dy];
-	const q = [x1 - rx1, rx2 - x1, y1 - ry1, ry2 - y1];
-	let tMin = 0;
-	let tMax = 1;
-	for (let i = 0; i < 4; i++) {
-		if (Math.abs(p[i]) < 1e-10) {
-			if (q[i] < 0) return false; // Parallel and outside
-		} else {
-			const t = q[i] / p[i];
-			if (p[i] < 0) {
-				if (t > tMax) return false;
-				if (t > tMin) tMin = t;
-			} else {
-				if (t < tMin) return false;
-				if (t < tMax) tMax = t;
-			}
-		}
-	}
-	return tMin <= tMax;
-}
-
 function computeSteppingReward(
 	state: DeepReadonly<GameState>,
 	tracker: RewardTracker,
 	decodedAction: TankAction,
-	rawObs: TankObservation
+	_rawObs: TankObservation
 ): { reward: number; breakdown: RewardBreakdown } {
 	let reward = STEP_PENALTY;
 	const breakdown = createRewardBreakdown();
@@ -639,66 +577,6 @@ function computeSteppingReward(
 	}
 	tracker.prevEnemyAliveCount = aliveEnemies.length;
 
-	// ── Shaping: wasted shot penalty ──
-	// Penalize firing when no enemy has direct line-of-sight (no obstacle in the way)
-	if (decodedAction.fire && aliveEnemies.length > 0) {
-		const s = rawObs.self;
-		if (s.shotCooldownTicks <= 0 && s.activeAmmo < s.maxAmmo) {
-			const barrelEnd = computeGunBarrelEnd({
-				x: s.x,
-				y: s.y,
-				size: s.size,
-				aimAngle: decodedAction.aimAngle,
-			});
-			// Check if the aim direction has clear LOS to any enemy
-			let hasLOS = false;
-			for (const enemy of aliveEnemies) {
-				const ex = enemy.x + enemy.size / 2;
-				const ey = enemy.y + enemy.size / 2;
-				// Check angle difference: is the agent aiming roughly toward this enemy?
-				const angleToEnemy = Math.atan2(ey - barrelEnd.y, ex - barrelEnd.x);
-				const angleDiff = Math.abs(
-					Math.atan2(Math.sin(decodedAction.aimAngle - angleToEnemy), Math.cos(decodedAction.aimAngle - angleToEnemy))
-				);
-				if (angleDiff > Math.PI / 6) continue; // Not aiming within 30° of this enemy
-				// Check if segment from barrel to enemy intersects any obstacle
-				if (!segmentIntersectsAnyObstacle(barrelEnd.x, barrelEnd.y, ex, ey, rawObs.obstacles)) {
-					hasLOS = true;
-					break;
-				}
-			}
-			if (!hasLOS) {
-				reward += WASTED_SHOT_PENALTY;
-				breakdown.wastedShot += WASTED_SHOT_PENALTY;
-			}
-		}
-	}
-
-	// ── Shaping: wasted bomb penalty ──
-	// Penalize planting a bomb when no enemy is nearby
-	if (decodedAction.plantBomb && aliveEnemies.length > 0) {
-		const s = rawObs.self;
-		if (s.bombCooldownTicks <= 0 && s.activeBombs < s.maxBombs && s.bombType) {
-			const px = s.x + s.size / 2;
-			const py = s.y + s.size / 2;
-			const blastRadius = s.bombType === 'love' ? 80 : 50;
-			let enemyNearBomb = false;
-			for (const enemy of aliveEnemies) {
-				const ex = enemy.x + enemy.size / 2;
-				const ey = enemy.y + enemy.size / 2;
-				const dist = Math.sqrt((ex - px) * (ex - px) + (ey - py) * (ey - py));
-				if (dist <= blastRadius * 1.5) {
-					enemyNearBomb = true;
-					break;
-				}
-			}
-			if (!enemyNearBomb) {
-				reward += WASTED_BOMB_PENALTY;
-				breakdown.wastedBomb += WASTED_BOMB_PENALTY;
-			}
-		}
-	}
-
 	// ── Shaping: aim jitter penalty ──
 	// Penalize rapid aim oscillation proportional to angular change
 	const aimDelta = Math.abs(
@@ -723,8 +601,9 @@ function computeSteppingReward(
 	}
 	tracker.prevMoveIntent = currentMove;
 
-	// ── Shaping: approach reward ──
-	// Reward closing distance to nearest alive enemy
+	// ── Shaping: potential-based approach reward (Ng et al. 1999) ──
+	// Φ(s) = -dist/ARENA_DIAGONAL, reward = γ·Φ(s') - Φ(s) ≈ Φ(s') - Φ(s) since γ≈1
+	// Policy-invariant: does not alter the optimal policy, only speeds up learning.
 	if (aliveEnemies.length > 0) {
 		const px = player.x + player.size / 2;
 		const py = player.y + player.size / 2;
@@ -735,9 +614,12 @@ function computeSteppingReward(
 			const dSq = dx * dx + dy * dy;
 			if (dSq < nearestDistSq) nearestDistSq = dSq;
 		}
-		if (nearestDistSq < tracker.prevEnemyDistSq) {
-			reward += APPROACH_REWARD;
-			breakdown.approach += APPROACH_REWARD;
+		const currDist = Math.sqrt(nearestDistSq);
+		const prevDist = Math.sqrt(tracker.prevEnemyDistSq);
+		const approachReward = (APPROACH_SCALE * (prevDist - currDist)) / ARENA_DIAGONAL;
+		if (Math.abs(approachReward) > 1e-8) {
+			reward += approachReward;
+			breakdown.approach += approachReward;
 		}
 		tracker.prevEnemyDistSq = nearestDistSq;
 	}
