@@ -39,8 +39,9 @@ ROLLOUT_WORKER_PATH = os.path.join(
 # ---- Curriculum configuration ----
 DEFAULT_CURRICULUM: List[Dict[str, Any]] = [
     {"name": "Phase 1 (target practice)", "scenario_ids": [111, 112, 113], "advance_after_episodes": 1500, "required_win_rate": 0.40},
-    {"name": "Phase 2 (live fire fundamentals)", "scenario_ids": [121, 122, 123], "advance_after_episodes": 4000, "required_win_rate": 0.40},
-    {"name": "Phase 3 (bounce and bombs)", "scenario_ids": [301, 302, 303], "advance_after_episodes": 9000, "required_win_rate": 0.40},
+    {"name": "Phase 2 (live fire fundamentals)", "scenario_ids": [121, 122, 123], "advance_after_episodes": 3500, "required_win_rate": 0.40},
+    {"name": "Phase 2.5 (obstacles)", "scenario_ids": [201, 202, 203], "advance_after_episodes": 5500, "required_win_rate": 0.40},
+    {"name": "Phase 3 (bounce and bombs)", "scenario_ids": [301, 302, 303], "advance_after_episodes": 11000, "required_win_rate": 0.40},
     {"name": "Phase 4 (full game)", "scenario_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9], "advance_after_episodes": None, "required_win_rate": 0.40},
 ]
 
@@ -60,7 +61,7 @@ class HybridTrainer:
         learning_rate: float = 1e-4,
         clip_range: float = 0.15,
         ent_coef: float = 0.08,
-        max_episode_steps: int = 720,
+        max_episode_steps: int = 1080,
         output_dir: Optional[str] = None,
         load_model_path: Optional[str] = None,
         checkpoint_episode_interval: int = 500,
@@ -365,7 +366,7 @@ class HybridTrainer:
 
             if self.episode_reward_breakdowns:
                 recent_breakdowns = self.episode_reward_breakdowns[-50:]
-                keys = ["tick", "hit", "hurt", "kill", "death", "terminalWin", "terminalLoss", "timeout", "wastedShot", "aimJitter", "approach", "wastedBomb"]
+                keys = ["tick", "hit", "hurt", "kill", "death", "terminalWin", "terminalLoss", "timeout", "wastedShot", "aimJitter", "moveJitter", "approach", "wastedBomb"]
                 summary: List[str] = []
                 for key in keys:
                     vals = [float(b.get(key, 0.0)) for b in recent_breakdowns]
@@ -385,7 +386,7 @@ class HybridTrainer:
         csv_writer.writerow([
             "iteration", "timesteps", "episodes", "curriculum_phase", "active_scenarios", "phase_recent_winrate_500",
             "avg_reward_50", "avg_winrate_50",
-            "avg_tick_50", "avg_hit_50", "avg_hurt_50", "avg_kill_50", "avg_death_50", "avg_terminal_win_50", "avg_terminal_loss_50", "avg_timeout_50", "avg_wasted_shot_50", "avg_aim_jitter_50", "avg_approach_50", "avg_wasted_bomb_50",
+            "avg_tick_50", "avg_hit_50", "avg_hurt_50", "avg_kill_50", "avg_death_50", "avg_terminal_win_50", "avg_terminal_loss_50", "avg_timeout_50", "avg_wasted_shot_50", "avg_aim_jitter_50", "avg_move_jitter_50", "avg_approach_50", "avg_wasted_bomb_50",
             "steps_per_sec", "elapsed_sec"
         ])
 
@@ -462,10 +463,11 @@ class HybridTrainer:
                     avg_timeout = np.mean([float(b.get("timeout", 0.0)) for b in recent_breakdowns])
                     avg_wasted_shot = np.mean([float(b.get("wastedShot", 0.0)) for b in recent_breakdowns])
                     avg_aim_jitter = np.mean([float(b.get("aimJitter", 0.0)) for b in recent_breakdowns])
+                    avg_move_jitter = np.mean([float(b.get("moveJitter", 0.0)) for b in recent_breakdowns])
                     avg_approach = np.mean([float(b.get("approach", 0.0)) for b in recent_breakdowns])
                     avg_wasted_bomb = np.mean([float(b.get("wastedBomb", 0.0)) for b in recent_breakdowns])
                 else:
-                    avg_tick = avg_hit = avg_hurt = avg_kill = avg_death = avg_terminal_win = avg_terminal_loss = avg_timeout = avg_wasted_shot = avg_aim_jitter = avg_approach = avg_wasted_bomb = 0.0
+                    avg_tick = avg_hit = avg_hurt = avg_kill = avg_death = avg_terminal_win = avg_terminal_loss = avg_timeout = avg_wasted_shot = avg_aim_jitter = avg_move_jitter = avg_approach = avg_wasted_bomb = 0.0
 
                 csv_writer.writerow([
                     iteration,
@@ -486,6 +488,7 @@ class HybridTrainer:
                     f"{avg_timeout:.3f}",
                     f"{avg_wasted_shot:.3f}",
                     f"{avg_aim_jitter:.3f}",
+                    f"{avg_move_jitter:.3f}",
                     f"{avg_approach:.3f}",
                     f"{avg_wasted_bomb:.3f}",
                     f"{steps_per_sec:.0f}",
@@ -498,7 +501,7 @@ class HybridTrainer:
                     previous_phase, next_phase, trigger_win_rate = phase_transition
                     recent_breakdowns = self.episode_reward_breakdowns[-50:]
                     summary_parts: List[str] = []
-                    for key in ["tick", "hit", "hurt", "kill", "death", "terminalWin", "terminalLoss", "timeout", "wastedShot", "aimJitter", "approach", "wastedBomb"]:
+                    for key in ["tick", "hit", "hurt", "kill", "death", "terminalWin", "terminalLoss", "timeout", "wastedShot", "aimJitter", "moveJitter", "approach", "wastedBomb"]:
                         vals = [float(b.get(key, 0.0)) for b in recent_breakdowns]
                         summary_parts.append(f"{key}={np.mean(vals):.3f}")
                     print(

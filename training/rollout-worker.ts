@@ -70,9 +70,10 @@ const TERMINAL_WIN_REWARD = 5.0;
 const TERMINAL_LOSS_REWARD = -3.0;
 const TIMEOUT_REWARD = -1.0;
 const WASTED_SHOT_PENALTY = -0.15;
-const AIM_JITTER_PENALTY = -0.02;
+const AIM_JITTER_PENALTY = -0.03;
+const MOVE_JITTER_PENALTY = -0.003;
 const APPROACH_REWARD = 0.002;
-const WASTED_BOMB_PENALTY = -0.2;
+const WASTED_BOMB_PENALTY = -0.3;
 const MAX_FUSE_TICKS = 360.0; // Max fuse ticks for any bomb type
 const MAX_BLAST_RADIUS = 100.0; // Normalize blast radius by this value
 
@@ -192,7 +193,7 @@ const TRAINING_SCENARIOS: Record<number, LevelConfig> = {
 				bombs: { type: 'basic', count: 1 },
 				navigator: { type: 'astar' },
 			},
-			{ type: 'stationary', x: 860, y: 340, ammo: { type: 'basic', count: 1 } },
+			{ type: 'stationary-random-aim', x: 860, y: 340, ammo: { type: 'basic', count: 1 } },
 		],
 	},
 	303: {
@@ -420,6 +421,7 @@ interface RewardTracker {
 	prevSelfHealth: number;
 	prevAimAngle: number;
 	prevEnemyDistSq: number;
+	prevMoveIntent: MoveIntent;
 }
 
 interface RewardBreakdown {
@@ -433,6 +435,7 @@ interface RewardBreakdown {
 	timeout: number;
 	wastedShot: number;
 	aimJitter: number;
+	moveJitter: number;
 	approach: number;
 	wastedBomb: number;
 }
@@ -449,6 +452,7 @@ function createRewardBreakdown(): RewardBreakdown {
 		timeout: 0,
 		wastedShot: 0,
 		aimJitter: 0,
+		moveJitter: 0,
 		approach: 0,
 		wastedBomb: 0,
 	};
@@ -465,6 +469,7 @@ function mergeRewardBreakdown(target: RewardBreakdown, add: RewardBreakdown): vo
 	target.timeout += add.timeout;
 	target.wastedShot += add.wastedShot;
 	target.aimJitter += add.aimJitter;
+	target.moveJitter += add.moveJitter;
 	target.approach += add.approach;
 	target.wastedBomb += add.wastedBomb;
 }
@@ -536,6 +541,7 @@ function initRewardTracker(obs: TankObservation): RewardTracker {
 		prevSelfHealth: obs.self.health,
 		prevAimAngle: obs.self.aimAngle,
 		prevEnemyDistSq: nearestDistSq,
+		prevMoveIntent: 'none',
 	};
 }
 
@@ -544,7 +550,10 @@ function initRewardTracker(obs: TankObservation): RewardTracker {
  * Uses separating-axis test for segment vs AABB.
  */
 function segmentIntersectsAnyObstacle(
-	x1: number, y1: number, x2: number, y2: number,
+	x1: number,
+	y1: number,
+	x2: number,
+	y2: number,
 	obstacles: readonly ObstacleStateView[]
 ): boolean {
 	for (const obs of obstacles) {
@@ -557,8 +566,14 @@ function segmentIntersectsAnyObstacle(
 
 /** Cohen-Sutherland-style segment vs AABB intersection test. */
 function segmentIntersectsRect(
-	x1: number, y1: number, x2: number, y2: number,
-	rx1: number, ry1: number, rx2: number, ry2: number
+	x1: number,
+	y1: number,
+	x2: number,
+	y2: number,
+	rx1: number,
+	ry1: number,
+	rx2: number,
+	ry2: number
 ): boolean {
 	// Liang-Barsky algorithm
 	const dx = x2 - x1;
@@ -630,7 +645,10 @@ function computeSteppingReward(
 		const s = rawObs.self;
 		if (s.shotCooldownTicks <= 0 && s.activeAmmo < s.maxAmmo) {
 			const barrelEnd = computeGunBarrelEnd({
-				x: s.x, y: s.y, size: s.size, aimAngle: decodedAction.aimAngle,
+				x: s.x,
+				y: s.y,
+				size: s.size,
+				aimAngle: decodedAction.aimAngle,
 			});
 			// Check if the aim direction has clear LOS to any enemy
 			let hasLOS = false;
@@ -639,10 +657,9 @@ function computeSteppingReward(
 				const ey = enemy.y + enemy.size / 2;
 				// Check angle difference: is the agent aiming roughly toward this enemy?
 				const angleToEnemy = Math.atan2(ey - barrelEnd.y, ex - barrelEnd.x);
-				const angleDiff = Math.abs(Math.atan2(
-					Math.sin(decodedAction.aimAngle - angleToEnemy),
-					Math.cos(decodedAction.aimAngle - angleToEnemy)
-				));
+				const angleDiff = Math.abs(
+					Math.atan2(Math.sin(decodedAction.aimAngle - angleToEnemy), Math.cos(decodedAction.aimAngle - angleToEnemy))
+				);
 				if (angleDiff > Math.PI / 6) continue; // Not aiming within 30° of this enemy
 				// Check if segment from barrel to enemy intersects any obstacle
 				if (!segmentIntersectsAnyObstacle(barrelEnd.x, barrelEnd.y, ex, ey, rawObs.obstacles)) {
@@ -670,7 +687,7 @@ function computeSteppingReward(
 				const ex = enemy.x + enemy.size / 2;
 				const ey = enemy.y + enemy.size / 2;
 				const dist = Math.sqrt((ex - px) * (ex - px) + (ey - py) * (ey - py));
-				if (dist <= blastRadius * 2) {
+				if (dist <= blastRadius * 1.5) {
 					enemyNearBomb = true;
 					break;
 				}
@@ -696,6 +713,15 @@ function computeSteppingReward(
 		breakdown.aimJitter += penalty;
 	}
 	tracker.prevAimAngle = decodedAction.aimAngle;
+
+	// ── Shaping: movement jitter penalty ──
+	// Penalize rapid direction changes (both previous and current must be actual movement)
+	const currentMove = decodedAction.move;
+	if (currentMove !== 'none' && tracker.prevMoveIntent !== 'none' && currentMove !== tracker.prevMoveIntent) {
+		reward += MOVE_JITTER_PENALTY;
+		breakdown.moveJitter += MOVE_JITTER_PENALTY;
+	}
+	tracker.prevMoveIntent = currentMove;
 
 	// ── Shaping: approach reward ──
 	// Reward closing distance to nearest alive enemy
