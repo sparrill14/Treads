@@ -727,12 +727,12 @@ export class Simulation {
 		return tankIntersectsBlast(tank, bomb.x, bomb.y, bomb.blastRadius);
 	}
 
-	private getProjectileTargets(projectile: ProjectileStateView): TankStateView[] {
-		return this.state.tanks.filter((tank) => tank.team !== projectile.team);
+	private getProjectileTargets(_projectile: ProjectileStateView): TankStateView[] {
+		return this.state.tanks;
 	}
 
-	private getBombTargets(bomb: BombStateView): TankStateView[] {
-		return this.state.tanks.filter((tank) => tank.team !== bomb.team);
+	private getBombTargets(_bomb: BombStateView): TankStateView[] {
+		return this.state.tanks;
 	}
 
 	private markProjectileDestroyed(
