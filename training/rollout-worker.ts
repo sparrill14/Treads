@@ -78,6 +78,67 @@ const MAX_FUSE_TICKS = 360.0; // Max fuse ticks for any bomb type
 const MAX_BLAST_RADIUS = 100.0; // Normalize blast radius by this value
 const PROJECTILE_SPEED_NORM = 300.0; // Normalizer for projectile velocity (max super=270)
 
+// ---- Line-of-sight utility (segment-AABB intersection) ----
+function segmentIntersectsRect(
+	x1: number,
+	y1: number,
+	x2: number,
+	y2: number,
+	rx: number,
+	ry: number,
+	rw: number,
+	rh: number
+): boolean {
+	const dx = x2 - x1;
+	const dy = y2 - y1;
+	let tMin = 0;
+	let tMax = 1;
+	if (Math.abs(dx) < 1e-10) {
+		if (x1 < rx || x1 > rx + rw) return false;
+	} else {
+		let t1 = (rx - x1) / dx;
+		let t2 = (rx + rw - x1) / dx;
+		if (t1 > t2) {
+			const tmp = t1;
+			t1 = t2;
+			t2 = tmp;
+		}
+		tMin = Math.max(tMin, t1);
+		tMax = Math.min(tMax, t2);
+		if (tMin > tMax) return false;
+	}
+	if (Math.abs(dy) < 1e-10) {
+		if (y1 < ry || y1 > ry + rh) return false;
+	} else {
+		let t1 = (ry - y1) / dy;
+		let t2 = (ry + rh - y1) / dy;
+		if (t1 > t2) {
+			const tmp = t1;
+			t1 = t2;
+			t2 = tmp;
+		}
+		tMin = Math.max(tMin, t1);
+		tMax = Math.min(tMax, t2);
+		if (tMin > tMax) return false;
+	}
+	return true;
+}
+
+function hasLineOfSight(
+	sx: number,
+	sy: number,
+	tx: number,
+	ty: number,
+	obstacles: readonly { x: number; y: number; width: number; height: number }[]
+): boolean {
+	for (const o of obstacles) {
+		if (segmentIntersectsRect(sx, sy, tx, ty, o.x, o.y, o.width, o.height)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 const TRAINING_SCENARIOS: Record<number, LevelConfig> = {
 	111: {
 		player: { x: 220, y: 250 },
@@ -437,20 +498,39 @@ function normalizeObs(obs: TankObservation): number[] {
 	let idx = 0;
 
 	const s = obs.self;
+	const sx = s.x + s.size / 2;
+	const sy = s.y + s.size / 2;
+	const aliveEnemies = obs.enemies.filter((e) => !e.destroyed);
+
 	result[idx] = s.x / ARENA_WIDTH;
 	result[idx + 1] = s.y / ARENA_HEIGHT;
 	result[idx + 2] = s.aimAngle / (2 * Math.PI);
 	result[idx + 3] = s.speed / 100.0;
-	result[idx + 4] = s.destroyed ? 1.0 : 0.0;
+	// LOS to nearest alive enemy (1.0 = clear shot, 0.0 = blocked by obstacle)
+	let hasLOS = 0.0;
+	if (aliveEnemies.length > 0) {
+		let losTarget = aliveEnemies[0];
+		let losDistSq = Infinity;
+		for (const e of aliveEnemies) {
+			const dx = e.x + e.size / 2 - sx;
+			const dy = e.y + e.size / 2 - sy;
+			const dSq = dx * dx + dy * dy;
+			if (dSq < losDistSq) {
+				losDistSq = dSq;
+				losTarget = e;
+			}
+		}
+		hasLOS = hasLineOfSight(sx, sy, losTarget.x + losTarget.size / 2, losTarget.y + losTarget.size / 2, obs.obstacles)
+			? 1.0
+			: 0.0;
+	}
+	result[idx + 4] = hasLOS;
 	result[idx + 5] = s.wasLastMoveBlocked ? 1.0 : 0.0;
 	result[idx + 6] = Math.min(s.invulnerabilityTicksRemaining / 8.0, 1.0);
 	result[idx + 7] = Math.min(obs.tick / 1080.0, 1.0);
 	result[idx + 8] = s.health / Math.max(s.maxHealth, 1);
 
 	// Derived aim features
-	const sx = s.x + s.size / 2;
-	const sy = s.y + s.size / 2;
-	const aliveEnemies = obs.enemies.filter((e) => !e.destroyed);
 
 	if (aliveEnemies.length > 0) {
 		let nearest = aliveEnemies[0];

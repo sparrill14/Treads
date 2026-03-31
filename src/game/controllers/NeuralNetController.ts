@@ -31,6 +31,67 @@ const BOMB_THRESHOLD = 0.5;
 const AIM_OFFSET_LIMIT = Math.PI / 18;
 const MOVE_DEAD_ZONE = 0.33;
 
+// ---- Line-of-sight utility (segment-AABB intersection) ----
+function segmentIntersectsRect(
+	x1: number,
+	y1: number,
+	x2: number,
+	y2: number,
+	rx: number,
+	ry: number,
+	rw: number,
+	rh: number
+): boolean {
+	const dx = x2 - x1;
+	const dy = y2 - y1;
+	let tMin = 0;
+	let tMax = 1;
+	if (Math.abs(dx) < 1e-10) {
+		if (x1 < rx || x1 > rx + rw) return false;
+	} else {
+		let t1 = (rx - x1) / dx;
+		let t2 = (rx + rw - x1) / dx;
+		if (t1 > t2) {
+			const tmp = t1;
+			t1 = t2;
+			t2 = tmp;
+		}
+		tMin = Math.max(tMin, t1);
+		tMax = Math.min(tMax, t2);
+		if (tMin > tMax) return false;
+	}
+	if (Math.abs(dy) < 1e-10) {
+		if (y1 < ry || y1 > ry + rh) return false;
+	} else {
+		let t1 = (ry - y1) / dy;
+		let t2 = (ry + rh - y1) / dy;
+		if (t1 > t2) {
+			const tmp = t1;
+			t1 = t2;
+			t2 = tmp;
+		}
+		tMin = Math.max(tMin, t1);
+		tMax = Math.min(tMax, t2);
+		if (tMin > tMax) return false;
+	}
+	return true;
+}
+
+function nnHasLineOfSight(
+	sx: number,
+	sy: number,
+	tx: number,
+	ty: number,
+	obstacles: readonly { x: number; y: number; width: number; height: number }[]
+): boolean {
+	for (const o of obstacles) {
+		if (segmentIntersectsRect(sx, sy, tx, ty, o.x, o.y, o.width, o.height)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 export class NeuralNetController implements TankController {
 	private session: ort.InferenceSession | null = null;
 	private ready = false;
@@ -179,18 +240,7 @@ export class NeuralNetController implements TankController {
 		const result = new Float32Array(OBS_SIZE);
 		let idx = 0;
 
-		// Self state
-		result[idx] = obs.self.x / ARENA_WIDTH;
-		result[idx + 1] = obs.self.y / ARENA_HEIGHT;
-		result[idx + 2] = obs.self.aimAngle / (2 * Math.PI);
-		result[idx + 3] = obs.self.speed / 100;
-		result[idx + 4] = obs.self.destroyed ? 1 : 0;
-		result[idx + 5] = obs.self.wasLastMoveBlocked ? 1 : 0;
-		result[idx + 6] = Math.min(obs.self.invulnerabilityTicksRemaining / 8, 1);
-		result[idx + 7] = Math.min(obs.tick / 1080, 1);
-		result[idx + 8] = obs.self.health / Math.max(obs.self.maxHealth, 1);
-
-		// Derived aim features
+		// Compute center + sorted enemies early (needed for LOS and aim features)
 		const sx = obs.self.x + obs.self.size / 2;
 		const sy = obs.self.y + obs.self.size / 2;
 		const livingEnemies = obs.enemies
@@ -201,6 +251,26 @@ export class NeuralNetController implements TankController {
 				return da - db;
 			});
 
+		// Self state
+		result[idx] = obs.self.x / ARENA_WIDTH;
+		result[idx + 1] = obs.self.y / ARENA_HEIGHT;
+		result[idx + 2] = obs.self.aimAngle / (2 * Math.PI);
+		result[idx + 3] = obs.self.speed / 100;
+		// LOS to nearest alive enemy (1.0 = clear shot, 0.0 = blocked)
+		let hasLOS = 0.0;
+		if (livingEnemies.length > 0) {
+			const nearest = livingEnemies[0]; // already sorted by distance
+			hasLOS = nnHasLineOfSight(sx, sy, nearest.x + nearest.size / 2, nearest.y + nearest.size / 2, obs.obstacles)
+				? 1.0
+				: 0.0;
+		}
+		result[idx + 4] = hasLOS;
+		result[idx + 5] = obs.self.wasLastMoveBlocked ? 1 : 0;
+		result[idx + 6] = Math.min(obs.self.invulnerabilityTicksRemaining / 8, 1);
+		result[idx + 7] = Math.min(obs.tick / 1080, 1);
+		result[idx + 8] = obs.self.health / Math.max(obs.self.maxHealth, 1);
+
+		// Derived aim features
 		if (livingEnemies.length > 0) {
 			const nearest = livingEnemies[0];
 			const ex = nearest.x + nearest.size / 2;

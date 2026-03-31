@@ -23,7 +23,7 @@ ARENA_WIDTH = 1000.0
 ARENA_HEIGHT = 500.0
 
 # Observation dimensions (Fix 2+3: expanded caps, bombs, summary features):
-# self: x, y, aimAngle, speed, destroyed, wasLastMoveBlocked, invulnerability,
+# self: x, y, aimAngle, speed, hasLOSToNearestEnemy, wasLastMoveBlocked, invulnerability,
 #       tickProgress, health_norm, angleToEnemy, distToEnemy, aimError (12)
 # up to 6 enemies: x, y, aimAngle, speed, hasBombs, health_norm (6 each = 36)
 # up to 10 projectiles: x, y, vx, vy, team_is_enemy (5 each = 50)
