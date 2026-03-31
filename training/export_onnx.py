@@ -101,10 +101,10 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
     else:
         move_dir = "none"
 
-    aim_angle = ((aim_signal + 1.0) * 0.5) * 2.0 * np.pi
+    # aim_signal is enemy-relative offset: 0 = pointed at nearest enemy, ±1 = ±10° off
     fire = fire_signal > 0.0
     bomb = bomb_signal > 0.5
-    print(f"  decoded move={move_dir} aim_angle={aim_angle:.3f} fire={fire} bomb={bomb}")
+    print(f"  decoded move={move_dir} aim_signal={aim_signal:.3f} fire={fire} bomb={bomb}")
 
 
 if __name__ == "__main__":
