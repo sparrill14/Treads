@@ -25,19 +25,20 @@ ARENA_HEIGHT = 500.0
 # Observation dimensions (Fix 2+3: expanded caps, bombs, summary features):
 # self: x, y, aimAngle, speed, hasLOSToNearestEnemy, wasLastMoveBlocked, invulnerability,
 #       tickProgress, health_norm, angleToEnemy, distToEnemy, aimError (12)
-# up to 6 enemies: x, y, aimAngle, speed, hasBombs, health_norm (6 each = 36)
-# up to 10 projectiles: x, y, vx, vy, team_is_enemy (5 each = 50)
-# up to 5 obstacles: x, y, w, h (4 each = 20)
-# up to 6 bombs: x, y, fuse_norm, blast_norm, team_is_enemy (5 each = 30)
+# up to 6 enemies: rel_dx, rel_dy, aimAngle, speed, hasBomb, health, aimed_at_me,
+#                   ammoThreat, isApproaching (9 each = 54)
+# up to 15 projectiles: rel_x, rel_y, vx, vy, team_is_enemy (5 each = 75)
+# up to 5 obstacles: rel_cx, rel_cy, w, h (4 each = 20)
+# up to 6 bombs: rel_x, rel_y, fuse_norm, blast_norm, team_is_enemy (5 each = 30)
 # 6 summary: enemy_count, enemy_farthest_dist, proj_count, bomb_count,
 #            closest_enemy_bomb_dist, farthest_proj_dist
-# Total: 12 + 36 + 50 + 20 + 30 + 6 = 154
+# Total: 12 + 54 + 75 + 20 + 30 + 6 = 197
 MAX_ENEMIES = 6       # Level 7 has 5 enemies; +1 buffer
-MAX_PROJECTILES = 10  # Level 8: 3×3=9 super shots; +1 buffer
+MAX_PROJECTILES = 15  # Level 8: 3×3=9 super shots; generous buffer
 MAX_OBSTACLES = 5     # Level 7 has 4 obstacles; +1 buffer
 MAX_BOMBS = 6         # Level 6: 9 theoretical; cap at 6 live
 SELF_DIM = 12
-ENEMY_DIM = 6
+ENEMY_DIM = 9         # rel_dx, rel_dy, aimAngle, speed, hasBomb, health, aimed_at_me, ammoThreat, isApproaching
 PROJ_DIM = 5
 OBS_DIM = 4
 BOMB_DIM = 5          # x, y, fuse_norm, blast_norm, team_is_enemy

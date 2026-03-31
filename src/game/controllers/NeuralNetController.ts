@@ -4,11 +4,11 @@ import type { MatchInit, MoveIntent, TankAction, TankController, TankObservation
 const ARENA_WIDTH = 1000;
 const ARENA_HEIGHT = 500;
 const MAX_ENEMIES = 6;
-const MAX_PROJECTILES = 10;
+const MAX_PROJECTILES = 15;
 const MAX_OBSTACLES = 5;
 const MAX_BOMBS = 6;
 const SELF_DIM = 12;
-const ENEMY_DIM = 6;
+const ENEMY_DIM = 9; // [relX, relY, aimAngle, speed, hasBomb, health, aimed_at_me, ammoThreat, isApproaching]
 const PROJ_DIM = 5;
 const OBS_DIM = 4;
 const BOMB_DIM = 5;
@@ -28,8 +28,26 @@ const OBS_SIZE =
 const ACTION_DIM = 5;
 const FIRE_THRESHOLD = 0.0;
 const BOMB_THRESHOLD = 0.5;
-const AIM_OFFSET_LIMIT = Math.PI / 18;
+const AIM_OFFSET_LIMIT = Math.PI;
+const ARENA_DIAGONAL = Math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * ARENA_HEIGHT);
 const MOVE_DEAD_ZONE = 0.33;
+
+// ---- MoveIntent → unit direction vector mapping ----
+const SQRT2_2 = Math.SQRT2 / 2;
+const MOVE_DIR_MAP: Record<MoveIntent, [number, number]> = {
+	none: [0, 0],
+	n: [0, -1],
+	s: [0, 1],
+	e: [1, 0],
+	w: [-1, 0],
+	ne: [SQRT2_2, -SQRT2_2],
+	nw: [-SQRT2_2, -SQRT2_2],
+	se: [SQRT2_2, SQRT2_2],
+	sw: [-SQRT2_2, SQRT2_2],
+};
+function moveIntentToDir(intent: MoveIntent): [number, number] {
+	return MOVE_DIR_MAP[intent] ?? [0, 0];
+}
 
 // ---- Line-of-sight utility (segment-AABB intersection) ----
 function segmentIntersectsRect(
@@ -240,9 +258,9 @@ export class NeuralNetController implements TankController {
 		const result = new Float32Array(OBS_SIZE);
 		let idx = 0;
 
-		// Compute center + sorted enemies early (needed for LOS and aim features)
 		const sx = obs.self.x + obs.self.size / 2;
 		const sy = obs.self.y + obs.self.size / 2;
+		const arenaDiag = ARENA_DIAGONAL;
 		const livingEnemies = obs.enemies
 			.filter((e) => !e.destroyed)
 			.sort((a, b) => {
@@ -251,15 +269,14 @@ export class NeuralNetController implements TankController {
 				return da - db;
 			});
 
-		// Self state
+		// ── Self features (SELF_DIM = 12) ──
 		result[idx] = obs.self.x / ARENA_WIDTH;
 		result[idx + 1] = obs.self.y / ARENA_HEIGHT;
-		result[idx + 2] = obs.self.aimAngle / (2 * Math.PI);
+		result[idx + 2] = obs.self.aimAngle / (2 * Math.PI) + 0.5; // Fix 1: map [-π,π] → [0,1]
 		result[idx + 3] = obs.self.speed / 100;
-		// LOS to nearest alive enemy (1.0 = clear shot, 0.0 = blocked)
 		let hasLOS = 0.0;
 		if (livingEnemies.length > 0) {
-			const nearest = livingEnemies[0]; // already sorted by distance
+			const nearest = livingEnemies[0];
 			hasLOS = nnHasLineOfSight(sx, sy, nearest.x + nearest.size / 2, nearest.y + nearest.size / 2, obs.obstacles)
 				? 1.0
 				: 0.0;
@@ -270,7 +287,7 @@ export class NeuralNetController implements TankController {
 		result[idx + 7] = Math.min(obs.tick / 1080, 1);
 		result[idx + 8] = obs.self.health / Math.max(obs.self.maxHealth, 1);
 
-		// Derived aim features
+		// Derived aim features (relative to nearest enemy)
 		if (livingEnemies.length > 0) {
 			const nearest = livingEnemies[0];
 			const ex = nearest.x + nearest.size / 2;
@@ -279,7 +296,6 @@ export class NeuralNetController implements TankController {
 			const distToEnemy = Math.sqrt((ex - sx) ** 2 + (ey - sy) ** 2);
 			const aimAngle = obs.self.aimAngle;
 			const aimError = Math.atan2(Math.sin(aimAngle - angleToEnemy), Math.cos(aimAngle - angleToEnemy));
-			const arenaDiag = Math.sqrt(ARENA_WIDTH ** 2 + ARENA_HEIGHT ** 2);
 			result[idx + 9] = angleToEnemy / (2 * Math.PI) + 0.5;
 			result[idx + 10] = Math.min(distToEnemy / arenaDiag, 1.0);
 			result[idx + 11] = (aimError / Math.PI) * 0.5 + 0.5;
@@ -290,32 +306,57 @@ export class NeuralNetController implements TankController {
 		}
 		idx += SELF_DIM;
 
-		// Enemies sorted by distance (reuse livingEnemies computed above)
+		// ── Enemies (ENEMY_DIM = 9, player-relative positions) ──
 		for (let i = 0; i < MAX_ENEMIES; i++) {
 			if (i < livingEnemies.length) {
 				const e = livingEnemies[i];
-				result[idx] = e.x / ARENA_WIDTH;
-				result[idx + 1] = e.y / ARENA_HEIGHT;
-				result[idx + 2] = e.aimAngle / (2 * Math.PI);
+				const ecx = e.x + e.size / 2;
+				const ecy = e.y + e.size / 2;
+				result[idx] = ((ecx - sx) / arenaDiag) * 0.5 + 0.5; // player-relative dx
+				result[idx + 1] = ((ecy - sy) / arenaDiag) * 0.5 + 0.5; // player-relative dy
+				result[idx + 2] = e.aimAngle / (2 * Math.PI) + 0.5; // angle normalization
 				result[idx + 3] = e.speed / 100;
 				result[idx + 4] = e.bombType ? 1 : 0;
 				result[idx + 5] = e.health / Math.max(e.maxHealth, 1);
+				// aimed_at_me — how much enemy turret points toward player (1=direct, 0=away)
+				const angleFromEnemyToPlayer = Math.atan2(sy - ecy, sx - ecx);
+				const enemyAimError = Math.atan2(
+					Math.sin(e.aimAngle - angleFromEnemyToPlayer),
+					Math.cos(e.aimAngle - angleFromEnemyToPlayer)
+				);
+				result[idx + 6] = 1.0 - Math.abs(enemyAimError) / Math.PI;
+				// ammoThreat — 0=none, 0.5=basic, 1.0=super
+				result[idx + 7] = e.maxAmmo > 0 ? (e.ammoType === 'super' ? 1.0 : 0.5) : 0.0;
+				// isApproaching — dot(moveDir, enemyToPlayer) mapped to [0,1]
+				const moveDir = moveIntentToDir(e.lastMoveIntent);
+				if (moveDir[0] !== 0 || moveDir[1] !== 0) {
+					const toPlayerDx = sx - ecx;
+					const toPlayerDy = sy - ecy;
+					const toPlayerDist = Math.sqrt(toPlayerDx * toPlayerDx + toPlayerDy * toPlayerDy);
+					if (toPlayerDist > 1e-6) {
+						const dot = (moveDir[0] * toPlayerDx + moveDir[1] * toPlayerDy) / toPlayerDist;
+						result[idx + 8] = dot * 0.5 + 0.5; // [-1,1] → [0,1]
+					} else {
+						result[idx + 8] = 0.5;
+					}
+				} else {
+					result[idx + 8] = 0.5; // stationary → neutral
+				}
 			}
 			idx += ENEMY_DIM;
 		}
 
-		// Projectiles sorted by distance
+		// ── Projectiles (PROJ_DIM = 5, player-relative positions) ──
 		const projectiles = [...obs.projectiles].sort((a, b) => {
 			const da = (a.x - sx) ** 2 + (a.y - sy) ** 2;
 			const db = (b.x - sx) ** 2 + (b.y - sy) ** 2;
 			return da - db;
 		});
-
 		for (let i = 0; i < MAX_PROJECTILES; i++) {
 			if (i < projectiles.length) {
 				const p = projectiles[i];
-				result[idx] = p.x / ARENA_WIDTH;
-				result[idx + 1] = p.y / ARENA_HEIGHT;
+				result[idx] = ((p.x - sx) / arenaDiag) * 0.5 + 0.5; // Fix 3: player-relative
+				result[idx + 1] = ((p.y - sy) / arenaDiag) * 0.5 + 0.5; // Fix 3: player-relative
 				result[idx + 2] = (p.vx / PROJECTILE_SPEED_NORM) * 0.5 + 0.5;
 				result[idx + 3] = (p.vy / PROJECTILE_SPEED_NORM) * 0.5 + 0.5;
 				result[idx + 4] = p.team === 'enemy' ? 1 : 0;
@@ -323,36 +364,34 @@ export class NeuralNetController implements TankController {
 			idx += PROJ_DIM;
 		}
 
-		// Obstacles sorted by distance
+		// ── Obstacles (OBS_DIM = 4, player-relative center positions) ──
 		const obstacles = [...obs.obstacles].sort((a, b) => {
 			const da = (a.x + a.width / 2 - sx) ** 2 + (a.y + a.height / 2 - sy) ** 2;
 			const db = (b.x + b.width / 2 - sx) ** 2 + (b.y + b.height / 2 - sy) ** 2;
 			return da - db;
 		});
-
 		for (let i = 0; i < MAX_OBSTACLES; i++) {
 			if (i < obstacles.length) {
 				const o = obstacles[i];
-				result[idx] = o.x / ARENA_WIDTH;
-				result[idx + 1] = o.y / ARENA_HEIGHT;
+				result[idx] = ((o.x + o.width / 2 - sx) / arenaDiag) * 0.5 + 0.5; // Fix 3: player-relative center
+				result[idx + 1] = ((o.y + o.height / 2 - sy) / arenaDiag) * 0.5 + 0.5;
 				result[idx + 2] = o.width / ARENA_WIDTH;
 				result[idx + 3] = o.height / ARENA_HEIGHT;
 			}
 			idx += OBS_DIM;
 		}
 
-		// Bombs sorted by distance
+		// ── Bombs (BOMB_DIM = 5, player-relative positions) ──
 		const bombs = [...obs.bombs].sort((a, b) => {
 			const da = (a.x - sx) ** 2 + (a.y - sy) ** 2;
 			const db = (b.x - sx) ** 2 + (b.y - sy) ** 2;
 			return da - db;
 		});
-
 		for (let i = 0; i < MAX_BOMBS; i++) {
 			if (i < bombs.length) {
 				const b = bombs[i];
-				result[idx] = b.x / ARENA_WIDTH;
-				result[idx + 1] = b.y / ARENA_HEIGHT;
+				result[idx] = ((b.x - sx) / arenaDiag) * 0.5 + 0.5; // Fix 3: player-relative
+				result[idx + 1] = ((b.y - sy) / arenaDiag) * 0.5 + 0.5; // Fix 3: player-relative
 				result[idx + 2] = Math.min(b.fuseTicksRemaining / MAX_FUSE_TICKS, 1.0);
 				result[idx + 3] = Math.min(b.blastRadius / MAX_BLAST_RADIUS, 1.0);
 				result[idx + 4] = b.team === 'enemy' ? 1 : 0;
@@ -360,9 +399,8 @@ export class NeuralNetController implements TankController {
 			idx += BOMB_DIM;
 		}
 
-		const arenaDiag = Math.sqrt(ARENA_WIDTH ** 2 + ARENA_HEIGHT ** 2);
+		// ── Summary features (SUMMARY_DIM = 6) ──
 		result[idx] = Math.min(livingEnemies.length / MAX_ENEMIES, 1.0);
-
 		if (livingEnemies.length > 0) {
 			let farthestEnemyDistSq = 0;
 			for (const e of livingEnemies) {
@@ -375,11 +413,8 @@ export class NeuralNetController implements TankController {
 		} else {
 			result[idx + 1] = 0;
 		}
-
 		result[idx + 2] = Math.min(obs.projectiles.length / MAX_PROJECTILES, 1.0);
-		// [3] bomb count (normalized)
 		result[idx + 3] = Math.min(obs.bombs.length / MAX_BOMBS, 1.0);
-		// [4] closest enemy bomb distance (threat indicator; 1.0 = no threat)
 		const enemyBombs = obs.bombs.filter((b) => b.team === 'enemy');
 		if (enemyBombs.length > 0) {
 			let closestBombDistSq = Infinity;
@@ -393,7 +428,6 @@ export class NeuralNetController implements TankController {
 		} else {
 			result[idx + 4] = 1.0;
 		}
-		// [5] farthest projectile distance (spread indicator)
 		if (obs.projectiles.length > 0) {
 			let farthestProjDistSq = 0;
 			for (const p of obs.projectiles) {
