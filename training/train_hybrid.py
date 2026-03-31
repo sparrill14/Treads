@@ -280,6 +280,7 @@ class HybridTrainer:
                 "replayDir": self.replay_dir,
                 "episodeOffset": self.total_episodes,
                 "targetEpisodes": target_episodes,
+                "shapingScale": max(0.0, 1.0 - self.total_episodes / max(target_episodes, 1)),
             })
         self.seed_counter += self.n_steps
 

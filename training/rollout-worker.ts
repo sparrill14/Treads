@@ -541,7 +541,8 @@ function computeSteppingReward(
 	state: DeepReadonly<GameState>,
 	tracker: RewardTracker,
 	decodedAction: TankAction,
-	_rawObs: TankObservation
+	_rawObs: TankObservation,
+	shapingScale: number
 ): { reward: number; breakdown: RewardBreakdown } {
 	let reward = STEP_PENALTY;
 	const breakdown = createRewardBreakdown();
@@ -586,7 +587,7 @@ function computeSteppingReward(
 		)
 	);
 	if (aimDelta > 0.005) {
-		const penalty = AIM_JITTER_PENALTY * aimDelta;
+		const penalty = AIM_JITTER_PENALTY * aimDelta * shapingScale;
 		reward += penalty;
 		breakdown.aimJitter += penalty;
 	}
@@ -596,8 +597,9 @@ function computeSteppingReward(
 	// Penalize rapid direction changes (both previous and current must be actual movement)
 	const currentMove = decodedAction.move;
 	if (currentMove !== 'none' && tracker.prevMoveIntent !== 'none' && currentMove !== tracker.prevMoveIntent) {
-		reward += MOVE_JITTER_PENALTY;
-		breakdown.moveJitter += MOVE_JITTER_PENALTY;
+		const movePenalty = MOVE_JITTER_PENALTY * shapingScale;
+		reward += movePenalty;
+		breakdown.moveJitter += movePenalty;
 	}
 	tracker.prevMoveIntent = currentMove;
 
@@ -616,7 +618,7 @@ function computeSteppingReward(
 		}
 		const currDist = Math.sqrt(nearestDistSq);
 		const prevDist = Math.sqrt(tracker.prevEnemyDistSq);
-		const approachReward = (APPROACH_SCALE * (prevDist - currDist)) / ARENA_DIAGONAL;
+		const approachReward = (APPROACH_SCALE * (prevDist - currDist) * shapingScale) / ARENA_DIAGONAL;
 		if (Math.abs(approachReward) > 1e-8) {
 			reward += approachReward;
 			breakdown.approach += approachReward;
@@ -699,7 +701,8 @@ function collectRollout(
 	seedStart: number,
 	replayEveryEpisodes: number,
 	replayDir: string,
-	episodeOffset: number
+	episodeOffset: number,
+	shapingScale: number
 ): RolloutData {
 	const obs: number[][] = [];
 	const actions: number[][] = [];
@@ -779,26 +782,26 @@ function collectRollout(
 		let stepReward: number;
 
 		if (state.status === 'player_win') {
-			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale);
 			stepReward = stepping.reward + TERMINAL_WIN_REWARD;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 			episodeBreakdown.terminalWin += TERMINAL_WIN_REWARD;
 			done = true;
 		} else if (state.status === 'enemy_win' || player?.destroyed) {
-			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale);
 			stepReward = stepping.reward + DEATH_REWARD + TERMINAL_LOSS_REWARD;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 			episodeBreakdown.death += DEATH_REWARD;
 			episodeBreakdown.terminalLoss += TERMINAL_LOSS_REWARD;
 			done = true;
 		} else if (episodeTick >= maxTicks) {
-			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale);
 			stepReward = stepping.reward + TIMEOUT_REWARD;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 			episodeBreakdown.timeout += TIMEOUT_REWARD;
 			done = true;
 		} else {
-			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale);
 			stepReward = stepping.reward;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 		}
@@ -939,6 +942,7 @@ async function main(): Promise<void> {
 			const replayEveryEpisodes = (cmd.replayEveryEpisodes as number) ?? 0;
 			const replayDir = (cmd.replayDir as string) ?? path.join(__dirname, '..', '..', 'training', 'output', 'replays');
 			const episodeOffset = (cmd.episodeOffset as number) ?? 0;
+			const shapingScale = Math.max(0, Math.min(1, (cmd.shapingScale as number) ?? 1.0));
 			const rollout = collectRollout(
 				mlp,
 				nSteps,
@@ -947,7 +951,8 @@ async function main(): Promise<void> {
 				seedStart,
 				replayEveryEpisodes,
 				replayDir,
-				episodeOffset
+				episodeOffset,
+				shapingScale
 			);
 			writeLine(rollout);
 		} else if (cmd.type === 'test_forward') {
