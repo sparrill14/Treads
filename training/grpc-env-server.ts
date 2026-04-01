@@ -14,7 +14,7 @@ import type {
 	TankController,
 	TankObservation,
 } from '../src/game/core/types';
-import { LEVEL_CONFIGS } from '../src/game/LevelConfig';
+import { resolveScenarioConfig } from './training-scenarios';
 
 interface ResetRequest {
 	sessionId?: string;
@@ -72,7 +72,7 @@ class EnvSession {
 		this.maxTicks = maxTicks;
 		this.saveReplay = saveReplay;
 
-		const levelConfig = LEVEL_CONFIGS[Math.max(1, Math.min(level, LEVEL_CONFIGS.length)) - 1];
+		const levelConfig = resolveScenarioConfig(level);
 		const initialState = createInitialGameState(levelConfig, seed);
 		const defaultControllers = createDefaultControllers(levelConfig);
 		const controllers: Record<string, TankController> = {
@@ -238,7 +238,7 @@ function reset(
 	try {
 		const req = call.request;
 		const sessionId = req.sessionId || randomUUID();
-		const level = Math.max(1, Math.min(Number(req.level ?? 1), LEVEL_CONFIGS.length));
+		const level = Number(req.level ?? 1);
 		const seed = Number(req.seed ?? 42);
 		const maxTicks = Math.max(1, Number(req.maxTicks ?? 720));
 		const saveReplay = Boolean(req.saveReplay);

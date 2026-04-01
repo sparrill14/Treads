@@ -504,6 +504,9 @@ class HybridTrainer:
             "rehearsalScenarios": list(self.rehearsal_ids),
             "difficultyBand": self.curriculum_difficulty_band,
             "phaseRecentWinrate500": self._phase_recent_win_rate() if not self._explicit_levels else None,
+            "phaseEvalPassStreak": self.phase_eval_pass_streak if not self._explicit_levels else None,
+            "phaseEvalFailStreak": self.phase_eval_fail_streak if not self._explicit_levels else None,
+            "lastPhaseEvalWinRate": self.last_phase_eval_win_rate if not self._explicit_levels else None,
             "avgReward50": avg_reward,
             "avgWinrate50": avg_winrate,
             "avgTick50": avg_tick,
@@ -1442,20 +1445,27 @@ class HybridTrainer:
 
                         phase_episodes = self._phase_episode_count()
                         min_phase_episodes = int(current.get("min_phase_episodes") or 0)
+                        force_phase_episodes = int(current.get("force_phase_episodes") or 0)
+                        force_eligible = (
+                            force_phase_episodes > 0
+                            and phase_episodes >= force_phase_episodes
+                            and phase_eval >= required_wr
+                        )
                         can_promote = (
                             self.current_phase_index < len(self.curriculum) - 1
                             and phase_episodes >= min_phase_episodes
-                            and self.phase_eval_pass_streak >= self.phase_pass_evals_required
+                            and (self.phase_eval_pass_streak >= self.phase_pass_evals_required or force_eligible)
                             and self._phase_is_stable()
                         )
 
                         if can_promote:
+                            trigger = "force-advance" if force_eligible else "eval-gated"
                             self._save_stable_checkpoint(self.current_phase_index, phase_eval)
                             transition = self._advance_curriculum_from_eval()
                             if transition is not None:
                                 previous_phase, next_phase = transition
                                 print(
-                                    f"\n*** Eval-gated phase transition at episode {self.total_episodes}: "
+                                    f"\n*** {trigger} phase transition at episode {self.total_episodes}: "
                                     f"{previous_phase['name']} -> {next_phase['name']} | "
                                     f"phase_eval={phase_eval:.3f} ({phase_eval_source}) ***\n"
                                 )

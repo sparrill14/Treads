@@ -613,7 +613,7 @@ app.get('/api/live', (req: Request, res: Response) => {
 });
 
 app.use(express.static(DIST_DIR));
-app.get('*', (_req: Request, res: Response) => {
+app.get('/{*path}', (_req: Request, res: Response) => {
 	res.sendFile(path.join(DIST_DIR, 'index.html'));
 });
 
