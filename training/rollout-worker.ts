@@ -61,6 +61,7 @@ interface CollectRequest {
 	proceduralLevels?: boolean;
 	difficultyBand?: number;
 	playerMaxAmmo?: number;
+	globalEpisodeOffset?: number;
 }
 
 interface CollectResponse {
@@ -1194,6 +1195,7 @@ function collect(
 		const proceduralLevels = Boolean(req.proceduralLevels ?? true);
 		const difficultyBand = clamp(Number(req.difficultyBand ?? 0), 0, 1);
 		const playerMaxAmmo = Number(req.playerMaxAmmo ?? 0);
+		const globalEpisodeOffset = Number(req.globalEpisodeOffset ?? 0);
 
 		const rollout = collectRollout(
 			mlp,
@@ -1205,7 +1207,7 @@ function collect(
 			replayDir,
 			workerId,
 			shapingScale,
-			workerTotalEpisodes,
+			globalEpisodeOffset || workerTotalEpisodes,
 			proceduralLevels,
 			difficultyBand,
 			playerMaxAmmo

@@ -861,6 +861,7 @@ class HybridTrainer:
                     procedural_levels=bool(req.get("proceduralLevels", True)),
                     difficulty_band=float(req.get("difficultyBand", 0.0)),
                     player_max_ammo=int(req.get("playerMaxAmmo", 0)),
+                    global_episode_offset=int(req.get("globalEpisodeOffset", 0)),
                 ),
                 timeout=timeout_sec,
             )
@@ -937,6 +938,7 @@ class HybridTrainer:
                     "proceduralLevels": self.procedural_levels,
                     "difficultyBand": self.curriculum_difficulty_band,
                     "playerMaxAmmo": self._get_player_max_ammo(),
+                    "globalEpisodeOffset": self.total_episodes,
                 })
 
             # Read results from all workers in parallel using threads
