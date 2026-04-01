@@ -536,6 +536,7 @@ class HybridTrainer:
                     "n_steps": worker_steps[i],
                     "levels": self.levels,
                     "maxTicks": self.max_episode_steps,
+                    "tickNormTicks": self.max_episode_steps,
                     "seedStart": worker_seeds[i],
                     "replayEveryEpisodes": self.replay_episode_interval,
                     "replayDir": self.replay_dir,

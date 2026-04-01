@@ -75,6 +75,7 @@ const ARENA_DIAGONAL = Math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * AREN
 const MAX_FUSE_TICKS = 360.0; // Max fuse ticks for any bomb type
 const MAX_BLAST_RADIUS = 100.0; // Normalize blast radius by this value
 const PROJECTILE_SPEED_NORM = 300.0; // Normalizer for projectile velocity (max super=270)
+let TICK_NORM_TICKS = 720.0;
 
 // ---- MoveIntent → unit direction vector mapping ----
 const SQRT2_2 = Math.SQRT2 / 2;
@@ -544,7 +545,7 @@ function normalizeObs(obs: TankObservation): number[] {
 	result[idx + 4] = hasLOS;
 	result[idx + 5] = s.wasLastMoveBlocked ? 1.0 : 0.0;
 	result[idx + 6] = Math.min(s.invulnerabilityTicksRemaining / 8.0, 1.0);
-	result[idx + 7] = Math.min(obs.tick / 720.0, 1.0);
+	result[idx + 7] = Math.min(obs.tick / TICK_NORM_TICKS, 1.0);
 	result[idx + 8] = s.health / Math.max(s.maxHealth, 1);
 
 	// Derived aim features (relative to nearest enemy)
@@ -1389,6 +1390,7 @@ async function main(): Promise<void> {
 			const nSteps = (cmd.n_steps as number) ?? 4096;
 			const levels = (cmd.levels as number[]) ?? [(cmd.level as number) ?? 1];
 			const maxTicks = (cmd.maxTicks as number) ?? 1800;
+			TICK_NORM_TICKS = Math.max(1, Number((cmd.tickNormTicks as number) ?? maxTicks));
 			const seedStart = (cmd.seedStart as number) ?? 0;
 			const replayEveryEpisodes = (cmd.replayEveryEpisodes as number) ?? 0;
 			const replayDir = (cmd.replayDir as string) ?? path.join(__dirname, '..', '..', 'training', 'output', 'replays');

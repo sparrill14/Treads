@@ -34,6 +34,7 @@ BOMB_THRESHOLD = 0.5
 MOVE_DEAD_ZONE = 0.33
 AIM_OFFSET_LIMIT = math.pi
 ARENA_DIAGONAL = math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * ARENA_HEIGHT)
+tick_norm_ticks = 720.0
 
 ObsDict = Dict[str, Any]
 DecodedAction = Dict[str, Any]
@@ -67,7 +68,7 @@ def _bomb_distance_sq(b: ObsDict, sx: float, sy: float) -> float:
 
 
 def move_intent_to_dir(intent: str) -> Tuple[float, float]:
-    return cast(Tuple[float, float], MOVE_DIR_MAP.get(intent, (0.0, 0.0)))
+    return MOVE_DIR_MAP.get(intent, (0.0, 0.0))
 
 
 def segment_intersects_rect(
@@ -136,6 +137,11 @@ def has_line_of_sight(
     return True
 
 
+def set_tick_norm_ticks(ticks: int) -> None:
+    global tick_norm_ticks
+    tick_norm_ticks = max(1.0, float(ticks))
+
+
 def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
     result = np.zeros(OBS_SIZE, dtype=np.float32)
     idx = 0
@@ -175,7 +181,7 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
     result[idx + 4] = has_los
     result[idx + 5] = 1.0 if bool(self_data.get("wasLastMoveBlocked", False)) else 0.0
     result[idx + 6] = min(float(self_data.get("invulnerabilityTicksRemaining", 0.0)) / 8.0, 1.0)
-    result[idx + 7] = min(float(obs_raw.get("tick", 0.0)) / 720.0, 1.0)
+    result[idx + 7] = min(float(obs_raw.get("tick", 0.0)) / tick_norm_ticks, 1.0)
     result[idx + 8] = float(self_data["health"]) / max(float(self_data["maxHealth"]), 1.0)
 
     if living_enemies:

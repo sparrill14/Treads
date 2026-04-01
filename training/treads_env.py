@@ -19,6 +19,7 @@ from runtime_codec import (
     MOVE_INTENTS,
     OBS_SIZE,
     normalize_observation,
+    set_tick_norm_ticks,
 )
 
 # Path to the compiled CLI runner
@@ -48,6 +49,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         self.level = level
         self.seed_counter = seed_start
         self.max_episode_steps = max_episode_steps
+        set_tick_norm_ticks(max_episode_steps)
         self.process: Optional[subprocess.Popen[str]] = None
         self._buffer = ""
         self._init_data = None
