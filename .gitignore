@@ -57,6 +57,9 @@ __pycache__/
 # Training output (model weights, logs)
 training/output/
 
+# Generated gRPC code
+training/_generated/
+
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/
 
