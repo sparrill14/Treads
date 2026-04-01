@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package treads;
+
+// ---- Shared messages ----
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+message CloseRequest {
+  string session_id = 1;
+}
+
+message CloseResponse {
+  bool closed = 1;
+}
+
+// ---- TreadsEnvService (grpc-env-server) ----
+
+service TreadsEnvService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Reset(ResetRequest) returns (ResetResponse);
+  rpc Step(StepRequest) returns (StepResponse);
+  rpc Close(CloseRequest) returns (CloseResponse);
+}
+
+message ResetRequest {
+  string session_id = 1;
+  int32 level = 2;
+  int32 seed = 3;
+  int32 max_ticks = 4;
+  bool save_replay = 5;
+}
+
+message ResetResponse {
+  string session_id = 1;
+  string init_json = 2;
+  string observation_json = 3;
+}
+
+message StepRequest {
+  string session_id = 1;
+  string move = 2;
+  double aim_angle = 3;
+  bool fire = 4;
+  bool plant_bomb = 5;
+}
+
+message StepResponse {
+  bool done = 1;
+  string observation_json = 2;
+  string result_json = 3;
+}
+
+// ---- RolloutWorkerService (rollout-worker) ----
+
+service RolloutWorkerService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc SetWeightsFromFile(SetWeightsFromFileRequest) returns (SetWeightsFromFileResponse);
+  rpc Collect(CollectRequest) returns (CollectResponse);
+  rpc Close(CloseRequest) returns (CloseResponse);
+}
+
+message SetWeightsFromFileRequest {
+  string path = 1;
+}
+
+message SetWeightsFromFileResponse {
+  bool ok = 1;
+}
+
+message CollectRequest {
+  int32 n_steps = 1;
+  repeated int32 levels = 2;
+  int32 max_ticks = 3;
+  int32 tick_norm_ticks = 4;
+  int32 seed_start = 5;
+  int32 replay_every_episodes = 6;
+  string replay_dir = 7;
+  int32 worker_id = 8;
+  int32 target_episodes = 9;
+  double shaping_scale = 10;
+  bool procedural_levels = 11;
+  double difficulty_band = 12;
+}
+
+message CollectResponse {
+  string rollout_json = 1;
+}

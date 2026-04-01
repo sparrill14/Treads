@@ -29,7 +29,7 @@ from runtime_codec import (
 GRPC_SERVER_PATH = os.path.join(
     os.path.dirname(__file__), "..", ".training-dist", "training", "grpc-env-server.js"
 )
-PROTO_PATH = os.path.join(os.path.dirname(__file__), "proto", "treads_env.proto")
+PROTO_PATH = os.path.join(os.path.dirname(__file__), "proto", "treads.proto")
 GENERATED_DIR = os.path.join(os.path.dirname(__file__), "_generated")
 
 
@@ -38,8 +38,8 @@ def _ensure_proto_stubs() -> Tuple[Any, Any]:
     if GENERATED_DIR not in sys.path:
         sys.path.insert(0, GENERATED_DIR)
 
-    pb2_path = os.path.join(GENERATED_DIR, "treads_env_pb2.py")
-    pb2_grpc_path = os.path.join(GENERATED_DIR, "treads_env_pb2_grpc.py")
+    pb2_path = os.path.join(GENERATED_DIR, "treads_pb2.py")
+    pb2_grpc_path = os.path.join(GENERATED_DIR, "treads_pb2_grpc.py")
     if not (os.path.exists(pb2_path) and os.path.exists(pb2_grpc_path)):
         result = subprocess.run(
             [
@@ -61,13 +61,13 @@ def _ensure_proto_stubs() -> Tuple[Any, Any]:
                 f"stdout={result.stdout[-1000:]} stderr={result.stderr[-1000:]}"
             )
 
-    import treads_env_pb2  # type: ignore[import-not-found]
-    import treads_env_pb2_grpc  # type: ignore[import-not-found]
+    import treads_pb2  # type: ignore[import-not-found]
+    import treads_pb2_grpc  # type: ignore[import-not-found]
 
-    return treads_env_pb2, treads_env_pb2_grpc
+    return treads_pb2, treads_pb2_grpc
 
 
-TREADS_ENV_PB2, TREADS_ENV_PB2_GRPC = _ensure_proto_stubs()
+TREADS_PB2, TREADS_PB2_GRPC = _ensure_proto_stubs()
 
 
 def _find_free_port() -> int:
@@ -160,7 +160,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
 
         endpoint = f"127.0.0.1:{port}"
         self._grpc_channel = grpc.insecure_channel(endpoint)
-        self._grpc_stub = TREADS_ENV_PB2_GRPC.TreadsEnvServiceStub(self._grpc_channel)
+        self._grpc_stub = TREADS_PB2_GRPC.TreadsEnvServiceStub(self._grpc_channel)
 
         # Wait for server readiness.
         deadline = time.time() + 10.0
@@ -168,7 +168,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         while time.time() < deadline:
             try:
                 assert self._grpc_stub is not None
-                self._grpc_stub.Health(TREADS_ENV_PB2.HealthRequest(), timeout=1.0)
+                self._grpc_stub.Health(TREADS_PB2.HealthRequest(), timeout=1.0)
                 return
             except Exception as exc:  # pragma: no cover - transient process spin-up
                 last_error = exc
@@ -205,7 +205,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
 
     def _rpc_reset(self, game_seed: int) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         assert self._grpc_stub is not None
-        request = TREADS_ENV_PB2.ResetRequest(
+        request = TREADS_PB2.ResetRequest(
             session_id=self._session_id,
             level=int(self.level),
             seed=int(game_seed),
@@ -220,7 +220,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
 
     def _rpc_step(self, action: Dict[str, Any]) -> Dict[str, Any]:
         assert self._grpc_stub is not None
-        request = TREADS_ENV_PB2.StepRequest(
+        request = TREADS_PB2.StepRequest(
             session_id=self._session_id,
             move=str(action.get("move", "none")),
             aim_angle=float(action.get("aimAngle", 0.0)),

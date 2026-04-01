@@ -17,10 +17,12 @@ import sys
 import csv
 import json
 import time
+import socket
 import subprocess
 import threading
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, TextIO, Tuple, cast
+import grpc
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
@@ -49,6 +51,51 @@ def linear_schedule_between(start: float, end: float) -> Callable[[float], float
 ROLLOUT_WORKER_PATH = os.path.join(
     os.path.dirname(__file__), "..", ".training-dist", "training", "rollout-worker.js"
 )
+PROTO_PATH = os.path.join(os.path.dirname(__file__), "proto", "treads.proto")
+GENERATED_DIR = os.path.join(os.path.dirname(__file__), "_generated")
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _ensure_proto_stubs() -> Tuple[Any, Any]:
+    os.makedirs(GENERATED_DIR, exist_ok=True)
+    if GENERATED_DIR not in sys.path:
+        sys.path.insert(0, GENERATED_DIR)
+
+    pb2_path = os.path.join(GENERATED_DIR, "treads_pb2.py")
+    pb2_grpc_path = os.path.join(GENERATED_DIR, "treads_pb2_grpc.py")
+    if not (os.path.exists(pb2_path) and os.path.exists(pb2_grpc_path)):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "grpc_tools.protoc",
+                f"-I{os.path.dirname(PROTO_PATH)}",
+                f"--python_out={GENERATED_DIR}",
+                f"--grpc_python_out={GENERATED_DIR}",
+                PROTO_PATH,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Failed to generate protobuf stubs. "
+                f"stdout={result.stdout[-1000:]} stderr={result.stderr[-1000:]}"
+            )
+
+    import treads_pb2  # type: ignore[import-not-found]
+    import treads_pb2_grpc  # type: ignore[import-not-found]
+
+    return treads_pb2, treads_pb2_grpc
+
+
+TREADS_PB2, TREADS_PB2_GRPC = _ensure_proto_stubs()
 
 # ---- Curriculum configuration ----
 DEFAULT_CURRICULUM: List[Dict[str, Any]] = [
@@ -246,7 +293,7 @@ class HybridTrainer:
         self.model.set_logger(configure(self.output_dir, ["stdout"]))
 
         # Start rollout workers
-        self.workers: List[subprocess.Popen[str]] = []
+        self.workers: List[Dict[str, Any]] = []
         self._start_workers()
 
         # Logging state
@@ -492,7 +539,7 @@ class HybridTrainer:
             print(f"  WARNING: failed to export ONNX model: {exc}")
 
     def _start_workers(self) -> None:
-        """Start the Node.js rollout worker processes."""
+        """Start Node.js rollout-worker gRPC processes."""
         if not os.path.exists(ROLLOUT_WORKER_PATH):
             raise FileNotFoundError(
                 "Rollout worker entrypoint not found. Run `npm run build:training` first. "
@@ -500,42 +547,88 @@ class HybridTrainer:
             )
         self.workers = []
         for _ in range(self.num_workers):
-            proc = subprocess.Popen(
-                ["node", ROLLOUT_WORKER_PATH],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-            )
-            self.workers.append(proc)
-        # Wait for all workers to be ready
+            self.workers.append(self._start_worker_handle())
+
         for i, w in enumerate(self.workers):
             ready = self._read_msg_from(w)
             assert ready["type"] == "ready", f"Worker {i}: expected ready, got {ready}"
 
-    def _restart_worker(self, index: int) -> None:
-        """Restart a single rollout worker after timeout/crash."""
-        old = self.workers[index]
+    @staticmethod
+    def _start_worker_handle() -> Dict[str, Any]:
+        port = _find_free_port()
+        proc = subprocess.Popen(
+            ["node", ROLLOUT_WORKER_PATH, "--port", str(port)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        channel = grpc.insecure_channel(f"127.0.0.1:{port}")
+        stub = TREADS_PB2_GRPC.RolloutWorkerServiceStub(channel)
+        deadline = time.time() + 10.0
+        last_error: Optional[Exception] = None
+        while time.time() < deadline:
+            try:
+                stub.Health(TREADS_PB2.HealthRequest(), timeout=1.0)
+                return {
+                    "process": proc,
+                    "channel": channel,
+                    "stub": stub,
+                    "pending": None,
+                }
+            except Exception as exc:  # pragma: no cover - transient process startup
+                last_error = exc
+                time.sleep(0.1)
         try:
-            self._send_msg_to(old, {"type": "exit"})
-            old.wait(timeout=2)
+            channel.close()
+        except Exception:
+            pass
+        try:
+            proc.terminate()
+            proc.wait(timeout=2)
         except Exception:
             try:
-                old.kill()
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+        raise RuntimeError(f"Failed to start rollout worker gRPC process: {last_error}")
+
+    @staticmethod
+    def _close_worker_handle(worker: Dict[str, Any]) -> None:
+        try:
+            stub = worker.get("stub")
+            if stub is not None:
+                stub.Close(TREADS_PB2.CloseRequest(), timeout=1.0)
+        except Exception:
+            pass
+
+        channel = worker.get("channel")
+        if channel is not None:
+            try:
+                channel.close()
             except Exception:
                 pass
 
-        proc = subprocess.Popen(
-            ["node", ROLLOUT_WORKER_PATH],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        )
-        self.workers[index] = proc
-        ready = self._read_msg_from(proc)
+        proc = cast(Optional[subprocess.Popen[str]], worker.get("process"))
+        if proc is not None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
+
+    def _restart_worker(self, index: int) -> None:
+        """Restart a single rollout worker after timeout/crash."""
+        old = self.workers[index]
+        self._close_worker_handle(old)
+
+        self.workers[index] = self._start_worker_handle()
+        ready = self._read_msg_from(self.workers[index])
         if ready.get("type") != "ready":
             raise RuntimeError(f"Worker {index}: restart failed, expected ready but got {ready}")
 
@@ -706,38 +799,73 @@ class HybridTrainer:
         return previous, self._get_curriculum_phase(), win_rate
 
     @staticmethod
-    def _send_msg_to(proc: subprocess.Popen[str], msg: Dict[str, Any]) -> None:
-        """Send JSON message to a specific worker."""
-        assert proc.stdin is not None
-        proc.stdin.write(json.dumps(msg) + "\n")
-        proc.stdin.flush()
+    def _send_msg_to(worker: Dict[str, Any], msg: Dict[str, Any]) -> None:
+        """Queue or execute a command for a specific rollout worker."""
+        msg_type = str(msg.get("type", ""))
+        if msg_type == "collect":
+            worker["pending"] = msg
+            return
+
+        stub = worker["stub"]
+        if msg_type == "set_weights_from_file":
+            path_value = str(msg.get("path", ""))
+            if not path_value:
+                raise RuntimeError("Missing path for set_weights_from_file")
+            stub.SetWeightsFromFile(
+                TREADS_PB2.SetWeightsFromFileRequest(path=path_value),
+                timeout=30.0,
+            )
+            worker["pending"] = {"type": "weights_set"}
+            return
+
+        if msg_type == "exit":
+            try:
+                stub.Close(TREADS_PB2.CloseRequest(), timeout=2.0)
+            except Exception:
+                pass
+            worker["pending"] = {"type": "closed"}
+            return
+
+        raise RuntimeError(f"Unsupported worker command type: {msg_type}")
 
     @staticmethod
-    def _read_msg_from(proc: subprocess.Popen[str], timeout_sec: float = 180.0) -> Dict[str, Any]:
-        """Read JSON message from a specific worker."""
-        assert proc.stdout is not None
-        stdout = proc.stdout
-        holder: Dict[str, str] = {"line": ""}
+    def _read_msg_from(worker: Dict[str, Any], timeout_sec: float = 180.0) -> Dict[str, Any]:
+        """Read command result from a specific rollout worker."""
+        pending = worker.get("pending")
+        if pending is not None and pending.get("type") in ("weights_set", "closed"):
+            worker["pending"] = None
+            return cast(Dict[str, Any], pending)
 
-        def _reader() -> None:
-            holder["line"] = stdout.readline()
+        stub = worker["stub"]
+        if pending is not None and pending.get("type") == "collect":
+            req = pending
+            response = stub.Collect(
+                TREADS_PB2.CollectRequest(
+                    n_steps=int(req.get("n_steps", 4096)),
+                    levels=[int(v) for v in cast(List[Any], req.get("levels", [1]))],
+                    max_ticks=int(req.get("maxTicks", 1800)),
+                    tick_norm_ticks=int(req.get("tickNormTicks", 1800)),
+                    seed_start=int(req.get("seedStart", 0)),
+                    replay_every_episodes=int(req.get("replayEveryEpisodes", 0)),
+                    replay_dir=str(req.get("replayDir", "")),
+                    worker_id=int(req.get("workerId", 0)),
+                    target_episodes=int(req.get("targetEpisodes", 0)),
+                    shaping_scale=float(req.get("shapingScale", 1.0)),
+                    procedural_levels=bool(req.get("proceduralLevels", True)),
+                    difficulty_band=float(req.get("difficultyBand", 0.0)),
+                ),
+                timeout=timeout_sec,
+            )
+            worker["pending"] = None
+            payload = cast(Dict[str, Any], json.loads(str(response.rollout_json)))
+            if payload.get("type") != "rollout":
+                raise RuntimeError(f"Worker returned unexpected payload type: {payload.get('type')}")
+            return payload
 
-        thread = threading.Thread(target=_reader, daemon=True)
-        thread.start()
-        thread.join(timeout=timeout_sec)
-        if thread.is_alive():
-            raise TimeoutError(f"Timed out waiting for worker message after {timeout_sec:.1f}s")
-
-        line = holder["line"]
-        if not line:
-            stderr = ""
-            if proc.stderr is not None:
-                stderr = proc.stderr.read()
-            raise RuntimeError(f"Worker process died. stderr: {stderr}")
-        msg = cast(Dict[str, Any], json.loads(line.strip()))
-        if msg.get("type") == "error":
-            raise RuntimeError(f"Worker reported error: {msg}")
-        return msg
+        health = stub.Health(TREADS_PB2.HealthRequest(), timeout=min(timeout_sec, 5.0))
+        if not bool(health.ok):
+            raise RuntimeError(f"Worker health check failed: {health.message}")
+        return {"type": "ready"}
 
     def _send_msg(self, msg: Dict[str, Any]) -> None:
         """Send JSON message to the first worker (legacy helper)."""
@@ -1419,10 +1547,9 @@ class HybridTrainer:
         """Clean up all worker processes."""
         for w in self.workers:
             try:
-                self._send_msg_to(w, {"type": "exit"})
-                w.wait(timeout=5)
+                self._close_worker_handle(w)
             except Exception:
-                w.kill()
+                pass
         self.workers = []
 
     def send_weights(self) -> None:

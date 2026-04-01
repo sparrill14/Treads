@@ -5,19 +5,15 @@
  * Collects full rollout buffers (obs, action, reward, done, value, log_prob)
  * and bulk-transfers them to Python for PPO gradient updates.
  *
- * Protocol (JSON over stdin/stdout):
- *   Worker starts → {"type":"ready"}
- *   Python → {"type":"set_weights","state_dict":{...}}
- *   Worker → {"type":"weights_set"}
- *   Python → {"type":"collect","n_steps":4096,"level":1,"maxTicks":1800,"seedStart":N}
- *   Worker → {"type":"rollout",...}  (bulk transfer ~5MB)
- *   ... repeat from set_weights ...
- *   Python → {"type":"exit"}
+ * Transport:
+ *   gRPC server with unary RPC methods for health, weight loading, rollout collection,
+ *   and graceful shutdown.
  */
 
+import * as grpc from '@grpc/grpc-js';
+import * as protoLoader from '@grpc/proto-loader';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as readline from 'readline';
 
 import { createDefaultControllers, createInitialGameState } from '../src/game/core/MatchFactory';
 import { SeededRandom } from '../src/game/core/prng';
@@ -35,6 +31,58 @@ import type {
 import { LEVEL_CONFIGS, type LevelConfig } from '../src/game/LevelConfig';
 import { NavigationPlanner } from '../src/game/navigation/NavigationPlanner';
 import { PolicyMLP, parseWeightsFromStateDict } from './mlp-inference';
+
+type HealthRequest = Record<string, never>;
+interface HealthResponse {
+	ok: boolean;
+	message: string;
+}
+
+interface SetWeightsFromFileRequest {
+	path?: string;
+}
+
+interface SetWeightsFromFileResponse {
+	ok: boolean;
+}
+
+interface CollectRequest {
+	nSteps?: number;
+	levels?: number[];
+	maxTicks?: number;
+	tickNormTicks?: number;
+	seedStart?: number;
+	replayEveryEpisodes?: number;
+	replayDir?: string;
+	workerId?: number;
+	targetEpisodes?: number;
+	shapingScale?: number;
+	proceduralLevels?: boolean;
+	difficultyBand?: number;
+}
+
+interface CollectResponse {
+	rolloutJson: string;
+}
+
+type CloseRequest = Record<string, never>;
+interface CloseResponse {
+	closed: boolean;
+}
+
+const ROLLOUT_PROTO_PATH = path.join(__dirname, '..', '..', 'training', 'proto', 'treads.proto');
+const rolloutPackageDef = protoLoader.loadSync(ROLLOUT_PROTO_PATH, {
+	keepCase: false,
+	longs: String,
+	enums: String,
+	defaults: true,
+	oneofs: true,
+});
+const rolloutGrpcObj = grpc.loadPackageDefinition(rolloutPackageDef) as grpc.GrpcObject;
+const rolloutPkg = rolloutGrpcObj.treads as grpc.GrpcObject;
+const rolloutServiceDef = rolloutPkg.RolloutWorkerService as grpc.ServiceClientConstructor & {
+	service: grpc.ServiceDefinition;
+};
 
 // ---- Constants matching treads_env.py ----
 const ARENA_WIDTH = 1000.0;
@@ -1430,125 +1478,114 @@ function collectRollout(
 	};
 }
 
-// ---- stdin/stdout communication ----
-function writeLine(obj: unknown): void {
-	process.stdout.write(JSON.stringify(obj) + '\n');
+let mlp: PolicyMLP | null = null;
+let workerTotalEpisodes = 0;
+
+function getPortArg(): number {
+	const args = process.argv.slice(2);
+	for (let i = 0; i < args.length; i += 1) {
+		if (args[i] === '--port' && args[i + 1]) {
+			return Number(args[i + 1]);
+		}
+	}
+	return 50061;
 }
 
-const rl = readline.createInterface({ input: process.stdin, terminal: false });
-const lineQueue: string[] = [];
-let lineResolve: (() => void) | null = null;
+function health(
+	_call: grpc.ServerUnaryCall<HealthRequest, HealthResponse>,
+	callback: grpc.sendUnaryData<HealthResponse>
+): void {
+	callback(null, { ok: true, message: mlp ? 'ready' : 'weights_not_set' });
+}
 
-rl.on('line', (line: string) => {
-	lineQueue.push(line);
-	if (lineResolve) {
-		const resolve = lineResolve;
-		lineResolve = null;
-		resolve();
+function setWeightsFromFile(
+	call: grpc.ServerUnaryCall<SetWeightsFromFileRequest, SetWeightsFromFileResponse>,
+	callback: grpc.sendUnaryData<SetWeightsFromFileResponse>
+): void {
+	try {
+		const filePath = String(call.request.path ?? '');
+		if (!filePath) {
+			callback({ code: grpc.status.INVALID_ARGUMENT, message: 'Missing path for set_weights_from_file' }, null);
+			return;
+		}
+		const raw = fs.readFileSync(filePath, 'utf8');
+		const stateDict = JSON.parse(raw) as Record<string, number[][] | number[]>;
+		const weights = parseWeightsFromStateDict(stateDict);
+		mlp = new PolicyMLP(weights);
+		callback(null, { ok: true });
+	} catch (err) {
+		callback({ code: grpc.status.INTERNAL, message: String(err) }, null);
 	}
-});
+}
 
-rl.on('close', () => {
-	process.exit(0);
-});
+function collect(
+	call: grpc.ServerUnaryCall<CollectRequest, CollectResponse>,
+	callback: grpc.sendUnaryData<CollectResponse>
+): void {
+	try {
+		if (!mlp) {
+			callback({ code: grpc.status.FAILED_PRECONDITION, message: 'Weights not set' }, null);
+			return;
+		}
+		const req = call.request;
+		const nSteps = Number(req.nSteps ?? 4096);
+		const levels = (req.levels && req.levels.length > 0 ? req.levels : [1]).map((v) => Number(v));
+		const maxTicks = Number(req.maxTicks ?? 1800);
+		TICK_NORM_TICKS = Math.max(1, Number(req.tickNormTicks ?? maxTicks));
+		const seedStart = Number(req.seedStart ?? 0);
+		const replayEveryEpisodes = Number(req.replayEveryEpisodes ?? 0);
+		const replayDir = String(req.replayDir ?? path.join(__dirname, '..', '..', 'training', 'output', 'replays'));
+		const workerId = Number(req.workerId ?? 0);
+		const shapingScale = Math.max(0, Math.min(1, Number(req.shapingScale ?? 1.0)));
+		const proceduralLevels = Boolean(req.proceduralLevels ?? true);
+		const difficultyBand = clamp(Number(req.difficultyBand ?? 0), 0, 1);
 
-function readLine(): Promise<string> {
-	if (lineQueue.length > 0) {
-		return Promise.resolve(lineQueue.shift() ?? '');
+		const rollout = collectRollout(
+			mlp,
+			nSteps,
+			levels,
+			maxTicks,
+			seedStart,
+			replayEveryEpisodes,
+			replayDir,
+			workerId,
+			shapingScale,
+			workerTotalEpisodes,
+			proceduralLevels,
+			difficultyBand
+		);
+		workerTotalEpisodes += (rollout.episode_rewards as number[]).length;
+		callback(null, { rolloutJson: JSON.stringify(rollout) });
+	} catch (err) {
+		callback({ code: grpc.status.INTERNAL, message: String(err) }, null);
 	}
-	return new Promise<string>((resolve) => {
-		lineResolve = () => resolve(lineQueue.shift() ?? '');
+}
+
+function close(
+	_call: grpc.ServerUnaryCall<CloseRequest, CloseResponse>,
+	callback: grpc.sendUnaryData<CloseResponse>
+): void {
+	callback(null, { closed: true });
+	setTimeout(() => process.exit(0), 0);
+}
+
+function main(): void {
+	const server = new grpc.Server();
+	server.addService(rolloutServiceDef.service, {
+		Health: health,
+		SetWeightsFromFile: setWeightsFromFile,
+		Collect: collect,
+		Close: close,
+	});
+
+	const port = getPortArg();
+	const bindAddress = `127.0.0.1:${port}`;
+	server.bindAsync(bindAddress, grpc.ServerCredentials.createInsecure(), (err) => {
+		if (err) {
+			process.stderr.write(`rollout-worker gRPC bind error: ${String(err)}\n`);
+			process.exit(1);
+		}
 	});
 }
 
-// ---- Main loop ----
-async function main(): Promise<void> {
-	let mlp: PolicyMLP | null = null;
-	let workerTotalEpisodes = 0;
-
-	writeLine({ type: 'ready' });
-
-	while (true) {
-		const line = await readLine();
-		let cmd: Record<string, unknown>;
-		try {
-			cmd = JSON.parse(line);
-		} catch {
-			writeLine({ type: 'error', message: 'Invalid JSON command received by rollout worker' });
-			continue;
-		}
-
-		if (cmd.type === 'set_weights') {
-			const stateDict = cmd.state_dict as Record<string, number[][] | number[]>;
-			const weights = parseWeightsFromStateDict(stateDict);
-			mlp = new PolicyMLP(weights);
-			writeLine({ type: 'weights_set' });
-		} else if (cmd.type === 'set_weights_from_file') {
-			const filePath = String(cmd.path ?? '');
-			if (!filePath) {
-				writeLine({ type: 'error', message: 'Missing path for set_weights_from_file' });
-				continue;
-			}
-			const raw = fs.readFileSync(filePath, 'utf8');
-			const stateDict = JSON.parse(raw) as Record<string, number[][] | number[]>;
-			const weights = parseWeightsFromStateDict(stateDict);
-			mlp = new PolicyMLP(weights);
-			writeLine({ type: 'weights_set' });
-		} else if (cmd.type === 'collect') {
-			if (!mlp) {
-				writeLine({ type: 'error', message: 'Weights not set' });
-				continue;
-			}
-			const nSteps = (cmd.n_steps as number) ?? 4096;
-			const levels = (cmd.levels as number[]) ?? [(cmd.level as number) ?? 1];
-			const maxTicks = (cmd.maxTicks as number) ?? 1800;
-			TICK_NORM_TICKS = Math.max(1, Number((cmd.tickNormTicks as number) ?? maxTicks));
-			const seedStart = (cmd.seedStart as number) ?? 0;
-			const replayEveryEpisodes = (cmd.replayEveryEpisodes as number) ?? 0;
-			const replayDir = (cmd.replayDir as string) ?? path.join(__dirname, '..', '..', 'training', 'output', 'replays');
-			const workerId = (cmd.workerId as number) ?? 0;
-			const shapingScale = Math.max(0, Math.min(1, (cmd.shapingScale as number) ?? 1.0));
-			const proceduralLevels = Boolean((cmd.proceduralLevels as boolean) ?? true);
-			const difficultyBand = clamp(Number((cmd.difficultyBand as number) ?? 0), 0, 1);
-			const rollout = collectRollout(
-				mlp,
-				nSteps,
-				levels,
-				maxTicks,
-				seedStart,
-				replayEveryEpisodes,
-				replayDir,
-				workerId,
-				shapingScale,
-				workerTotalEpisodes,
-				proceduralLevels,
-				difficultyBand
-			);
-			workerTotalEpisodes += (rollout.episode_rewards as number[]).length;
-			writeLine(rollout);
-		} else if (cmd.type === 'test_forward') {
-			if (!mlp) {
-				writeLine({ type: 'error', message: 'Weights not set' });
-				continue;
-			}
-			const observations = cmd.observations as number[][];
-			const logits: number[][] = [];
-			const vals: number[] = [];
-			for (const obs of observations) {
-				const result = mlp.forward(obs);
-				logits.push(result.actionMean);
-				vals.push(result.value);
-			}
-			writeLine({ type: 'test_result', logits, values: vals });
-		} else if (cmd.type === 'exit') {
-			process.exit(0);
-		} else {
-			writeLine({ type: 'error', message: `Unknown command type: ${String(cmd.type ?? 'undefined')}` });
-		}
-	}
-}
-
-main().catch((err) => {
-	process.stderr.write(`Rollout worker error: ${err}\n`);
-	process.exit(1);
-});
+main();

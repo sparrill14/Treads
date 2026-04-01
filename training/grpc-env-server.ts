@@ -1,8 +1,8 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import { randomUUID } from 'crypto';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
+import { randomUUID } from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 
 import { createDefaultControllers, createInitialGameState } from '../src/game/core/MatchFactory';
 import { ReplayRecorder } from '../src/game/core/Replay';
@@ -200,7 +200,7 @@ class EnvSession {
 	}
 }
 
-const PROTO_PATH = path.join(__dirname, '..', '..', 'training', 'proto', 'treads_env.proto');
+const PROTO_PATH = path.join(__dirname, '..', '..', 'training', 'proto', 'treads.proto');
 const packageDef = protoLoader.loadSync(PROTO_PATH, {
 	keepCase: false,
 	longs: String,
@@ -323,7 +323,6 @@ function main(): void {
 			process.stderr.write(`gRPC bind error: ${String(err)}\n`);
 			process.exit(1);
 		}
-		server.start();
 	});
 
 	const shutdown = (): void => {
