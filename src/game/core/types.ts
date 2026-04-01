@@ -117,6 +117,7 @@ export interface TankObservation {
 	tick: number;
 	self: TankStateView;
 	enemies: TankStateView[];
+	allies?: TankStateView[];
 	projectiles: ProjectileStateView[];
 	bombs: BombStateView[];
 	obstacles: ObstacleStateView[];

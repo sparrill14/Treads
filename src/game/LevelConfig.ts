@@ -13,6 +13,8 @@ export interface ObstacleConfig {
 export interface NavigatorConfig {
 	type: NavigatorType;
 	aggressionFactor?: number;
+	heuristicProfile?: 'default' | 'elite' | 'advanced';
+	tacticalRole?: 'auto' | 'pressure' | 'flank' | 'zone';
 }
 
 export interface EnemyConfig {
@@ -213,5 +215,56 @@ export const LEVEL_CONFIGS: LevelConfig[] = [
 			},
 		],
 		player: { x: 100, y: 250 },
+	},
+	// Level 10
+	{
+		obstacles: [
+			{ x: 220, y: 90, width: 30, height: 320 },
+			{ x: 480, y: 0, width: 30, height: 200 },
+			{ x: 480, y: 300, width: 30, height: 200 },
+			{ x: 740, y: 90, width: 30, height: 320 },
+		],
+		enemies: [
+			{
+				type: 'super-bomber',
+				x: 840,
+				y: 90,
+				ammo: { type: 'super', count: 4 },
+				bombs: { type: 'love', count: 2 },
+				navigator: {
+					type: 'astar-avoidance',
+					aggressionFactor: 7,
+					heuristicProfile: 'advanced',
+					tacticalRole: 'pressure',
+				},
+			},
+			{
+				type: 'super-bomber',
+				x: 880,
+				y: 240,
+				ammo: { type: 'super', count: 4 },
+				bombs: { type: 'love', count: 2 },
+				navigator: {
+					type: 'astar-avoidance',
+					aggressionFactor: 11,
+					heuristicProfile: 'advanced',
+					tacticalRole: 'flank',
+				},
+			},
+			{
+				type: 'super-bomber',
+				x: 840,
+				y: 390,
+				ammo: { type: 'super', count: 4 },
+				bombs: { type: 'love', count: 2 },
+				navigator: {
+					type: 'astar-avoidance',
+					aggressionFactor: 15,
+					heuristicProfile: 'advanced',
+					tacticalRole: 'zone',
+				},
+			},
+		],
+		player: { x: 90, y: 250 },
 	},
 ];

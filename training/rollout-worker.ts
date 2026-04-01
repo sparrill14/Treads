@@ -1264,6 +1264,9 @@ function collectRollout(
 		const dummyObs: TankObservation = {
 			tick: state.tick,
 			self: JSON.parse(JSON.stringify(playerTank)),
+			allies: state.tanks
+				.filter((t) => t.team === playerTank.team && t.id !== playerTank.id)
+				.map((t) => JSON.parse(JSON.stringify(t))),
 			enemies: state.tanks.filter((t) => t.team !== playerTank.team).map((t) => JSON.parse(JSON.stringify(t))),
 			projectiles: state.projectiles.map((p) => JSON.parse(JSON.stringify(p))),
 			bombs: state.bombs.map((b) => JSON.parse(JSON.stringify(b))),

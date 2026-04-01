@@ -157,6 +157,9 @@ async function runEpisode(level: number, seed: number, maxTicks: number, saveRep
 		return {
 			tick: state.tick,
 			self: JSON.parse(JSON.stringify(currentPlayerTank)),
+			allies: state.tanks
+				.filter((t) => t.team === currentPlayerTank.team && t.id !== currentPlayerTank.id)
+				.map((t) => JSON.parse(JSON.stringify(t))),
 			enemies: state.tanks.filter((t) => t.team !== currentPlayerTank.team).map((t) => JSON.parse(JSON.stringify(t))),
 			projectiles: state.projectiles.map((p) => JSON.parse(JSON.stringify(p))),
 			bombs: state.bombs.map((b) => JSON.parse(JSON.stringify(b))),

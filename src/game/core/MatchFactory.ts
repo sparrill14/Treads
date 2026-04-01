@@ -178,6 +178,8 @@ export function createDefaultControllers(
 			randomAim: enemy.type === 'stationary-random-aim',
 			recalculationInterval: getRecalculationInterval(navigationMode),
 			aggressionFactor: enemy.navigator?.aggressionFactor ?? getTankSpec(enemy.type).aggressionFactor,
+			heuristicProfile: enemy.navigator?.heuristicProfile,
+			tacticalRole: enemy.navigator?.tacticalRole,
 		});
 	});
 	return controllers;

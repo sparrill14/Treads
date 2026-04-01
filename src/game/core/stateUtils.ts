@@ -238,6 +238,7 @@ export function createPreallocatedObservation(
 		obs: {
 			tick: 0,
 			self: blankTank(),
+			allies: [],
 			enemies,
 			projectiles,
 			bombs,

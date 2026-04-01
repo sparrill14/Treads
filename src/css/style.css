@@ -65,15 +65,15 @@ p {
 .app-shell {
 	width: min(1600px, calc(100% - 32px));
 	margin: 0 auto;
-	padding: 24px 0 28px;
+	padding: 12px 0 20px;
 }
 
 .hero-shell {
 	display: flex;
 	justify-content: space-between;
 	align-items: flex-start;
-	gap: 24px;
-	padding: 28px;
+	gap: 16px;
+	padding: 16px 20px;
 	border: 1px solid var(--surface-border);
 	border-radius: var(--radius-xl);
 	background:
@@ -84,37 +84,37 @@ p {
 }
 
 .hero-copy {
-	max-width: 860px;
+	max-width: 760px;
 }
 
 .hero-copy h1 {
-	font-size: clamp(2.4rem, 4vw, 4rem);
+	font-size: clamp(2rem, 3vw, 3.1rem);
 	letter-spacing: -0.04em;
-	margin-bottom: 10px;
+	margin-bottom: 6px;
 }
 
 .hero-copy p {
 	color: var(--muted);
 	max-width: 70ch;
-	line-height: 1.55;
+	line-height: 1.4;
 }
 
 .hero-status {
-	min-width: min(360px, 100%);
+	min-width: min(320px, 100%);
 }
 
 .hero-metrics {
-	padding: 18px 20px;
+	padding: 12px 16px;
 	border-radius: var(--radius-lg);
 	border: 1px solid rgba(123, 223, 242, 0.24);
 	background: rgba(7, 16, 27, 0.72);
 	color: #d6e6ff;
-	line-height: 1.5;
+	line-height: 1.35;
 }
 
 .panel-eyebrow {
 	display: inline-block;
-	margin-bottom: 10px;
+	margin-bottom: 6px;
 	font-size: 0.76rem;
 	letter-spacing: 0.18em;
 	text-transform: uppercase;
@@ -123,9 +123,9 @@ p {
 
 .workspace {
 	display: grid;
-	grid-template-columns: minmax(0, 1.6fr) minmax(360px, 0.95fr);
+	grid-template-columns: minmax(0, 1.85fr) minmax(330px, 0.8fr);
 	gap: 20px;
-	margin-top: 20px;
+	margin-top: 12px;
 }
 
 .stage-column,
@@ -153,7 +153,7 @@ p {
 }
 
 .stage-card {
-	padding: 22px;
+	padding: 16px;
 }
 
 .panel-card {
@@ -270,7 +270,7 @@ p {
 
 .canvas-frame {
 	position: relative;
-	padding: 18px;
+	padding: 10px;
 	border-radius: calc(var(--radius-xl) - 8px);
 	background:
 		radial-gradient(circle at top left, rgba(255, 122, 24, 0.14), transparent 34%),
@@ -286,7 +286,7 @@ p {
 	height: auto;
 	margin: 0 auto;
 	border: 1px solid rgba(255, 255, 255, 0.08);
-	box-shadow: 0 0 0 10px rgba(7, 14, 23, 0.65);
+	box-shadow: 0 0 0 6px rgba(7, 14, 23, 0.65);
 	cursor: none;
 }
 

@@ -51,6 +51,39 @@ export function computeGunBarrelEnd(tank: Pick<TankStateView, 'x' | 'y' | 'size'
 	};
 }
 
+export function computeClearGunBarrelEnd(
+	tank: Pick<TankStateView, 'x' | 'y' | 'size' | 'aimAngle'>,
+	obstacles: ObstacleStateView[],
+	arena: ArenaState
+): { x: number; y: number } {
+	const center = getTankCenter(tank);
+	const dirX = Math.cos(tank.aimAngle);
+	const dirY = Math.sin(tank.aimAngle);
+	const maxDistance = tank.size;
+	const stepDistance = 2;
+	let lastClearX = center.x;
+	let lastClearY = center.y;
+
+	for (let distance = stepDistance; distance <= maxDistance; distance += stepDistance) {
+		const x = center.x + dirX * distance;
+		const y = center.y + dirY * distance;
+		if (x <= 0 || x >= arena.width || y <= 0 || y >= arena.height) {
+			break;
+		}
+		const blocked = obstacles.some(
+			(obstacle) =>
+				x > obstacle.x && x < obstacle.x + obstacle.width && y > obstacle.y && y < obstacle.y + obstacle.height
+		);
+		if (blocked) {
+			break;
+		}
+		lastClearX = x;
+		lastClearY = y;
+	}
+
+	return { x: lastClearX, y: lastClearY };
+}
+
 export function circlesOverlap(x1: number, y1: number, r1: number, x2: number, y2: number, r2: number): boolean {
 	const dx = x1 - x2;
 	const dy = y1 - y2;

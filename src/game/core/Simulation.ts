@@ -1,6 +1,6 @@
 import {
 	circlesOverlap,
-	computeGunBarrelEnd,
+	computeClearGunBarrelEnd,
 	deriveAimTarget,
 	getMoveDelta,
 	normalizeAngle,
@@ -76,6 +76,7 @@ export interface SimulationOptions {
 interface TankObsBuffer {
 	obs: TankObservation;
 	selfBuf: TankStateView;
+	allyBufs: TankStateView[];
 	enemyBufs: TankStateView[];
 	projBufs: ProjectileStateView[];
 	bombBufs: BombStateView[];
@@ -358,6 +359,8 @@ export class Simulation {
 			const selfBuf = blankTank();
 			const enemyBufs: TankStateView[] = [];
 			for (let i = 0; i < maxEnemies; i++) enemyBufs.push(blankTank());
+			const allyBufs: TankStateView[] = [];
+			for (let i = 0; i < maxEnemies; i++) allyBufs.push(blankTank());
 			const projBufs: ProjectileStateView[] = [];
 			for (let i = 0; i < maxProjectiles; i++) projBufs.push(blankProjectile());
 			const bombBufs: BombStateView[] = [];
@@ -370,6 +373,7 @@ export class Simulation {
 				obs: {
 					tick: 0,
 					self: selfBuf,
+					allies: allyBufs,
 					enemies: enemyBufs,
 					projectiles: projBufs,
 					bombs: bombBufs,
@@ -377,6 +381,7 @@ export class Simulation {
 					arena: arenaBuf,
 				},
 				selfBuf,
+				allyBufs,
 				enemyBufs,
 				projBufs,
 				bombBufs,
@@ -413,6 +418,11 @@ export class Simulation {
 			const observation: TankObservation = {
 				tick: sharedViews.tick,
 				self: cloneJson(self),
+				allies: cloneJson(
+					(self.team === 'player' ? sharedViews.playerTeam : sharedViews.enemyTeam).filter(
+						(tank) => tank.id !== self.id
+					)
+				),
 				enemies: self.team === 'player' ? sharedViews.enemyTeam : sharedViews.playerTeam,
 				projectiles: sharedViews.projectiles,
 				bombs: sharedViews.bombs,
@@ -436,6 +446,18 @@ export class Simulation {
 			copyTank(enemies[i], buf.enemyBufs[i]);
 		}
 		buf.obs.enemies = buf.enemyBufs.slice(0, enemies.length);
+
+		const sameTeam = self.team === 'player' ? sharedViews.playerTeam : sharedViews.enemyTeam;
+		this.ensureArrayCapacity(buf.allyBufs, sameTeam.length, blankTank);
+		let allyCount = 0;
+		for (const teammate of sameTeam) {
+			if (teammate.id === self.id) {
+				continue;
+			}
+			copyTank(teammate, buf.allyBufs[allyCount]);
+			allyCount += 1;
+		}
+		buf.obs.allies = buf.allyBufs.slice(0, allyCount);
 
 		const projs = sharedViews.projectiles;
 		this.ensureArrayCapacity(buf.projBufs, projs.length, blankProjectile);
@@ -545,7 +567,7 @@ export class Simulation {
 			return;
 		}
 		const projectileSpec = getProjectileSpec(tank.ammoType);
-		const barrelEnd = computeGunBarrelEnd(tank);
+		const barrelEnd = computeClearGunBarrelEnd(tank, this.state.obstacles, this.state.arena);
 		const projectile: ProjectileStateView = {
 			id: `projectile-${this.state.nextEntityId++}`,
 			ownerTankId: tank.id,

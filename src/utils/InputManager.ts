@@ -49,8 +49,12 @@ export class InputManager {
 		this.onMouseMove = (event: MouseEvent) => {
 			if (!this.canvas) return;
 			const rect = this.canvas.getBoundingClientRect();
-			this.mouseX = event.clientX - rect.left;
-			this.mouseY = event.clientY - rect.top;
+			const localX = event.clientX - rect.left;
+			const localY = event.clientY - rect.top;
+			const scaleX = rect.width > 0 ? this.canvas.width / rect.width : 1;
+			const scaleY = rect.height > 0 ? this.canvas.height / rect.height : 1;
+			this.mouseX = localX * scaleX;
+			this.mouseY = localY * scaleY;
 		};
 
 		this.onClick = (event: MouseEvent) => {
