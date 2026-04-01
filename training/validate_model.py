@@ -105,7 +105,7 @@ def _print_summary(stats: List[EpisodeStats]) -> None:
 
     print("\nOverall Summary")
     print(f"  Win rate: {wins}/{total_eps} = {wins / total_eps:.3f}")
-    print(f"  Avg reward: {avg_reward:.3f}")
+    print(f"  Env reward (non-comparable): {avg_reward:.3f}")
     print(f"  Fire rate: {total_fires}/{total_steps} ticks = {total_fires / max(total_steps, 1):.3f}")
     print(f"  Bomb rate: {total_bombs}/{total_steps} ticks = {total_bombs / max(total_steps, 1):.3f}")
 
@@ -156,6 +156,10 @@ def validate(
         f"Validation config: levels={levels}, episodes_per_level={episodes_per_level}, "
         f"max_ticks={max_ticks}, deterministic={deterministic}"
     )
+    print(
+        "Note: rewards here come from TreadsEnv runtime shaping; compare win/fire metrics "
+        "across runs, not absolute reward against hybrid rollout logs."
+    )
 
     stats: List[EpisodeStats] = []
     seed = seed_start
@@ -202,7 +206,7 @@ def validate(
 
                 print(
                     f"Episode L{level} seed={seed}: steps={steps} win={bool(win)} "
-                    f"reward={total_reward:.3f} fires={fires} bombs={bombs}"
+                    f"env_reward={total_reward:.3f} fires={fires} bombs={bombs}"
                 )
             finally:
                 env.close()

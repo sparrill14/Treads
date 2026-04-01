@@ -60,6 +60,7 @@ interface RunSummary {
 interface ReplaySummary {
 	fileName: string;
 	runId: string;
+	worker: number | null;
 	episode: number | null;
 	level: number | null;
 	seed: number | null;
@@ -261,20 +262,39 @@ function readMetricsHistory(runDir: string): MetricsSnapshot[] {
 }
 
 function parseReplayFileName(fileName: string): {
+	worker: number | null;
 	episode: number | null;
 	level: number | null;
 	seed: number | null;
 	outcome: string;
 } {
-	const match = /^episode_(\d+)_L(\d+)_S(\d+)_([^.]+)\.json$/i.exec(fileName);
-	if (!match) {
-		return { episode: null, level: null, seed: null, outcome: 'unknown' };
+	const workerMatch = /^episode_(\d+)_W(\d+)_L(\d+)_S(\d+)_([^.]+)\.json$/i.exec(fileName);
+	if (workerMatch) {
+		return {
+			worker: Number(workerMatch[2]),
+			episode: Number(workerMatch[1]),
+			level: Number(workerMatch[3]),
+			seed: Number(workerMatch[4]),
+			outcome: workerMatch[5],
+		};
+	}
+
+	const legacyMatch = /^episode_(\d+)_L(\d+)_S(\d+)_([^.]+)\.json$/i.exec(fileName);
+	if (legacyMatch) {
+		return {
+			worker: null,
+			episode: Number(legacyMatch[1]),
+			level: Number(legacyMatch[2]),
+			seed: Number(legacyMatch[3]),
+			outcome: legacyMatch[4],
+		};
 	}
 	return {
-		episode: Number(match[1]),
-		level: Number(match[2]),
-		seed: Number(match[3]),
-		outcome: match[4],
+		worker: null,
+		episode: null,
+		level: null,
+		seed: null,
+		outcome: 'unknown',
 	};
 }
 
@@ -293,6 +313,7 @@ function listReplayFiles(runDir: string, runId: string): ReplaySummary[] {
 			return {
 				fileName: entry.name,
 				runId,
+				worker: meta.worker,
 				episode: meta.episode,
 				level: meta.level,
 				seed: meta.seed,

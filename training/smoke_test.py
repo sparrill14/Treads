@@ -224,7 +224,7 @@ def test_learning_signal() -> bool:
         _send_msg(proc, {
             "type": "collect", "n_steps": n_steps, "levels": levels,
             "maxTicks": 720, "seedStart": iteration * n_steps,
-            "replayEveryEpisodes": 0, "replayDir": "", "episodeOffset": 0,
+            "replayEveryEpisodes": 0, "replayDir": "",
             "targetEpisodes": 99999, "shapingScale": 1.0,
         })
         rollout = _read_msg(proc)

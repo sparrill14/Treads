@@ -58,9 +58,9 @@ const OBS_SIZE =
 	MAX_BOMBS * BOMB_DIM +
 	SUMMARY_DIM;
 const PLAYER_TANK_ID = 'player-0';
-const FIRE_THRESHOLD = 0.0; // Fire only when signal > 0 (was -0.2, Fix 4)
+const FIRE_THRESHOLD = 0.0; // Fire only when signal > 0.
 const BOMB_THRESHOLD = 0.5;
-const AIM_OFFSET_LIMIT = Math.PI; // Full 360° aim freedom (signal=0 → nearest enemy, ±1 → opposite)
+const AIM_OFFSET_LIMIT = Math.PI; // Full-range offset around nearest-enemy angle.
 const STEP_PENALTY = -0.001;
 const HIT_REWARD = 0.3;
 const TOOK_DAMAGE_PENALTY = -0.3;
@@ -791,9 +791,9 @@ function mergeRewardBreakdown(target: RewardBreakdown, add: RewardBreakdown): vo
  *   Geometrically meaningful: nearby values → nearby directions.
  *   Center (0,0) → 'none'; thresholds at ±0.33 for cardinal/diagonal.
  *
- * Aim: aim_signal ∈ [-1, 1] is a small offset from angle-to-nearest-enemy.
+ * Aim: aim_signal ∈ [-1, 1] is an offset from angle-to-nearest-enemy.
  *   aim_signal = 0  → aimed directly at enemy
- *   aim_signal = ±1 → aimed ±10° off target
+ *   aim_signal = ±1 → aimed opposite the nearest-enemy angle (±pi)
  */
 function decodeActionSignal(signal: number[], rawObs: TankObservation): { decoded: TankAction; clamped: number[] } {
 	const clamped = signal.map((v) => Math.max(-1, Math.min(1, v)));
@@ -1132,7 +1132,6 @@ function collectRollout(
 	seedStart: number,
 	replayEveryEpisodes: number,
 	replayDir: string,
-	episodeOffset: number,
 	workerId: number,
 	shapingScale: number
 ): RolloutData {
@@ -1248,17 +1247,17 @@ function collectRollout(
 
 		if (done) {
 			completedEpisodes += 1;
-			const absoluteEpisode = episodeOffset + completedEpisodes;
+			const workerEpisode = completedEpisodes;
 			episodeRewards.push(episodeReward);
 			episodeLengths.push(episodeTick);
 			episodeWins.push(state.status === 'player_win' ? 1 : 0);
 			episodeLevels.push(currentLevel);
 			episodeRewardBreakdowns.push(episodeBreakdown);
-			if (replayEveryEpisodes > 0 && absoluteEpisode % replayEveryEpisodes === 0 && replayRecorder !== null) {
+			if (replayEveryEpisodes > 0 && workerEpisode % replayEveryEpisodes === 0 && replayRecorder !== null) {
 				fs.mkdirSync(replayDir, { recursive: true });
 				const replayPath = path.join(
 					replayDir,
-					`episode_${absoluteEpisode}_W${workerId}_L${currentLevel}_S${seed - 1}_${state.status}.json`
+					`episode_${workerEpisode}_W${workerId}_L${currentLevel}_S${seed - 1}_${state.status}.json`
 				);
 				fs.writeFileSync(replayPath, JSON.stringify((replayRecorder as ReplayRecorder).toJSON()));
 			}
@@ -1394,7 +1393,6 @@ async function main(): Promise<void> {
 			const seedStart = (cmd.seedStart as number) ?? 0;
 			const replayEveryEpisodes = (cmd.replayEveryEpisodes as number) ?? 0;
 			const replayDir = (cmd.replayDir as string) ?? path.join(__dirname, '..', '..', 'training', 'output', 'replays');
-			const episodeOffset = (cmd.episodeOffset as number) ?? 0;
 			const workerId = (cmd.workerId as number) ?? 0;
 			const shapingScale = Math.max(0, Math.min(1, (cmd.shapingScale as number) ?? 1.0));
 			const rollout = collectRollout(
@@ -1405,7 +1403,6 @@ async function main(): Promise<void> {
 				seedStart,
 				replayEveryEpisodes,
 				replayDir,
-				episodeOffset,
 				workerId,
 				shapingScale
 			);

@@ -133,10 +133,11 @@ class TrainingLogger(BaseCallback):
             self.csv_file.close()
 
 
-def linear_schedule(initial_value: float) -> Callable[[float], float]:
-    """Linear schedule from initial_value to 0."""
+def linear_schedule_between(initial_value: float, final_value: float) -> Callable[[float], float]:
+    """Linear schedule where progress=1 -> initial_value and progress=0 -> final_value."""
     def func(progress_remaining: float) -> float:
-        return progress_remaining * initial_value
+        p = min(1.0, max(0.0, float(progress_remaining)))
+        return final_value + (initial_value - final_value) * p
     return func
 
 
@@ -168,8 +169,9 @@ def train() -> None:
         n_epochs=10,
         gamma=0.995,
         gae_lambda=0.95,
-        clip_range=0.15,
-        ent_coef=0.08,
+        clip_range=linear_schedule_between(0.15, 0.08),
+        ent_coef=0.02,
+        target_kl=0.02,
         device=device,
         policy_kwargs=dict(
             net_arch=[256, 256],

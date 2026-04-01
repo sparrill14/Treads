@@ -20,7 +20,7 @@ import time
 import subprocess
 import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, TextIO, Tuple, cast
+from typing import Any, Callable, Dict, List, Optional, TextIO, Tuple, cast
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
@@ -32,9 +32,18 @@ from sb3_compat import ensure_pickle_compat
 from export_onnx import export_to_onnx
 from stable_baselines3 import PPO
 from stable_baselines3.common.logger import configure
-from treads_env import OBS_SIZE
+from runtime_codec import decode_continuous_action
+from treads_env import OBS_SIZE, TreadsEnv
 
 ensure_pickle_compat()
+
+
+def linear_schedule_between(start: float, end: float) -> Callable[[float], float]:
+    """Schedule where progress=1 -> start and progress=0 -> end."""
+    def _schedule(progress_remaining: float) -> float:
+        p = min(1.0, max(0.0, float(progress_remaining)))
+        return end + (start - end) * p
+    return _schedule
 
 # Path to compiled rollout worker
 ROLLOUT_WORKER_PATH = os.path.join(
@@ -79,12 +88,19 @@ class HybridTrainer:
         gae_lambda: float = 0.95,
         learning_rate: float = 1e-4,
         clip_range: float = 0.15,
+        clip_range_final: float = 0.08,
         ent_coef: float = 0.015,
+        ent_coef_final: float = 0.003,
+        target_kl: float = 0.02,
         max_episode_steps: int = 720,
         output_dir: Optional[str] = None,
         load_model_path: Optional[str] = None,
         checkpoint_episode_interval: int = 500,
         replay_episode_interval: int = 250,
+        eval_interval_episodes: int = 500,
+        eval_episodes: int = 24,
+        eval_levels: Optional[List[int]] = None,
+        eval_seed_start: int = 25000,
         seed: int = 42,
         num_workers: int = 1,
     ) -> None:
@@ -109,6 +125,13 @@ class HybridTrainer:
         self.checkpoint_episode_interval = checkpoint_episode_interval
         self.replay_episode_interval = replay_episode_interval
         self.num_workers = max(1, num_workers)
+        self.target_kl = target_kl
+        self.ent_coef_start = ent_coef
+        self.ent_coef_final = ent_coef_final
+        self.eval_interval_episodes = max(1, eval_interval_episodes)
+        self.eval_episodes = max(1, eval_episodes)
+        self.eval_levels = eval_levels or [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        self.eval_seed_start = eval_seed_start
 
         self.output_dir = output_dir or os.path.join(os.path.dirname(__file__), "output")
         os.makedirs(self.output_dir, exist_ok=True)
@@ -119,6 +142,7 @@ class HybridTrainer:
         self.live_metrics_path = os.path.join(self.output_dir, "live_metrics.json")
         self.metrics_history_path = os.path.join(self.output_dir, "metrics_history.jsonl")
         self.best_model_path = os.path.join(self.output_dir, "treads_ppo_best")
+        self.best_train_model_path = os.path.join(self.output_dir, "treads_ppo_best_train")
         self.final_model_path = os.path.join(self.output_dir, "treads_ppo_final")
         self.current_onnx_path = os.path.join(self.output_dir, "treads_policy.onnx")
         self._weights_cache_dir = os.path.join(self.output_dir, ".weights_cache")
@@ -151,6 +175,7 @@ class HybridTrainer:
 
         # Create a dummy continuous-action env so SB3 policy/distribution match worker sampling.
         dummy_env = _DummyContinuousActionEnv()
+        clip_schedule = linear_schedule_between(clip_range, clip_range_final)
         if load_model_path and os.path.exists(load_model_path):
             print(f"Loading PPO model from: {load_model_path}")
             self.model = cast(Any, PPO.load(  # pyright: ignore[reportUnknownMemberType]
@@ -163,8 +188,9 @@ class HybridTrainer:
                 n_epochs=n_epochs,
                 gamma=gamma,
                 gae_lambda=gae_lambda,
-                clip_range=clip_range,
+                clip_range=clip_schedule,
                 ent_coef=ent_coef,
+                target_kl=target_kl,
             ))
             print(
                 "  Resume settings: "
@@ -186,8 +212,9 @@ class HybridTrainer:
                 n_epochs=n_epochs,
                 gamma=gamma,
                 gae_lambda=gae_lambda,
-                clip_range=clip_range,
+                clip_range=clip_schedule,
                 ent_coef=ent_coef,
+                target_kl=target_kl,
                 device="cpu",
                 policy_kwargs=dict(net_arch=[256, 256]),
                 seed=seed,
@@ -217,10 +244,40 @@ class HybridTrainer:
         self.episode_levels: List[int] = []
         self.episode_reward_breakdowns: List[Dict[str, Any]] = []
         self.best_win_rate = 0.0
+        self.best_train_win_rate = 0.0
+        self.best_eval_win_rate = 0.0
         self.start_time = time.time()
         self._write_run_manifest(status="initializing")
         with open(self.metrics_history_path, "w", encoding="utf-8"):
             pass
+
+    def _evaluate_policy(self) -> float:
+        """Deterministic eval on fixed levels/seeds for stable model selection."""
+        wins = 0
+        episodes = 0
+        seed = self.eval_seed_start
+
+        for level in self.eval_levels:
+            for _ in range(self.eval_episodes):
+                env = TreadsEnv(level=level, seed_start=seed, max_episode_steps=self.max_episode_steps)
+                try:
+                    obs, _ = env.reset()
+                    done = False
+                    info: Dict[str, Any] = {}
+                    while not done:
+                        action, _ = cast(Any, self.model).predict(obs, deterministic=True)
+                        obs_raw = cast(Optional[Dict[str, Any]], getattr(env, "_last_obs_raw", None))
+                        decoded = decode_continuous_action(action, obs_raw)
+                        obs, _reward, terminated, truncated, info = env.step(decoded)
+                        done = terminated or truncated
+                    result = cast(Dict[str, Any], info.get("result", {}))
+                    wins += int(bool(result.get("win", False)))
+                    episodes += 1
+                finally:
+                    env.close()
+                    seed += 1
+
+        return float(wins / max(episodes, 1))
 
     def _now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat()
@@ -269,9 +326,13 @@ class HybridTrainer:
                 "learningRate": learning_rate,
                 "clipRange": clip_range,
                 "entCoef": cast(float, self.model.ent_coef),
+                "targetKl": self.target_kl,
                 "maxEpisodeSteps": self.max_episode_steps,
                 "checkpointEpisodeInterval": self.checkpoint_episode_interval,
                 "replayEpisodeInterval": self.replay_episode_interval,
+                "evalIntervalEpisodes": self.eval_interval_episodes,
+                "evalEpisodesPerLevel": self.eval_episodes,
+                "evalLevels": self.eval_levels,
             },
             "paths": {
                 "trainingLog": os.path.abspath(self.training_log_path),
@@ -279,12 +340,14 @@ class HybridTrainer:
                 "metricsHistory": os.path.abspath(self.metrics_history_path),
                 "replays": os.path.abspath(self.replay_dir),
                 "bestModel": os.path.abspath(self.best_model_path + ".zip"),
+                "bestTrainModel": os.path.abspath(self.best_train_model_path + ".zip"),
                 "finalModel": os.path.abspath(self.final_model_path + ".zip"),
                 "onnxModel": os.path.abspath(self.current_onnx_path),
             },
             "artifacts": {
                 "replayCount": self._count_replays(),
                 "onnxAvailable": os.path.exists(self.current_onnx_path),
+                "bestEvalWinRate": self.best_eval_win_rate,
             },
             "error": error or None,
         }
@@ -594,7 +657,6 @@ class HybridTrainer:
                     "seedStart": worker_seeds[i],
                     "replayEveryEpisodes": self.replay_episode_interval,
                     "replayDir": self.replay_dir,
-                    "episodeOffset": self.total_episodes,
                     "workerId": i,
                     "targetEpisodes": target_episodes,
                     "shapingScale": max(0.3, 1.0 - self._phase_recent_win_rate() * 2.0),
@@ -882,6 +944,7 @@ class HybridTrainer:
 
         iteration = 0
         next_checkpoint_episode = self.checkpoint_episode_interval
+        next_eval_episode = self.eval_interval_episodes
         interrupt_reason = ""
         try:
             while self.total_episodes < target_episodes and self.total_timesteps < max_timesteps:
@@ -911,7 +974,10 @@ class HybridTrainer:
                 t_buffer = time.perf_counter() - t0
 
                 # 4. Update progress for learning rate schedules
-                cast(Any, self.model)._current_progress_remaining = 1.0 - self.total_episodes / max(target_episodes, 1)
+                timestep_progress = min(1.0, max(0.0, self.total_timesteps / max(max_timesteps, 1)))
+                cast(Any, self.model)._current_progress_remaining = 1.0 - timestep_progress
+                current_ent_coef = self.ent_coef_final + (self.ent_coef_start - self.ent_coef_final) * (1.0 - timestep_progress)
+                cast(Any, self.model).ent_coef = float(current_ent_coef)
                 cast(Any, self.model).num_timesteps = self.total_timesteps
 
                 # 5. PPO gradient updates
@@ -933,6 +999,14 @@ class HybridTrainer:
                         f"  PPO: pg_loss={pg:.4f} val_loss={vl:.4f} ent={ent:.4f} "
                         f"clip_frac={clip_frac:.3f} kl={approx_kl:.4f} expl_var={expl_var:.3f}"
                     )
+                    if not np.isfinite(float(vl)):
+                        raise RuntimeError("PPO value_loss became non-finite; aborting to prevent corrupted checkpoints.")
+                    if self.target_kl > 0 and float(approx_kl) > self.target_kl * 4.0:
+                        raise RuntimeError(
+                            f"PPO approx_kl spike ({float(approx_kl):.4f}) exceeded 4x target_kl ({self.target_kl:.4f})."
+                        )
+                    if float(clip_frac) > 0.8:
+                        print("  WARNING: clip_fraction > 0.8; updates may be too aggressive.")
 
                 # 6. Log
                 avg_reward, avg_winrate = self._log_episodes(rollout, iteration)
@@ -1018,13 +1092,27 @@ class HybridTrainer:
                     )
                     print("  RewardBreakdown(trigger window): " + " ".join(summary_parts) + "\n")
 
-                # 7. Save best model
-                if len(self.episode_rewards) >= 20 and avg_winrate > self.best_win_rate:
-                    self.best_win_rate = avg_winrate
-                    cast(Any, self.model).save(self.best_model_path)
-                    self._export_policy_onnx(self.best_model_path)
+                # 7. Track best training-window model separately from eval best.
+                if len(self.episode_rewards) >= 20 and avg_winrate > self.best_train_win_rate:
+                    self.best_train_win_rate = avg_winrate
+                    cast(Any, self.model).save(self.best_train_model_path)
+                    print(f"  ** New best training-window model: {avg_winrate:.3f} **")
+
+                # 7b. Periodic deterministic eval for robust best checkpoint selection.
+                while self.total_episodes >= next_eval_episode:
+                    eval_win_rate = self._evaluate_policy()
+                    print(
+                        f"  Eval | Episodes={self.total_episodes} | "
+                        f"WinRate={eval_win_rate:.3f} on levels={self.eval_levels}"
+                    )
+                    if eval_win_rate > self.best_eval_win_rate:
+                        self.best_eval_win_rate = eval_win_rate
+                        self.best_win_rate = eval_win_rate
+                        cast(Any, self.model).save(self.best_model_path)
+                        self._export_policy_onnx(self.best_model_path)
+                        print(f"  ** New best eval model! Win rate: {eval_win_rate:.3f} **")
+                    next_eval_episode += self.eval_interval_episodes
                     self._write_run_manifest(status="running")
-                    print(f"  ** New best model! Win rate: {avg_winrate:.3f} **")
 
                 # 8. Episode-based periodic checkpoints
                 while self.total_episodes >= next_checkpoint_episode:
@@ -1126,29 +1214,39 @@ def train() -> None:
     parser.add_argument("--replay-interval", type=int, default=250, help="Replay save interval in episodes")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor (default: 0.99)")
     parser.add_argument("--ent-coef", type=float, default=0.015, help="Entropy coefficient (default: 0.015)")
+    parser.add_argument("--ent-coef-final", type=float, default=0.003, help="Final entropy coefficient at end of training (default: 0.003)")
     parser.add_argument("--max-ticks", type=int, default=720, help="Max ticks per episode (default: 720)")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate (default: 1e-4)")
     parser.add_argument("--n-steps", type=int, default=8192, help="Rollout steps per iteration (default: 8192)")
     parser.add_argument("--clip-range", type=float, default=0.15, help="PPO clip range (default: 0.15)")
+    parser.add_argument("--clip-range-final", type=float, default=0.08, help="Final PPO clip range at end of training (default: 0.08)")
+    parser.add_argument("--target-kl", type=float, default=0.02, help="PPO target KL early-stop threshold (default: 0.02)")
+    parser.add_argument("--eval-interval", type=int, default=500, help="Run deterministic eval every N collected episodes (default: 500)")
+    parser.add_argument("--eval-episodes", type=int, default=4, help="Deterministic eval episodes per level (default: 4)")
+    parser.add_argument("--eval-levels", type=str, default="1,2,3,4,5,6,7,8,9", help="Comma-separated levels for deterministic eval")
+    parser.add_argument("--max-update-steps", type=int, default=16384, help="Cap total rollout steps per PPO update (default: 16384)")
     cpu_count = os.cpu_count() or 1
     default_workers = max(1, min(cpu_count - 4, 12))  # leave cores for OS + Python; cap at 12
     parser.add_argument("--num-workers", type=int, default=default_workers, help=f"Number of parallel rollout workers (default: {default_workers}, detected {cpu_count} cores)")
     args = parser.parse_args()
 
-    # Scale n_steps so each worker gets at least 2048 steps and total steps are divisible by worker count.
-    min_steps_per_worker = 2048
+    # Keep updates fresh: enforce worker minimum while capping total steps per PPO update.
+    min_steps_per_worker = 1024
     effective_n_steps = max(args.n_steps, args.num_workers * min_steps_per_worker)
+    effective_n_steps = min(effective_n_steps, max(args.max_update_steps, args.num_workers))
     remainder = effective_n_steps % args.num_workers
     if remainder != 0:
-        effective_n_steps += args.num_workers - remainder
+        effective_n_steps -= remainder
+        effective_n_steps = max(args.num_workers, effective_n_steps)
     if effective_n_steps != args.n_steps:
         print(
             "Auto-scaling n_steps: "
             f"{args.n_steps} -> {effective_n_steps} "
-            f"({args.num_workers} workers, min {min_steps_per_worker}/worker, evenly divisible)"
+            f"({args.num_workers} workers, min {min_steps_per_worker}/worker, max update {args.max_update_steps}, evenly divisible)"
         )
 
     levels = [int(x) for x in args.levels.split(",") if x.strip()] if args.levels else None
+    eval_levels = [int(x) for x in args.eval_levels.split(",") if x.strip()]
 
     trainer = HybridTrainer(
         levels=levels,
@@ -1159,12 +1257,18 @@ def train() -> None:
         gae_lambda=0.95,
         learning_rate=args.lr,
         clip_range=args.clip_range,
+        clip_range_final=args.clip_range_final,
         ent_coef=args.ent_coef,
+        ent_coef_final=args.ent_coef_final,
+        target_kl=args.target_kl,
         max_episode_steps=args.max_ticks,
         output_dir=args.output_dir or None,
         load_model_path=args.load_model or None,
         checkpoint_episode_interval=args.checkpoint_interval,
         replay_episode_interval=args.replay_interval,
+        eval_interval_episodes=args.eval_interval,
+        eval_episodes=args.eval_episodes,
+        eval_levels=eval_levels,
         num_workers=args.num_workers,
     )
 
@@ -1174,7 +1278,11 @@ def train() -> None:
         print(f"Initial curriculum: {trainer.levels} ({trainer.curriculum[0]['name']})")
     else:
         print(f"Explicit scenarios: {trainer.levels} (curriculum disabled)")
-    print(f"Gamma: {args.gamma} | EntCoef: {args.ent_coef} | MaxTicks: {args.max_ticks} | ClipRange: {args.clip_range}")
+    print(
+        f"Gamma: {args.gamma} | EntCoef: {args.ent_coef}->{args.ent_coef_final} | "
+        f"MaxTicks: {args.max_ticks} | ClipRange: {args.clip_range}->{args.clip_range_final} | "
+        f"TargetKL: {args.target_kl}"
+    )
     print(f"Rollout worker: {ROLLOUT_WORKER_PATH}")
     trainer.train(target_episodes=args.target_episodes, max_timesteps=args.timesteps)
 

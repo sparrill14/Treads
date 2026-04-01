@@ -3,8 +3,8 @@
  * Avoids per-tick IPC by running the neural network in-process.
  *
  * Architecture matches SB3's MlpPolicy with net_arch=[256, 256]:
- *   obs → policyNet: Linear(63→256) → Tanh → Linear(256→256) → Tanh → policy_features
- *   obs → valueNet:  Linear(63→256) → Tanh → Linear(256→256) → Tanh → value_features
+ *   obs (current normalized runtime vector) → policyNet: Linear(obs_dim→256) → Tanh → Linear(256→256) → Tanh → policy_features
+ *   obs (current normalized runtime vector) → valueNet:  Linear(obs_dim→256) → Tanh → Linear(256→256) → Tanh → value_features
  *   policy_features → action_net Linear(256→5) → action_mean [move_x, move_y, aim, fire, bomb]
  *   value_features  → value_net  Linear(256→1)  → value
  */
