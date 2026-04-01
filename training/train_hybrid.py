@@ -43,17 +43,25 @@ ROLLOUT_WORKER_PATH = os.path.join(
 
 # ---- Curriculum configuration ----
 DEFAULT_CURRICULUM: List[Dict[str, Any]] = [
-    {"name": "Phase 1 (aim + track)", "scenario_ids": [111, 112, 114], "advance_after_episodes": 1000, "force_after_episodes": 2000, "required_win_rate": 0.50},
-    {"name": "Phase 2 (dodge + fight)", "scenario_ids": [121, 122, 123], "advance_after_episodes": 2500, "force_after_episodes": 5000, "required_win_rate": 0.40},
-    {"name": "Phase 3 (full turret)", "scenario_ids": [131, 132, 133], "advance_after_episodes": 4000, "force_after_episodes": 7000, "required_win_rate": 0.40},
-    {"name": "Phase 4 (obstacles)", "scenario_ids": [141, 142, 143], "advance_after_episodes": 6000, "force_after_episodes": 10000, "required_win_rate": 0.35},
-    {"name": "Phase 5 (multi-enemy + obs)", "scenario_ids": [151, 152, 153], "advance_after_episodes": 8000, "force_after_episodes": 14000, "required_win_rate": 0.35},
-    {"name": "Phase 6 (bouncing shots)", "scenario_ids": [161, 162, 163], "advance_after_episodes": 10000, "force_after_episodes": 16000, "required_win_rate": 0.35},
-    {"name": "Phase 7 (bombers)", "scenario_ids": [171, 172, 173], "advance_after_episodes": 12000, "force_after_episodes": 18000, "required_win_rate": 0.30},
-    {"name": "Phase 8 (full mix)", "scenario_ids": [181, 182, 183], "advance_after_episodes": 14000, "force_after_episodes": 22000, "required_win_rate": 0.30},
-    {"name": "Phase 9 (easy levels)", "scenario_ids": [1, 2, 3, 4], "advance_after_episodes": 18000, "force_after_episodes": 28000, "required_win_rate": 0.30},
-    {"name": "Phase 10 (mid levels)", "scenario_ids": [1, 2, 3, 4, 5, 6], "advance_after_episodes": 24000, "force_after_episodes": 36000, "required_win_rate": 0.25},
-    {"name": "Phase 11 (all levels)", "scenario_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9], "advance_after_episodes": None, "required_win_rate": 0.25},
+    {"name": "Phase 1 (aim + track)", "scenario_ids": [111, 112, 114], "min_phase_episodes": 1200, "force_phase_episodes": 4800, "required_win_rate": 0.50},
+    {"name": "Phase 2 (dodge + fight)", "scenario_ids": [121, 122, 123], "min_phase_episodes": 1600, "force_phase_episodes": 5600, "required_win_rate": 0.45},
+    # Bridge 2->3: gradually remove turret assist and increase baseline pressure.
+    {"name": "Phase 2.5 (bridge to full turret)", "scenario_ids": [123, 131, 132], "min_phase_episodes": 1400, "force_phase_episodes": 5600, "required_win_rate": 0.45},
+    {"name": "Phase 3 (full turret)", "scenario_ids": [131, 132, 133], "min_phase_episodes": 1800, "force_phase_episodes": 6400, "required_win_rate": 0.45},
+    # Bridge 3->4: introduce obstacles while keeping enemy count low.
+    {"name": "Phase 3.5 (bridge to obstacles)", "scenario_ids": [132, 133, 141, 142], "min_phase_episodes": 1400, "force_phase_episodes": 5600, "required_win_rate": 0.45},
+    {"name": "Phase 4 (obstacles)", "scenario_ids": [141, 142, 143], "min_phase_episodes": 2000, "force_phase_episodes": 7600, "required_win_rate": 0.45},
+    # Bridge 4->5: add multi-enemy mixes before full multi-enemy obstacle phases.
+    {"name": "Phase 4.5 (bridge to multi-enemy)", "scenario_ids": [142, 143, 151], "min_phase_episodes": 1600, "force_phase_episodes": 6400, "required_win_rate": 0.45},
+    {"name": "Phase 5 (multi-enemy + obs)", "scenario_ids": [151, 152, 153], "min_phase_episodes": 2200, "force_phase_episodes": 8200, "required_win_rate": 0.45},
+    {"name": "Phase 6 (bouncing shots)", "scenario_ids": [161, 162, 163], "min_phase_episodes": 2200, "force_phase_episodes": 8200, "required_win_rate": 0.45},
+    # Bridge 6->7: introduce bomber behavior before full bomber curriculum.
+    {"name": "Phase 6.5 (bridge to bombers)", "scenario_ids": [163, 171, 172], "min_phase_episodes": 1800, "force_phase_episodes": 7200, "required_win_rate": 0.42},
+    {"name": "Phase 7 (bombers)", "scenario_ids": [171, 172, 173], "min_phase_episodes": 2400, "force_phase_episodes": 9200, "required_win_rate": 0.40},
+    {"name": "Phase 8 (full mix)", "scenario_ids": [181, 182, 183], "min_phase_episodes": 2600, "force_phase_episodes": 9800, "required_win_rate": 0.40},
+    {"name": "Phase 9 (easy levels)", "scenario_ids": [1, 2, 3, 4], "min_phase_episodes": 2600, "force_phase_episodes": 9800, "required_win_rate": 0.38},
+    {"name": "Phase 10 (mid levels)", "scenario_ids": [1, 2, 3, 4, 5, 6], "min_phase_episodes": 3000, "force_phase_episodes": 11000, "required_win_rate": 0.35},
+    {"name": "Phase 11 (all levels)", "scenario_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9], "min_phase_episodes": None, "required_win_rate": 0.35},
 ]
 
 
@@ -84,6 +92,7 @@ class HybridTrainer:
         self.curriculum: List[Dict[str, Any]] = curriculum or DEFAULT_CURRICULUM
         self.current_phase_index = 0
         self.phase_episode_wins: List[int] = []
+        self.phase_episode_rewards: List[float] = []
         self.phase_start_episode = 0
         self.rehearsal_ids: List[int] = []
         if self._explicit_levels:
@@ -398,16 +407,29 @@ class HybridTrainer:
     def _get_curriculum_levels(self) -> List[int]:
         return list(self._get_curriculum_phase()["scenario_ids"])
 
+    def _phase_episode_count(self) -> int:
+        return self.total_episodes - self.phase_start_episode
+
+    def _target_current_share(self) -> float:
+        """Anneal current-phase share from 60% to 80% over early phase episodes."""
+        if self._explicit_levels:
+            return 1.0
+        anneal_episodes = 2000.0
+        progress = min(1.0, max(0.0, self._phase_episode_count() / anneal_episodes))
+        return 0.60 + 0.20 * progress
+
     def _build_mixed_levels(self) -> List[int]:
-        """Build level list with ~80% current phase and ~20% rehearsal from previous phases."""
+        """Build level list with adaptive rehearsal mix (starts ~60/40, anneals to ~80/20)."""
         current = self._get_curriculum_levels()
         if not self.rehearsal_ids:
             return current
         rehearsal_unique = list(set(self.rehearsal_ids))
         n_current = len(current)
         n_rehearsal = len(rehearsal_unique)
-        # Scale current repetitions so current/(current+rehearsal) ≈ 0.80
-        current_reps = max(1, round(4 * n_rehearsal / n_current))
+        target_current = self._target_current_share()
+        target_rehearsal = max(1e-6, 1.0 - target_current)
+        # Scale current repetitions to approximate target mix while keeping scenario diversity.
+        current_reps = max(1, round((target_current / target_rehearsal) * (n_rehearsal / max(n_current, 1))))
         return current * current_reps + rehearsal_unique
 
     def _phase_recent_win_rate(self) -> float:
@@ -416,27 +438,58 @@ class HybridTrainer:
         window = self.phase_episode_wins[-500:]
         return float(np.mean(window))
 
+    def _phase_recent_reward(self, window: int = 200) -> float:
+        if not self.phase_episode_rewards:
+            return 0.0
+        return float(np.mean(self.phase_episode_rewards[-window:]))
+
+    def _phase_reward_trend(self, window: int = 200) -> float:
+        """Positive means recent rewards improved vs the previous window."""
+        if len(self.phase_episode_rewards) < window * 2:
+            return 0.0
+        recent = float(np.mean(self.phase_episode_rewards[-window:]))
+        previous = float(np.mean(self.phase_episode_rewards[-window * 2 : -window]))
+        return recent - previous
+
+    def _phase_is_stable(self) -> bool:
+        """Require non-collapsing reward dynamics before curriculum promotion."""
+        if len(self.phase_episode_rewards) < 300:
+            return True
+        # Disallow large drops in the recent trend.
+        return self._phase_reward_trend(window=150) >= -0.35
+
     def _maybe_advance_curriculum(self) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], float]]:
         if self._explicit_levels or self.current_phase_index >= len(self.curriculum) - 1:
             return None
         current = self._get_curriculum_phase()
-        advance_after = current.get("advance_after_episodes")
-        if advance_after is None or self.total_episodes < int(advance_after):
+        phase_episodes = self._phase_episode_count()
+        min_phase_episodes = current.get("min_phase_episodes")
+        if min_phase_episodes is None:
             return None
+        if phase_episodes < int(min_phase_episodes):
+            return None
+
         win_rate = self._phase_recent_win_rate()
         required_wr = float(current.get("required_win_rate", 0.40))
+        stable = self._phase_is_stable()
 
-        if win_rate < required_wr:
-            # Check forced advance timeout
-            force_after = current.get("force_after_episodes")
-            if force_after is not None and self.total_episodes >= int(force_after):
-                print(
-                    f"  *** FORCED ADVANCE at episode {self.total_episodes} "
-                    f"(win rate {win_rate:.3f} < {required_wr:.2f}, "
-                    f"stuck since episode {int(advance_after)}) ***"
-                )
-            else:
+        meets_regular_criteria = win_rate >= required_wr and stable
+        if not meets_regular_criteria:
+            # Forced advance is only allowed much later and only if reward trend is not degrading.
+            force_phase_episodes = current.get("force_phase_episodes")
+            if force_phase_episodes is None or phase_episodes < int(force_phase_episodes):
                 return None
+
+            reward_trend = self._phase_reward_trend(window=200)
+            minimally_competent = win_rate >= (required_wr * 0.85)
+            if reward_trend < 0.0 or not minimally_competent:
+                return None
+
+            print(
+                f"  *** FORCED ADVANCE at episode {self.total_episodes} "
+                f"(phase_episodes={phase_episodes}, win rate {win_rate:.3f} < {required_wr:.2f}, "
+                f"reward trend={reward_trend:.3f}) ***"
+            )
 
         previous = current
         # Keep only scenario_ids from the most recent 3 completed phases,
@@ -447,6 +500,7 @@ class HybridTrainer:
         self.current_phase_index += 1
         self.levels = self._build_mixed_levels()
         self.phase_episode_wins = []
+        self.phase_episode_rewards = []
         self.phase_start_episode = self.total_episodes
         return previous, self._get_curriculum_phase(), win_rate
 
@@ -757,6 +811,7 @@ class HybridTrainer:
         self.episode_reward_breakdowns.extend(ep_breakdowns)
         if not self._explicit_levels:
             self.phase_episode_wins.extend(ep_wins)
+            self.phase_episode_rewards.extend([float(r) for r in ep_rewards])
 
         for offset, ep_reward in enumerate(ep_rewards):
             absolute_episode = self.total_episodes + offset + 1
@@ -833,6 +888,10 @@ class HybridTrainer:
                 iteration += 1
 
                 curr_phase_name = self._get_curriculum_phase()["name"] if not self._explicit_levels else "Explicit levels"
+
+                # Update adaptive rehearsal mix continuously within a phase.
+                if not self._explicit_levels and self.rehearsal_ids:
+                    self.levels = self._build_mixed_levels()
 
                 # 1. Send current weights to worker
                 t0 = time.perf_counter()
