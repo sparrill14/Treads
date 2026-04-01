@@ -14,8 +14,11 @@ from numpy.typing import NDArray
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+from sb3_compat import ensure_pickle_compat
 from stable_baselines3 import PPO
 from treads_env import OBS_SIZE
+
+ensure_pickle_compat()
 
 
 def export_to_onnx(model_path: str, onnx_path: str) -> None:
@@ -101,7 +104,7 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
     else:
         move_dir = "none"
 
-    # aim_signal is enemy-relative offset: 0 = pointed at nearest enemy, ±1 = ±10° off
+    # aim_signal is enemy-relative offset: 0 = nearest enemy, ±1 = full π offset
     fire = fire_signal > 0.0
     bomb = bomb_signal > 0.5
     print(f"  decoded move={move_dir} aim_signal={aim_signal:.3f} fire={fire} bomb={bomb}")

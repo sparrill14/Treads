@@ -1,13 +1,18 @@
 """Validate that TS MLP inference matches PyTorch for same weights+input."""
-import os, sys, json, subprocess
+import json
+import os
+import subprocess
+import sys
 from typing import Any, cast
+
 import numpy as np
 import torch
+
 sys.path.insert(0, os.path.dirname(__file__))
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
-from treads_env import TreadsEnvDiscrete
+from treads_env import OBS_SIZE, TreadsEnvDiscrete
 
 ROLLOUT_WORKER_PATH = os.path.join(
     os.path.dirname(__file__), "..", ".training-dist", "training", "rollout-worker.js"
@@ -15,7 +20,7 @@ ROLLOUT_WORKER_PATH = os.path.join(
 
 # Create model
 env = cast(Any, Monitor(TreadsEnvDiscrete(level=1, max_episode_steps=720)))
-model = PPO("MlpPolicy", env, policy_kwargs=dict(net_arch=[256, 256]), seed=42)
+model = PPO("MlpPolicy", env, policy_kwargs=dict(net_arch=[256, 256]), seed=42, device="cpu")
 env.close()
 
 # Extract weights
@@ -25,12 +30,12 @@ for key, tensor in model.policy.state_dict().items():
 
 # Create test observations
 np.random.seed(42)
-test_obs = np.random.rand(5, 63).astype(np.float32)
+test_obs = np.random.rand(5, OBS_SIZE).astype(np.float32)
 
 # PyTorch forward pass
 print("=== PyTorch forward pass ===")
 for i, obs in enumerate(test_obs):
-    obs_tensor = torch.tensor(obs).unsqueeze(0)
+    obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
     with torch.no_grad():
         # Get features
         features = model.policy.extract_features(obs_tensor, model.policy.features_extractor)
@@ -75,7 +80,7 @@ if result.get("type") == "test_result":
         print(f"Obs {i}: logits[:5]={logits[:5]}, value={value:.6f}")
 else:
     print(f"Worker returned: {result.get('type', 'unknown')}")
-    print("Need to add test_forward command to rollout worker")
+    print("Expected test_result from rollout worker")
 
 # Cleanup
 worker.stdin.write(json.dumps({"type": "exit"}) + "\n")

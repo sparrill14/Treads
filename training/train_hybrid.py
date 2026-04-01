@@ -28,9 +28,12 @@ from numpy.typing import NDArray
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+from sb3_compat import ensure_pickle_compat
 from stable_baselines3 import PPO
 from stable_baselines3.common.logger import configure
 from treads_env import OBS_SIZE
+
+ensure_pickle_compat()
 
 # Path to compiled rollout worker
 ROLLOUT_WORKER_PATH = os.path.join(
@@ -127,17 +130,28 @@ class HybridTrainer:
         dummy_env = _DummyContinuousActionEnv()
         if load_model_path and os.path.exists(load_model_path):
             print(f"Loading PPO model from: {load_model_path}")
-            # Override key hyperparameters so new training settings take effect
             self.model = cast(Any, PPO.load(  # pyright: ignore[reportUnknownMemberType]
-                load_model_path, env=dummy_env, device="cpu",
-                custom_objects={
-                    "gamma": gamma,
-                    "ent_coef": ent_coef,
-                    "learning_rate": learning_rate,
-                    "clip_range": clip_range,
-                }
+                load_model_path,
+                env=dummy_env,
+                device="cpu",
+                learning_rate=learning_rate,
+                n_steps=n_steps,
+                batch_size=batch_size,
+                n_epochs=n_epochs,
+                gamma=gamma,
+                gae_lambda=gae_lambda,
+                clip_range=clip_range,
+                ent_coef=ent_coef,
             ))
-            print(f"  Overriding gamma={gamma}, ent_coef={ent_coef}, lr={learning_rate}")
+            print(
+                "  Resume settings: "
+                f"n_steps={cast(int, self.model.n_steps)} "
+                f"batch_size={cast(int, self.model.batch_size)} "
+                f"n_epochs={cast(int, self.model.n_epochs)} "
+                f"gamma={cast(float, self.model.gamma)} "
+                f"gae_lambda={cast(float, self.model.gae_lambda)} "
+                f"ent_coef={cast(float, self.model.ent_coef)}"
+            )
         else:
             self.model = PPO(
                 "MlpPolicy",
@@ -154,6 +168,13 @@ class HybridTrainer:
                 device="cpu",
                 policy_kwargs=dict(net_arch=[256, 256]),
                 seed=seed,
+            )
+        if cast(int, self.model.n_steps) != self.n_steps or cast(int, self.model.rollout_buffer.buffer_size) != self.n_steps:
+            raise RuntimeError(
+                "Model rollout settings do not match trainer settings: "
+                f"trainer n_steps={self.n_steps}, "
+                f"model n_steps={cast(int, self.model.n_steps)}, "
+                f"buffer_size={cast(int, self.model.rollout_buffer.buffer_size)}"
             )
         dummy_env.close()
 
@@ -240,10 +261,9 @@ class HybridTrainer:
                 return None
 
         previous = current
-        # Limit rehearsal to last 3 phases to prevent scenario pool explosion
-        self.rehearsal_ids.extend(current["scenario_ids"])
-        # Keep only scenario_ids from the most recent 3 completed phases
-        completed_phases = self.curriculum[:self.current_phase_index]
+        # Keep only scenario_ids from the most recent 3 completed phases,
+        # including the phase we are transitioning out of right now.
+        completed_phases = self.curriculum[: self.current_phase_index + 1]
         recent_phases = completed_phases[-3:] if len(completed_phases) > 3 else completed_phases
         self.rehearsal_ids = [sid for phase in recent_phases for sid in phase["scenario_ids"]]
         self.current_phase_index += 1

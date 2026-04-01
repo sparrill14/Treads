@@ -148,6 +148,23 @@ async function runEpisode(level: number, seed: number, maxTicks: number, saveRep
 		aiTankIds: [playerTankId],
 	});
 
+	const buildObservation = (simulation: Simulation): TankObservation | null => {
+		const state = simulation.getState();
+		const currentPlayerTank = state.tanks.find((t) => t.id === playerTankId);
+		if (!currentPlayerTank) {
+			return null;
+		}
+		return {
+			tick: state.tick,
+			self: JSON.parse(JSON.stringify(currentPlayerTank)),
+			enemies: state.tanks.filter((t) => t.team !== currentPlayerTank.team).map((t) => JSON.parse(JSON.stringify(t))),
+			projectiles: state.projectiles.map((p) => JSON.parse(JSON.stringify(p))),
+			bombs: state.bombs.map((b) => JSON.parse(JSON.stringify(b))),
+			obstacles: state.obstacles.map((o) => JSON.parse(JSON.stringify(o))),
+			arena: { ...state.arena },
+		};
+	};
+
 	let tick = 0;
 	while (tick < maxTicks) {
 		const state = simulation.getState();
@@ -156,15 +173,10 @@ async function runEpisode(level: number, seed: number, maxTicks: number, saveRep
 		const playerTank = state.tanks.find((t) => t.id === playerTankId);
 		if (!playerTank || playerTank.destroyed) break;
 
-		const obs: TankObservation = {
-			tick: state.tick,
-			self: JSON.parse(JSON.stringify(playerTank)),
-			enemies: state.tanks.filter((t) => t.team !== playerTank.team).map((t) => JSON.parse(JSON.stringify(t))),
-			projectiles: state.projectiles.map((p) => JSON.parse(JSON.stringify(p))),
-			bombs: state.bombs.map((b) => JSON.parse(JSON.stringify(b))),
-			obstacles: state.obstacles.map((o) => JSON.parse(JSON.stringify(o))),
-			arena: { ...state.arena },
-		};
+		const obs = buildObservation(simulation);
+		if (!obs) {
+			break;
+		}
 
 		writeLine({ type: 'observation', tick: state.tick, observation: obs });
 
@@ -192,6 +204,7 @@ async function runEpisode(level: number, seed: number, maxTicks: number, saveRep
 	const playerTank = finalState.tanks.find((t) => t.id === playerTankId);
 	const enemiesDestroyed = finalState.tanks.filter((t) => t.team === 'enemy' && t.destroyed).length;
 	const totalEnemies = finalState.tanks.filter((t) => t.team === 'enemy').length;
+	const finalObservation = buildObservation(simulation);
 
 	writeLine({
 		type: 'result',
@@ -203,6 +216,8 @@ async function runEpisode(level: number, seed: number, maxTicks: number, saveRep
 		win: finalState.status === 'player_win',
 		loss: finalState.status === 'enemy_win',
 		draw: finalState.status === 'running',
+		timeout: finalState.status === 'running',
+		observation: finalObservation,
 	});
 
 	if (saveReplay) {

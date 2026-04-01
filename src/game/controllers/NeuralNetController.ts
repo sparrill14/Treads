@@ -114,7 +114,9 @@ export class NeuralNetController implements TankController {
 	private session: ort.InferenceSession | null = null;
 	private ready = false;
 	private inferenceInFlight = false;
-	private queuedInput: Float32Array | null = null;
+	private queuedRequest: { input: Float32Array; obs: TankObservation; generation: number } | null = null;
+	private pendingAction: TankAction | null = null;
+	private generation = 0;
 
 	constructor(private modelUrl: string) {}
 
@@ -130,11 +132,12 @@ export class NeuralNetController implements TankController {
 	}
 
 	public reset(_initial: MatchInit): void {
-		// no state to reset
+		this.generation += 1;
+		this.pendingAction = null;
+		this.queuedRequest = null;
 	}
 
 	public act(obs: TankObservation): TankAction {
-		this.lastObs = obs;
 		if (!this.ready || !this.session) {
 			// Fallback: no-op until model is loaded
 			return { move: 'none', aimAngle: obs.self.aimAngle, fire: false, plantBomb: false };
@@ -149,23 +152,20 @@ export class NeuralNetController implements TankController {
 		if (this.pendingAction) {
 			const action = this.pendingAction;
 			this.pendingAction = null;
-			this.runInferenceAsync(input);
+			void this.runInferenceAsync(input, obs, this.generation);
 			return action;
 		}
 
 		// First tick: return a default action and start inference
-		this.runInferenceAsync(input);
+		void this.runInferenceAsync(input, obs, this.generation);
 		return { move: 'none', aimAngle: obs.self.aimAngle, fire: false, plantBomb: false };
 	}
 
-	private pendingAction: TankAction | null = null;
-	private lastObs: TankObservation | null = null;
-
-	private async runInferenceAsync(input: Float32Array): Promise<void> {
+	private async runInferenceAsync(input: Float32Array, obs: TankObservation, generation: number): Promise<void> {
 		if (!this.session) return;
 		if (this.inferenceInFlight) {
 			// Keep only the most recent input to avoid unbounded queue growth.
-			this.queuedInput = input;
+			this.queuedRequest = { input, obs, generation };
 			return;
 		}
 
@@ -176,24 +176,26 @@ export class NeuralNetController implements TankController {
 			const results = await this.session.run(feeds);
 			const output = results['action_mean'] ?? results['logits'];
 			const data = output.data as Float32Array;
-			this.pendingAction = this.decodeAction(Array.from(data));
+			if (generation === this.generation) {
+				this.pendingAction = this.decodeAction(Array.from(data), obs);
+			}
 		} catch (err) {
 			console.error('ONNX inference error:', err);
 		} finally {
 			this.inferenceInFlight = false;
-			if (this.queuedInput) {
-				const nextInput = this.queuedInput;
-				this.queuedInput = null;
-				void this.runInferenceAsync(nextInput);
+			if (this.queuedRequest) {
+				const nextRequest = this.queuedRequest;
+				this.queuedRequest = null;
+				void this.runInferenceAsync(nextRequest.input, nextRequest.obs, nextRequest.generation);
 			}
 		}
 	}
 
-	private decodeAction(logits: number[]): TankAction {
+	private decodeAction(logits: number[], obs: TankObservation): TankAction {
 		if (logits.length < ACTION_DIM) {
 			return {
 				move: 'none',
-				aimAngle: this.lastObs?.self.aimAngle ?? 0,
+				aimAngle: obs.self.aimAngle,
 				fire: false,
 				plantBomb: false,
 			};
@@ -222,28 +224,23 @@ export class NeuralNetController implements TankController {
 		else moveIntent = 'none';
 
 		// Enemy-relative aim encoding: aim_signal=0 points at nearest enemy.
-		const obs = this.lastObs;
+		const s = obs.self;
+		const sx = s.x + s.size / 2;
+		const sy = s.y + s.size / 2;
+		const aliveEnemies = obs.enemies.filter((e) => !e.destroyed);
 		let aimAngle: number;
-		if (obs) {
-			const s = obs.self;
-			const sx = s.x + s.size / 2;
-			const sy = s.y + s.size / 2;
-			const aliveEnemies = obs.enemies.filter((e) => !e.destroyed);
-			if (aliveEnemies.length > 0) {
-				const nearest = aliveEnemies.reduce((best, e) => {
-					const dx = e.x + e.size / 2 - sx;
-					const dy = e.y + e.size / 2 - sy;
-					const bdx = best.x + best.size / 2 - sx;
-					const bdy = best.y + best.size / 2 - sy;
-					return dx * dx + dy * dy < bdx * bdx + bdy * bdy ? e : best;
-				});
-				const angleToEnemy = Math.atan2(nearest.y + nearest.size / 2 - sy, nearest.x + nearest.size / 2 - sx);
-				aimAngle = angleToEnemy + aimSignal * AIM_OFFSET_LIMIT;
-			} else {
-				aimAngle = s.aimAngle;
-			}
+		if (aliveEnemies.length > 0) {
+			const nearest = aliveEnemies.reduce((best, e) => {
+				const dx = e.x + e.size / 2 - sx;
+				const dy = e.y + e.size / 2 - sy;
+				const bdx = best.x + best.size / 2 - sx;
+				const bdy = best.y + best.size / 2 - sy;
+				return dx * dx + dy * dy < bdx * bdx + bdy * bdy ? e : best;
+			});
+			const angleToEnemy = Math.atan2(nearest.y + nearest.size / 2 - sy, nearest.x + nearest.size / 2 - sx);
+			aimAngle = angleToEnemy + aimSignal * AIM_OFFSET_LIMIT;
 		} else {
-			aimAngle = 0;
+			aimAngle = s.aimAngle;
 		}
 
 		return {
