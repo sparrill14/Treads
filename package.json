@@ -54,6 +54,8 @@
     "webpack-merge": "^6.0.1"
   },
   "dependencies": {
+    "@grpc/grpc-js": "^1.14.3",
+    "@grpc/proto-loader": "^0.8.0",
     "@types/bootstrap": "^5.2.10",
     "@types/d3": "^7.4.3",
     "@types/eslint": "^9.6.1",

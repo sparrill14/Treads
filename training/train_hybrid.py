@@ -1270,73 +1270,83 @@ class HybridTrainer:
                             cast(Any, self.model).save(self.best_model_path)
                             self._export_policy_onnx(self.best_model_path)
                             print(f"  ** New best eval model! Win rate: {eval_win_rate:.3f} **")
+                    except Exception as eval_exc:
+                        print(f"  WARNING: _evaluate_policy failed ({eval_exc}) - continuing with phase gate checks.")
 
-                        if self.stability_mode and not self._explicit_levels:
-                            phase_levels = self._get_curriculum_levels()
+                    if self.stability_mode and not self._explicit_levels:
+                        phase_levels = self._get_curriculum_levels()
+                        phase_eval_source = "deterministic"
+                        try:
                             phase_eval = self._evaluate_levels(
                                 phase_levels,
                                 self.eval_episodes,
                                 self.eval_seed_start + 100000 + self.current_phase_index * 1000,
                             )
-                            self.last_phase_eval_win_rate = phase_eval
-                            current = self._get_curriculum_phase()
-                            required_wr = float(current.get("required_win_rate", 0.40))
-                            promote_threshold = required_wr
-                            collapse_threshold = max(0.10, required_wr * 0.60)
-
-                            if phase_eval >= promote_threshold:
-                                self.phase_eval_pass_streak += 1
-                                self.phase_eval_fail_streak = 0
-                            elif phase_eval <= collapse_threshold:
-                                self.phase_eval_fail_streak += 1
-                                self.phase_eval_pass_streak = 0
-                            else:
-                                self.phase_eval_pass_streak = 0
-                                self.phase_eval_fail_streak = 0
-
+                        except Exception as phase_eval_exc:
+                            phase_eval_source = "training-window-fallback"
+                            phase_eval = self._phase_recent_win_rate()
                             print(
-                                f"  PhaseEval | Phase={current['name']} | WR={phase_eval:.3f} | "
-                                f"required={required_wr:.3f} | pass_streak={self.phase_eval_pass_streak} | "
-                                f"fail_streak={self.phase_eval_fail_streak}"
+                                f"  WARNING: phase deterministic eval failed ({phase_eval_exc}) - "
+                                f"using phase_recent_winrate_500 fallback={phase_eval:.3f}"
                             )
 
-                            phase_episodes = self._phase_episode_count()
-                            min_phase_episodes = int(current.get("min_phase_episodes") or 0)
-                            can_promote = (
-                                self.current_phase_index < len(self.curriculum) - 1
-                                and phase_episodes >= min_phase_episodes
-                                and self.phase_eval_pass_streak >= self.phase_pass_evals_required
-                                and self._phase_is_stable()
-                            )
+                        self.last_phase_eval_win_rate = phase_eval
+                        current = self._get_curriculum_phase()
+                        required_wr = float(current.get("required_win_rate", 0.40))
+                        promote_threshold = required_wr if phase_eval_source == "deterministic" else max(required_wr, 0.65)
+                        collapse_threshold = max(0.10, required_wr * 0.60)
 
-                            if can_promote:
-                                self._save_stable_checkpoint(self.current_phase_index, phase_eval)
-                                transition = self._advance_curriculum_from_eval()
-                                if transition is not None:
-                                    previous_phase, next_phase = transition
-                                    print(
-                                        f"\n*** Eval-gated phase transition at episode {self.total_episodes}: "
-                                        f"{previous_phase['name']} -> {next_phase['name']} | "
-                                        f"phase_eval={phase_eval:.3f} ***\n"
-                                    )
+                        if phase_eval >= promote_threshold:
+                            self.phase_eval_pass_streak += 1
+                            self.phase_eval_fail_streak = 0
+                        elif phase_eval <= collapse_threshold:
+                            self.phase_eval_fail_streak += 1
+                            self.phase_eval_pass_streak = 0
+                        else:
+                            self.phase_eval_pass_streak = 0
+                            self.phase_eval_fail_streak = 0
 
-                            can_rollback = (
-                                self.current_phase_index > 0
-                                and phase_episodes >= 700
-                                and self.phase_eval_fail_streak >= self.phase_fail_evals_before_rollback
-                            )
-                            if can_rollback:
-                                rollback = self._rollback_curriculum_from_eval()
-                                restored = self._restore_stable_checkpoint()
-                                if rollback is not None:
-                                    previous_phase, rollback_phase = rollback
-                                    print(
-                                        f"\n*** Eval-gated rollback at episode {self.total_episodes}: "
-                                        f"{previous_phase['name']} -> {rollback_phase['name']} | "
-                                        f"phase_eval={phase_eval:.3f} | restored={restored} ***\n"
-                                    )
-                    except Exception as eval_exc:
-                        print(f"  WARNING: _evaluate_policy failed ({eval_exc}) - skipping this eval.")
+                        print(
+                            f"  PhaseEval[{phase_eval_source}] | Phase={current['name']} | WR={phase_eval:.3f} | "
+                            f"required={required_wr:.3f} | pass_streak={self.phase_eval_pass_streak} | "
+                            f"fail_streak={self.phase_eval_fail_streak}"
+                        )
+
+                        phase_episodes = self._phase_episode_count()
+                        min_phase_episodes = int(current.get("min_phase_episodes") or 0)
+                        can_promote = (
+                            self.current_phase_index < len(self.curriculum) - 1
+                            and phase_episodes >= min_phase_episodes
+                            and self.phase_eval_pass_streak >= self.phase_pass_evals_required
+                            and self._phase_is_stable()
+                        )
+
+                        if can_promote:
+                            self._save_stable_checkpoint(self.current_phase_index, phase_eval)
+                            transition = self._advance_curriculum_from_eval()
+                            if transition is not None:
+                                previous_phase, next_phase = transition
+                                print(
+                                    f"\n*** Eval-gated phase transition at episode {self.total_episodes}: "
+                                    f"{previous_phase['name']} -> {next_phase['name']} | "
+                                    f"phase_eval={phase_eval:.3f} ({phase_eval_source}) ***\n"
+                                )
+
+                        can_rollback = (
+                            self.current_phase_index > 0
+                            and phase_episodes >= 700
+                            and self.phase_eval_fail_streak >= self.phase_fail_evals_before_rollback
+                        )
+                        if can_rollback:
+                            rollback = self._rollback_curriculum_from_eval()
+                            restored = self._restore_stable_checkpoint()
+                            if rollback is not None:
+                                previous_phase, rollback_phase = rollback
+                                print(
+                                    f"\n*** Eval-gated rollback at episode {self.total_episodes}: "
+                                    f"{previous_phase['name']} -> {rollback_phase['name']} | "
+                                    f"phase_eval={phase_eval:.3f} ({phase_eval_source}) | restored={restored} ***\n"
+                                )
                     next_eval_episode += self.eval_interval_episodes
                     self._write_run_manifest(status="running")
 

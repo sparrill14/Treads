@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package treads;
+
+service TreadsEnvService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Reset(ResetRequest) returns (ResetResponse);
+  rpc Step(StepRequest) returns (StepResponse);
+  rpc Close(CloseRequest) returns (CloseResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+message ResetRequest {
+  string session_id = 1;
+  int32 level = 2;
+  int32 seed = 3;
+  int32 max_ticks = 4;
+  bool save_replay = 5;
+}
+
+message ResetResponse {
+  string session_id = 1;
+  string init_json = 2;
+  string observation_json = 3;
+}
+
+message StepRequest {
+  string session_id = 1;
+  string move = 2;
+  double aim_angle = 3;
+  bool fire = 4;
+  bool plant_bomb = 5;
+}
+
+message StepResponse {
+  bool done = 1;
+  string observation_json = 2;
+  string result_json = 3;
+}
+
+message CloseRequest {
+  string session_id = 1;
+}
+
+message CloseResponse {
+  bool closed = 1;
+}

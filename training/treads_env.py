@@ -6,10 +6,13 @@ Wraps the Node.js CLI runner as an OpenAI Gymnasium environment.
 import os
 import json
 import math
+import socket
 import subprocess
-import threading
+import sys
+import time
 from typing import Any, Dict, List, Optional, Tuple, cast
 
+import grpc
 import numpy as np
 from numpy.typing import NDArray
 import gymnasium as gym
@@ -23,10 +26,54 @@ from runtime_codec import (
     set_tick_norm_ticks,
 )
 
-# Path to the compiled CLI runner
-CLI_RUNNER_PATH = os.path.join(
-    os.path.dirname(__file__), "..", ".training-dist", "training", "cli-runner.js"
+GRPC_SERVER_PATH = os.path.join(
+    os.path.dirname(__file__), "..", ".training-dist", "training", "grpc-env-server.js"
 )
+PROTO_PATH = os.path.join(os.path.dirname(__file__), "proto", "treads_env.proto")
+GENERATED_DIR = os.path.join(os.path.dirname(__file__), "_generated")
+
+
+def _ensure_proto_stubs() -> Tuple[Any, Any]:
+    os.makedirs(GENERATED_DIR, exist_ok=True)
+    if GENERATED_DIR not in sys.path:
+        sys.path.insert(0, GENERATED_DIR)
+
+    pb2_path = os.path.join(GENERATED_DIR, "treads_env_pb2.py")
+    pb2_grpc_path = os.path.join(GENERATED_DIR, "treads_env_pb2_grpc.py")
+    if not (os.path.exists(pb2_path) and os.path.exists(pb2_grpc_path)):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "grpc_tools.protoc",
+                f"-I{os.path.dirname(PROTO_PATH)}",
+                f"--python_out={GENERATED_DIR}",
+                f"--grpc_python_out={GENERATED_DIR}",
+                PROTO_PATH,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Failed to generate protobuf stubs. "
+                f"stdout={result.stdout[-1000:]} stderr={result.stderr[-1000:]}"
+            )
+
+    import treads_env_pb2  # type: ignore[import-not-found]
+    import treads_env_pb2_grpc  # type: ignore[import-not-found]
+
+    return treads_env_pb2, treads_env_pb2_grpc
+
+
+TREADS_ENV_PB2, TREADS_ENV_PB2_GRPC = _ensure_proto_stubs()
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 STEP_PENALTY = -0.001
 HIT_REWARD = 0.3
@@ -52,7 +99,10 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         self.max_episode_steps = max_episode_steps
         set_tick_norm_ticks(max_episode_steps)
         self.process: Optional[subprocess.Popen[str]] = None
-        self._buffer = ""
+        self._grpc_port: Optional[int] = None
+        self._grpc_channel: Optional[grpc.Channel] = None
+        self._grpc_stub: Optional[Any] = None
+        self._session_id: str = ""
         self._init_data = None
         self._last_obs_raw = None
         self._prev_enemy_alive_count = 0
@@ -63,7 +113,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         self._approach_target_id = ""
         self._step_count = 0
         self._save_replay = False
-        self._persistent = True  # use persistent mode by default
+        self._rpc_timeout_sec = 30.0
 
         # Action space: MultiDiscrete([9, 2, 2]) + Box for aim angle
         # 9 moves, fire (0/1), plantBomb (0/1), aim angle [0, 2pi]
@@ -83,68 +133,64 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
             low=0.0, high=1.0, shape=(OBS_SIZE,), dtype=np.float32
         )
 
-    def _start_process(self, seed: int) -> None:
-        """Spawn the Node.js CLI runner subprocess (persistent or legacy)."""
-        if self._persistent and self.process is not None:
-            # Persistent mode: process already running, just send reset command
+    def _start_process(self) -> None:
+        """Start the gRPC env server process and initialize a client channel."""
+        if self.process is not None and self._grpc_stub is not None and self._grpc_channel is not None:
             return
 
-        if not os.path.exists(CLI_RUNNER_PATH):
+        if not os.path.exists(GRPC_SERVER_PATH):
             raise FileNotFoundError(
-                "Compiled CLI runner not found. Run `npm run build:training` first. "
-                f"Expected: {CLI_RUNNER_PATH}"
+                "gRPC env server not found. "
+                f"Expected: {GRPC_SERVER_PATH}"
             )
 
         if self.process is not None:
             self._kill_process()
 
-        cmd = [
-            "node",
-            CLI_RUNNER_PATH,
-        ]
-        if self._persistent:
-            cmd.append("--persistent")
-        else:
-            cmd.extend([
-                "--level", str(self.level),
-                "--seed", str(seed),
-                "--max-ticks", str(self.max_episode_steps),
-            ])
-            if self._save_replay:
-                cmd.append("--save-replay")
-
+        port = _find_free_port()
+        self._grpc_port = port
+        cmd = ["node", GRPC_SERVER_PATH, "--port", str(port)]
         self.process = subprocess.Popen(
             cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             text=True,
-            bufsize=1,
         )
-        self._buffer = ""
 
-        if self._persistent:
-            # Wait for {"type":"ready"} from the persistent process
-            ready_msg = self._read_message()
-            assert ready_msg["type"] == "ready", f"Expected ready, got {ready_msg['type']}"
+        endpoint = f"127.0.0.1:{port}"
+        self._grpc_channel = grpc.insecure_channel(endpoint)
+        self._grpc_stub = TREADS_ENV_PB2_GRPC.TreadsEnvServiceStub(self._grpc_channel)
+
+        # Wait for server readiness.
+        deadline = time.time() + 10.0
+        last_error: Optional[Exception] = None
+        while time.time() < deadline:
+            try:
+                assert self._grpc_stub is not None
+                self._grpc_stub.Health(TREADS_ENV_PB2.HealthRequest(), timeout=1.0)
+                return
+            except Exception as exc:  # pragma: no cover - transient process spin-up
+                last_error = exc
+                time.sleep(0.1)
+
+        self._kill_process()
+        raise RuntimeError(f"Failed to start gRPC env server: {last_error}")
 
     def _kill_process(self) -> None:
-        """Kill the subprocess, after giving it a moment to finish cleanup (e.g. writing replay files)."""
+        if self._grpc_channel is not None:
+            try:
+                self._grpc_channel.close()
+            except Exception:
+                pass
+        self._grpc_channel = None
+        self._grpc_stub = None
+        self._grpc_port = None
+        self._session_id = ""
+
         if self.process is not None:
             try:
-                # In persistent mode, send exit command first
-                if self._persistent:
-                    try:
-                        if self.process.stdin is not None:
-                            self.process.stdin.write(json.dumps({"type": "exit"}) + "\n")
-                            self.process.stdin.flush()
-                    except Exception as exc:
-                        print(f"WARNING: failed to send exit command to cli-runner: {exc}")
-                if self.process.stdin is not None:
-                    self.process.stdin.close()
-            except Exception as exc:
-                print(f"WARNING: failed while closing cli-runner stdin: {exc}")
-            try:
+                self.process.terminate()
                 self.process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 self.process.kill()
@@ -153,52 +199,45 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
                 try:
                     self.process.kill()
                     self.process.wait(timeout=5)
-                except Exception as exc:
-                    print(f"WARNING: failed to terminate cli-runner process cleanly: {exc}")
+                except Exception:
+                    pass
             self.process = None
 
-    def _read_message(self) -> Dict[str, Any]:
-        """Read a single JSON line from the subprocess stdout."""
-        assert self.process is not None and self.process.stdout is not None
-        stdout = self.process.stdout
-        holder: Dict[str, str] = {"line": ""}
+    def _rpc_reset(self, game_seed: int) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        assert self._grpc_stub is not None
+        request = TREADS_ENV_PB2.ResetRequest(
+            session_id=self._session_id,
+            level=int(self.level),
+            seed=int(game_seed),
+            max_ticks=int(self.max_episode_steps),
+            save_replay=bool(self._save_replay),
+        )
+        response = self._grpc_stub.Reset(request, timeout=self._rpc_timeout_sec)
+        self._session_id = str(response.session_id)
+        init_data = cast(Dict[str, Any], json.loads(str(response.init_json)))
+        obs_data = cast(Dict[str, Any], json.loads(str(response.observation_json)))
+        return init_data, obs_data
 
-        def _reader() -> None:
-            holder["line"] = stdout.readline()
-
-        t = threading.Thread(target=_reader, daemon=True)
-        t.start()
-        t.join(timeout=60.0)
-        if t.is_alive():
-            # Pipe deadlock — kill the subprocess so the reader thread unblocks eventually.
-            self._kill_process()
-            raise TimeoutError("TreadsEnv._read_message timed out after 60s (pipe deadlock suspected)")
-
-        line = holder["line"]
-        if not line:
-            stderr_tail = ""
-            try:
-                # Best-effort: the process may have exited already.
-                if self.process.stderr is not None:  # type: ignore[union-attr]
-                    stderr_tail = self.process.stderr.read().strip()  # type: ignore[union-attr]
-            except Exception:
-                pass
-            raise RuntimeError(
-                "CLI runner process terminated unexpectedly. "
-                f"stderr: {stderr_tail[-2000:] if stderr_tail else '<empty>'}"
-            )
-
-        msg = cast(Dict[str, Any], json.loads(line.strip()))
-        if msg.get("type") == "error":
-            raise RuntimeError(f"CLI runner reported error: {msg}")
-        return msg
-
-    def _send_action(self, action_dict: Dict[str, Any]) -> None:
-        """Send an action as JSON to the subprocess stdin."""
-        assert self.process is not None and self.process.stdin is not None
-        line = json.dumps(action_dict) + "\n"
-        self.process.stdin.write(line)
-        self.process.stdin.flush()
+    def _rpc_step(self, action: Dict[str, Any]) -> Dict[str, Any]:
+        assert self._grpc_stub is not None
+        request = TREADS_ENV_PB2.StepRequest(
+            session_id=self._session_id,
+            move=str(action.get("move", "none")),
+            aim_angle=float(action.get("aimAngle", 0.0)),
+            fire=bool(action.get("fire", False)),
+            plant_bomb=bool(action.get("plantBomb", False)),
+        )
+        response = self._grpc_stub.Step(request, timeout=self._rpc_timeout_sec)
+        payload: Dict[str, Any] = {
+            "done": bool(response.done),
+            "observation": None,
+            "result": None,
+        }
+        if response.observation_json:
+            payload["observation"] = cast(Dict[str, Any], json.loads(str(response.observation_json)))
+        if response.result_json and response.result_json != "null":
+            payload["result"] = cast(Dict[str, Any], json.loads(str(response.result_json)))
+        return payload
 
     def _normalize_obs(self, obs_raw: Dict[str, Any]) -> NDArray[np.float32]:
         return normalize_observation(obs_raw)
@@ -310,32 +349,14 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
             game_seed = self.seed_counter
             self.seed_counter += 1
 
-        self._start_process(game_seed)
+        self._start_process()
         self._step_count = 0
 
-        if self._persistent:
-            # Send reset command to the persistent process
-            reset_cmd = cast(
-                Dict[str, Any],
-                {
-                "type": "reset",
-                "level": self.level,
-                "seed": game_seed,
-                "maxTicks": self.max_episode_steps,
-                "saveReplay": self._save_replay,
-                },
-            )
-            self._send_action(reset_cmd)
-
-        # Read init message
-        self._init_data = self._read_message()
-        assert self._init_data["type"] == "init", f"Expected init, got {self._init_data['type']}"
-
-        # Read first observation
-        obs_msg = self._read_message()
-        assert obs_msg["type"] == "observation", f"Expected observation, got {obs_msg['type']}"
-
-        self._last_obs_raw = obs_msg["observation"]
+        try:
+            self._init_data, self._last_obs_raw = self._rpc_reset(game_seed)
+        except grpc.RpcError as exc:
+            self._kill_process()
+            raise TimeoutError(f"TreadsEnv.reset RPC failed: {exc}") from exc
 
         self._reset_reward_trackers(self._last_obs_raw)
 
@@ -364,27 +385,30 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
             },
         )
 
-        self._send_action(action_dict)
         self._step_count += 1
 
-        # Read next message
-        msg = self._read_message()
+        try:
+            msg = self._rpc_step(action_dict)
+        except grpc.RpcError as exc:
+            self._kill_process()
+            raise TimeoutError(f"TreadsEnv.step RPC failed: {exc}") from exc
 
-        if msg["type"] == "result":
+        if msg["done"]:
+            result = cast(Optional[Dict[str, Any]], msg.get("result"))
             final_obs = cast(Optional[Dict[str, Any]], msg.get("observation"))
             if final_obs is not None:
                 self._last_obs_raw = final_obs
             assert self._last_obs_raw is not None
-            reward = self._compute_reward(self._last_obs_raw, done_msg=msg)
+            reward = self._compute_reward(self._last_obs_raw, done_msg=result)
             obs = self._normalize_obs(self._last_obs_raw)
-            terminated = bool(msg.get("win") or msg.get("loss"))
-            truncated = bool(msg.get("draw") or msg.get("timeout"))
-            if not self._persistent:
-                self._kill_process()
-            return obs, reward, terminated, truncated, {"result": msg}
+            terminated = bool(result and (result.get("win") or result.get("loss")))
+            truncated = bool(result and (result.get("draw") or result.get("timeout")))
+            return obs, reward, terminated, truncated, {"result": result}
 
-        assert msg["type"] == "observation", f"Expected observation, got {msg['type']}"
-        self._last_obs_raw = msg["observation"]
+        observation = cast(Optional[Dict[str, Any]], msg.get("observation"))
+        if observation is None:
+            raise RuntimeError("TreadsEnv.step RPC returned no observation for non-terminal step")
+        self._last_obs_raw = observation
 
         assert self._last_obs_raw is not None
         reward = self._compute_reward(self._last_obs_raw)
