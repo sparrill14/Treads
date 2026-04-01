@@ -14,5 +14,12 @@ module.exports = merge(common, {
         static: path.join(__dirname, "dist"),
         compress: true,
         port: 3003,
+        proxy: [
+            {
+                context: ['/api'],
+                target: 'http://localhost:3007',
+                changeOrigin: true,
+            },
+        ],
     }
 })

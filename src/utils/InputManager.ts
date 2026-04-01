@@ -47,13 +47,14 @@ export class InputManager {
 		};
 
 		this.onMouseMove = (event: MouseEvent) => {
+			if (!this.canvas) return;
 			const rect = this.canvas.getBoundingClientRect();
 			this.mouseX = event.clientX - rect.left;
 			this.mouseY = event.clientY - rect.top;
 		};
 
 		this.onClick = (event: MouseEvent) => {
-			if (this.canvas.contains(event.target as Node)) {
+			if (this.canvas && this.canvas.contains(event.target as Node)) {
 				this.shootRequested = true;
 			}
 		};

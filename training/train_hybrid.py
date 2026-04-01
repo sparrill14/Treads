@@ -19,6 +19,7 @@ import json
 import time
 import subprocess
 import threading
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, TextIO, Tuple, cast
 import numpy as np
 import torch
@@ -29,6 +30,7 @@ from numpy.typing import NDArray
 sys.path.insert(0, os.path.dirname(__file__))
 
 from sb3_compat import ensure_pickle_compat
+from export_onnx import export_to_onnx
 from stable_baselines3 import PPO
 from stable_baselines3.common.logger import configure
 from treads_env import OBS_SIZE
@@ -95,6 +97,7 @@ class HybridTrainer:
         self.max_episode_steps = max_episode_steps
         self.seed = seed
         self.seed_counter = seed
+        self.load_model_path = load_model_path or None
         self.checkpoint_episode_interval = checkpoint_episode_interval
         self.replay_episode_interval = replay_episode_interval
         self.num_workers = max(1, num_workers)
@@ -103,6 +106,15 @@ class HybridTrainer:
         os.makedirs(self.output_dir, exist_ok=True)
         self.replay_dir = os.path.join(self.output_dir, "replays")
         os.makedirs(self.replay_dir, exist_ok=True)
+        self.training_log_path = os.path.join(self.output_dir, "training_log.csv")
+        self.run_manifest_path = os.path.join(self.output_dir, "run_manifest.json")
+        self.live_metrics_path = os.path.join(self.output_dir, "live_metrics.json")
+        self.metrics_history_path = os.path.join(self.output_dir, "metrics_history.jsonl")
+        self.best_model_path = os.path.join(self.output_dir, "treads_ppo_best")
+        self.final_model_path = os.path.join(self.output_dir, "treads_ppo_final")
+        self.current_onnx_path = os.path.join(self.output_dir, "treads_policy.onnx")
+        self.run_started_at = datetime.now(timezone.utc)
+        self.run_finished_at: Optional[datetime] = None
 
         class _DummyContinuousActionEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
             metadata = {"render_modes": []}
@@ -195,6 +207,140 @@ class HybridTrainer:
         self.episode_reward_breakdowns: List[Dict[str, Any]] = []
         self.best_win_rate = 0.0
         self.start_time = time.time()
+        self._write_run_manifest(status="initializing")
+        with open(self.metrics_history_path, "w", encoding="utf-8"):
+            pass
+
+    def _now_iso(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _json_dump(self, path: str, payload: Dict[str, Any]) -> None:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+
+    def _count_replays(self) -> int:
+        if not os.path.isdir(self.replay_dir):
+            return 0
+        return sum(1 for name in os.listdir(self.replay_dir) if name.endswith(".json"))
+
+    def _write_run_manifest(self, status: str, error: str = "") -> None:
+        learning_rate = cast(float, self.model.learning_rate(1.0) if callable(self.model.learning_rate) else self.model.learning_rate)
+        clip_range = cast(float, self.model.clip_range(1.0) if callable(self.model.clip_range) else self.model.clip_range)
+        payload: Dict[str, Any] = {
+            "runId": os.path.basename(os.path.abspath(self.output_dir)),
+            "outputDir": os.path.abspath(self.output_dir),
+            "status": status,
+            "startedAt": self.run_started_at.isoformat(),
+            "finishedAt": self.run_finished_at.isoformat() if self.run_finished_at is not None else None,
+            "updatedAt": self._now_iso(),
+            "loadModelPath": self.load_model_path,
+            "seed": self.seed,
+            "numWorkers": self.num_workers,
+            "bestWinRate": self.best_win_rate,
+            "totals": {
+                "timesteps": self.total_timesteps,
+                "episodes": self.total_episodes,
+            },
+            "curriculum": {
+                "enabled": not self._explicit_levels,
+                "currentPhaseIndex": self.current_phase_index if not self._explicit_levels else None,
+                "currentPhaseName": self._get_curriculum_phase()["name"] if not self._explicit_levels else "Explicit levels",
+                "activeScenarios": self.levels,
+                "rehearsalScenarios": self.rehearsal_ids,
+            },
+            "hyperparameters": {
+                "nSteps": self.n_steps,
+                "batchSize": cast(int, self.model.batch_size),
+                "nEpochs": cast(int, self.model.n_epochs),
+                "gamma": self.gamma,
+                "gaeLambda": self.gae_lambda,
+                "learningRate": learning_rate,
+                "clipRange": clip_range,
+                "entCoef": cast(float, self.model.ent_coef),
+                "maxEpisodeSteps": self.max_episode_steps,
+                "checkpointEpisodeInterval": self.checkpoint_episode_interval,
+                "replayEpisodeInterval": self.replay_episode_interval,
+            },
+            "paths": {
+                "trainingLog": os.path.abspath(self.training_log_path),
+                "liveMetrics": os.path.abspath(self.live_metrics_path),
+                "metricsHistory": os.path.abspath(self.metrics_history_path),
+                "replays": os.path.abspath(self.replay_dir),
+                "bestModel": os.path.abspath(self.best_model_path + ".zip"),
+                "finalModel": os.path.abspath(self.final_model_path + ".zip"),
+                "onnxModel": os.path.abspath(self.current_onnx_path),
+            },
+            "artifacts": {
+                "replayCount": self._count_replays(),
+                "onnxAvailable": os.path.exists(self.current_onnx_path),
+            },
+            "error": error or None,
+        }
+        self._json_dump(self.run_manifest_path, payload)
+
+    def _build_iteration_snapshot(
+        self,
+        iteration: int,
+        avg_reward: float,
+        avg_winrate: float,
+        avg_tick: float,
+        avg_hit: float,
+        avg_hurt: float,
+        avg_kill: float,
+        avg_death: float,
+        avg_terminal_win: float,
+        avg_terminal_loss: float,
+        avg_timeout: float,
+        avg_approach: float,
+        avg_dodge: float,
+        steps_per_sec: float,
+        elapsed: float,
+    ) -> Dict[str, Any]:
+        current_phase_name = self._get_curriculum_phase()["name"] if not self._explicit_levels else "Explicit levels"
+        return {
+            "timestamp": self._now_iso(),
+            "iteration": iteration,
+            "timesteps": self.total_timesteps,
+            "episodes": self.total_episodes,
+            "curriculumPhase": current_phase_name,
+            "currentPhaseIndex": self.current_phase_index if not self._explicit_levels else None,
+            "activeScenarios": list(self.levels),
+            "rehearsalScenarios": list(self.rehearsal_ids),
+            "phaseRecentWinrate500": self._phase_recent_win_rate() if not self._explicit_levels else None,
+            "avgReward50": avg_reward,
+            "avgWinrate50": avg_winrate,
+            "avgTick50": avg_tick,
+            "avgHit50": avg_hit,
+            "avgHurt50": avg_hurt,
+            "avgKill50": avg_kill,
+            "avgDeath50": avg_death,
+            "avgTerminalWin50": avg_terminal_win,
+            "avgTerminalLoss50": avg_terminal_loss,
+            "avgTimeout50": avg_timeout,
+            "avgApproach50": avg_approach,
+            "avgDodge50": avg_dodge,
+            "bestWinRate": self.best_win_rate,
+            "stepsPerSec": steps_per_sec,
+            "elapsedSec": elapsed,
+            "replayCount": self._count_replays(),
+            "onnxAvailable": os.path.exists(self.current_onnx_path),
+        }
+
+    def _write_iteration_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        self._json_dump(self.live_metrics_path, snapshot)
+        with open(self.metrics_history_path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(snapshot))
+            handle.write("\n")
+
+    def _export_policy_onnx(self, model_base_path: str) -> None:
+        model_path = model_base_path if model_base_path.endswith(".zip") else f"{model_base_path}.zip"
+        if not os.path.exists(model_path):
+            return
+        try:
+            export_to_onnx(model_path, self.current_onnx_path)
+        except Exception as exc:
+            print(f"  WARNING: failed to export ONNX model: {exc}")
 
     def _start_workers(self) -> None:
         """Start the Node.js rollout worker processes."""
@@ -510,10 +656,7 @@ class HybridTrainer:
 
     def train(self, target_episodes: int = 10_000, max_timesteps: int = 20_000_000) -> None:
         """Main training loop."""
-        log_path = os.path.join(self.output_dir, "training_log.csv")
-        best_model_path = os.path.join(self.output_dir, "treads_ppo_best")
-
-        csv_file: TextIO = open(log_path, "w", newline="")
+        csv_file: TextIO = open(self.training_log_path, "w", newline="")
         csv_writer = csv.writer(csv_file)
         csv_writer.writerow([
             "iteration", "timesteps", "episodes", "curriculum_phase", "active_scenarios", "phase_recent_winrate_500",
@@ -521,9 +664,12 @@ class HybridTrainer:
             "avg_tick_50", "avg_hit_50", "avg_hurt_50", "avg_kill_50", "avg_death_50", "avg_terminal_win_50", "avg_terminal_loss_50", "avg_timeout_50", "avg_approach_50", "avg_dodge_50",
             "steps_per_sec", "elapsed_sec"
         ])
+        csv_file.flush()
+        self._write_run_manifest(status="running")
 
         iteration = 0
         next_checkpoint_episode = self.checkpoint_episode_interval
+        interrupt_reason = ""
         try:
             while self.total_episodes < target_episodes and self.total_timesteps < max_timesteps:
                 iteration += 1
@@ -621,6 +767,25 @@ class HybridTrainer:
                     f"{elapsed:.1f}",
                 ])
                 csv_file.flush()
+                snapshot = self._build_iteration_snapshot(
+                    iteration,
+                    avg_reward,
+                    avg_winrate,
+                    avg_tick,
+                    avg_hit,
+                    avg_hurt,
+                    avg_kill,
+                    avg_death,
+                    avg_terminal_win,
+                    avg_terminal_loss,
+                    avg_timeout,
+                    avg_approach,
+                    avg_dodge,
+                    steps_per_sec,
+                    elapsed,
+                )
+                self._write_iteration_snapshot(snapshot)
+                self._write_run_manifest(status="running")
 
                 phase_transition = self._maybe_advance_curriculum()
                 if phase_transition is not None:
@@ -639,7 +804,9 @@ class HybridTrainer:
                 # 7. Save best model
                 if len(self.episode_rewards) >= 20 and avg_winrate > self.best_win_rate:
                     self.best_win_rate = avg_winrate
-                    cast(Any, self.model).save(best_model_path)
+                    cast(Any, self.model).save(self.best_model_path)
+                    self._export_policy_onnx(self.best_model_path)
+                    self._write_run_manifest(status="running")
                     print(f"  ** New best model! Win rate: {avg_winrate:.3f} **")
 
                 # 8. Episode-based periodic checkpoints
@@ -651,8 +818,10 @@ class HybridTrainer:
                     next_checkpoint_episode += self.checkpoint_episode_interval
 
         except KeyboardInterrupt:
+            interrupt_reason = "Training interrupted by user."
             print("\nTraining interrupted by user.")
         finally:
+            self.run_finished_at = datetime.now(timezone.utc)
             if self.episode_reward_breakdowns:
                 all_terminal_pct, all_shaping_pct, _ = self._reward_source_percentages(self.episode_reward_breakdowns)
                 late_breakdowns = self.episode_reward_breakdowns[-500:]
@@ -680,9 +849,29 @@ class HybridTrainer:
 
             csv_file.close()
             # Save final model
-            final_path = os.path.join(self.output_dir, "treads_ppo_final")
-            cast(Any, self.model).save(final_path)
-            print(f"Final model saved to {final_path}")
+            cast(Any, self.model).save(self.final_model_path)
+            self._export_policy_onnx(self.final_model_path)
+            final_breakdowns = self.episode_reward_breakdowns[-50:] if self.episode_reward_breakdowns else []
+            final_snapshot = self._build_iteration_snapshot(
+                iteration,
+                float(np.mean(self.episode_rewards[-50:])) if self.episode_rewards else 0.0,
+                float(np.mean(self.episode_wins[-50:])) if self.episode_wins else 0.0,
+                float(np.mean([float(b.get("tick", 0.0)) for b in final_breakdowns])) if final_breakdowns else 0.0,
+                float(np.mean([float(b.get("hit", 0.0)) for b in final_breakdowns])) if final_breakdowns else 0.0,
+                float(np.mean([float(b.get("hurt", 0.0)) for b in final_breakdowns])) if final_breakdowns else 0.0,
+                float(np.mean([float(b.get("kill", 0.0)) for b in final_breakdowns])) if final_breakdowns else 0.0,
+                float(np.mean([float(b.get("death", 0.0)) for b in final_breakdowns])) if final_breakdowns else 0.0,
+                float(np.mean([float(b.get("terminalWin", 0.0)) for b in final_breakdowns])) if final_breakdowns else 0.0,
+                float(np.mean([float(b.get("terminalLoss", 0.0)) for b in final_breakdowns])) if final_breakdowns else 0.0,
+                float(np.mean([float(b.get("timeout", 0.0)) for b in final_breakdowns])) if final_breakdowns else 0.0,
+                float(np.mean([float(b.get("approach", 0.0)) for b in final_breakdowns])) if final_breakdowns else 0.0,
+                float(np.mean([float(b.get("dodge", 0.0)) for b in final_breakdowns])) if final_breakdowns else 0.0,
+                self.total_timesteps / max(time.time() - self.start_time, 1),
+                time.time() - self.start_time,
+            )
+            self._write_iteration_snapshot(final_snapshot)
+            self._write_run_manifest(status="completed" if not interrupt_reason else "interrupted", error=interrupt_reason)
+            print(f"Final model saved to {self.final_model_path}")
             self.close()
 
     def close(self) -> None:
