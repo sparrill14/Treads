@@ -87,7 +87,7 @@ function parseArgs(): { level: number; seed: number; maxTicks: number; saveRepla
 	const args = process.argv.slice(2);
 	let level = 1;
 	let seed = 42;
-	let maxTicks = 3600;
+	let maxTicks = 720;
 	let saveReplay = false;
 	let persistent = false;
 
@@ -188,7 +188,8 @@ async function runEpisode(level: number, seed: number, maxTicks: number, saveRep
 		try {
 			actionData = JSON.parse(actionLine);
 		} catch {
-			actionData = { move: 'none', aimAngle: 0, fire: false, plantBomb: false };
+			writeLine({ type: 'error', message: 'Invalid action JSON received from trainer' });
+			throw new Error('Invalid action JSON received from trainer');
 		}
 
 		playerController.pendingAction = {
@@ -241,12 +242,13 @@ async function runPersistent(): Promise<void> {
 		try {
 			cmd = JSON.parse(line);
 		} catch {
+			writeLine({ type: 'error', message: 'Invalid JSON command received by cli-runner' });
 			continue;
 		}
 		if (cmd.type === 'reset') {
 			const level = Math.max(1, Math.min(cmd.level ?? 1, LEVEL_CONFIGS.length));
 			const seed = cmd.seed ?? 42;
-			const maxTicks = cmd.maxTicks ?? 3600;
+			const maxTicks = cmd.maxTicks ?? 720;
 			const saveReplay = cmd.saveReplay ?? false;
 			await runEpisode(level, seed, maxTicks, saveReplay);
 		} else if (cmd.type === 'exit') {

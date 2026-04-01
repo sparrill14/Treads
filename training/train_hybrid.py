@@ -22,7 +22,6 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, TextIO, Tuple, cast
 import numpy as np
-import torch
 import gymnasium as gym
 from gymnasium import spaces
 from numpy.typing import NDArray
@@ -73,7 +72,7 @@ class HybridTrainer:
         learning_rate: float = 1e-4,
         clip_range: float = 0.15,
         ent_coef: float = 0.015,
-        max_episode_steps: int = 1080,
+        max_episode_steps: int = 720,
         output_dir: Optional[str] = None,
         load_model_path: Optional[str] = None,
         checkpoint_episode_interval: int = 500,
@@ -113,6 +112,9 @@ class HybridTrainer:
         self.best_model_path = os.path.join(self.output_dir, "treads_ppo_best")
         self.final_model_path = os.path.join(self.output_dir, "treads_ppo_final")
         self.current_onnx_path = os.path.join(self.output_dir, "treads_policy.onnx")
+        self._weights_cache_dir = os.path.join(self.output_dir, ".weights_cache")
+        os.makedirs(self._weights_cache_dir, exist_ok=True)
+        self._weights_file_path = os.path.join(self._weights_cache_dir, "policy_state_dict.json")
         self.run_started_at = datetime.now(timezone.utc)
         self.run_finished_at: Optional[datetime] = None
 
@@ -344,6 +346,11 @@ class HybridTrainer:
 
     def _start_workers(self) -> None:
         """Start the Node.js rollout worker processes."""
+        if not os.path.exists(ROLLOUT_WORKER_PATH):
+            raise FileNotFoundError(
+                "Rollout worker entrypoint not found. Run `npm run build:training` first. "
+                f"Expected: {ROLLOUT_WORKER_PATH}"
+            )
         self.workers = []
         for _ in range(self.num_workers):
             proc = subprocess.Popen(
@@ -359,6 +366,31 @@ class HybridTrainer:
         for i, w in enumerate(self.workers):
             ready = self._read_msg_from(w)
             assert ready["type"] == "ready", f"Worker {i}: expected ready, got {ready}"
+
+    def _restart_worker(self, index: int) -> None:
+        """Restart a single rollout worker after timeout/crash."""
+        old = self.workers[index]
+        try:
+            self._send_msg_to(old, {"type": "exit"})
+            old.wait(timeout=2)
+        except Exception:
+            try:
+                old.kill()
+            except Exception:
+                pass
+
+        proc = subprocess.Popen(
+            ["node", ROLLOUT_WORKER_PATH],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        self.workers[index] = proc
+        ready = self._read_msg_from(proc)
+        if ready.get("type") != "ready":
+            raise RuntimeError(f"Worker {index}: restart failed, expected ready but got {ready}")
 
     def _get_curriculum_phase(self) -> Dict[str, Any]:
         return self.curriculum[self.current_phase_index]
@@ -426,16 +458,31 @@ class HybridTrainer:
         proc.stdin.flush()
 
     @staticmethod
-    def _read_msg_from(proc: subprocess.Popen[str]) -> Dict[str, Any]:
+    def _read_msg_from(proc: subprocess.Popen[str], timeout_sec: float = 180.0) -> Dict[str, Any]:
         """Read JSON message from a specific worker."""
         assert proc.stdout is not None
-        line = proc.stdout.readline()
+        stdout = proc.stdout
+        holder: Dict[str, str] = {"line": ""}
+
+        def _reader() -> None:
+            holder["line"] = stdout.readline()
+
+        thread = threading.Thread(target=_reader, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout_sec)
+        if thread.is_alive():
+            raise TimeoutError(f"Timed out waiting for worker message after {timeout_sec:.1f}s")
+
+        line = holder["line"]
         if not line:
             stderr = ""
             if proc.stderr is not None:
                 stderr = proc.stderr.read()
             raise RuntimeError(f"Worker process died. stderr: {stderr}")
-        return cast(Dict[str, Any], json.loads(line.strip()))
+        msg = cast(Dict[str, Any], json.loads(line.strip()))
+        if msg.get("type") == "error":
+            raise RuntimeError(f"Worker reported error: {msg}")
+        return msg
 
     def _send_msg(self, msg: Dict[str, Any]) -> None:
         """Send JSON message to the first worker (legacy helper)."""
@@ -455,7 +502,11 @@ class HybridTrainer:
     def _send_weights(self) -> None:
         """Send current model weights to all rollout workers."""
         weights = self._extract_weights()
-        msg: Dict[str, Any] = {"type": "set_weights", "state_dict": weights}
+        tmp_file = self._weights_file_path + f".{os.getpid()}.tmp"
+        with open(tmp_file, "w", encoding="utf-8") as handle:
+            json.dump(weights, handle, separators=(",", ":"))
+        os.replace(tmp_file, self._weights_file_path)
+        msg: Dict[str, Any] = {"type": "set_weights_from_file", "path": self._weights_file_path}
         for w in self.workers:
             self._send_msg_to(w, msg)
         for i, w in enumerate(self.workers):
@@ -465,58 +516,85 @@ class HybridTrainer:
     def _collect_rollout(self, target_episodes: int) -> Dict[str, Any]:
         """Request rollout collection from workers (parallel when num_workers > 1)."""
         num_w = len(self.workers)
-        # Divide steps across workers; give remainder to last worker
+        # Divide steps as evenly as possible.
         base_steps = self.n_steps // num_w
         remainder = self.n_steps % num_w
+        worker_steps = [base_steps + (1 if i < remainder else 0) for i in range(num_w)]
 
-        # Send collect commands to all workers (non-blocking writes)
-        for i, w in enumerate(self.workers):
-            worker_steps = base_steps + (1 if i < remainder else 0)
-            worker_seed = self.seed_counter + i * base_steps
-            self._send_msg_to(w, {
-                "type": "collect",
-                "n_steps": worker_steps,
-                "levels": self.levels,
-                "maxTicks": self.max_episode_steps,
-                "seedStart": worker_seed,
-                "replayEveryEpisodes": self.replay_episode_interval,
-                "replayDir": self.replay_dir,
-                "episodeOffset": self.total_episodes,
-                "targetEpisodes": target_episodes,
-                "shapingScale": max(0.3, 1.0 - self._phase_recent_win_rate() * 2.0),
-            })
-        self.seed_counter += self.n_steps
+        # Keep deterministic seeds while avoiding overlap.
+        worker_seeds: List[int] = []
+        running_seed = self.seed_counter
+        for steps in worker_steps:
+            worker_seeds.append(running_seed)
+            running_seed += steps
 
-        # Read results from all workers in parallel using threads
-        results: List[Optional[Dict[str, Any]]] = [None] * num_w
-        errors: List[Optional[Exception]] = [None] * num_w
+        for attempt in range(2):
+            # Send collect commands to all workers (non-blocking writes)
+            for i, w in enumerate(self.workers):
+                self._send_msg_to(w, {
+                    "type": "collect",
+                    "n_steps": worker_steps[i],
+                    "levels": self.levels,
+                    "maxTicks": self.max_episode_steps,
+                    "seedStart": worker_seeds[i],
+                    "replayEveryEpisodes": self.replay_episode_interval,
+                    "replayDir": self.replay_dir,
+                    "episodeOffset": self.total_episodes,
+                    "workerId": i,
+                    "targetEpisodes": target_episodes,
+                    "shapingScale": max(0.3, 1.0 - self._phase_recent_win_rate() * 2.0),
+                })
 
-        def read_worker(idx: int) -> None:
-            try:
-                results[idx] = self._read_msg_from(self.workers[idx])
-            except Exception as e:
-                errors[idx] = e
+            # Read results from all workers in parallel using threads
+            results: List[Optional[Dict[str, Any]]] = [None] * num_w
+            errors: List[Optional[Exception]] = [None] * num_w
 
-        if num_w == 1:
-            read_worker(0)
-        else:
-            threads = [threading.Thread(target=read_worker, args=(i,)) for i in range(num_w)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
+            def read_worker(idx: int) -> None:
+                try:
+                    results[idx] = self._read_msg_from(self.workers[idx])
+                except Exception as exc:
+                    errors[idx] = exc
 
-        for i, err in enumerate(errors):
-            if err is not None:
-                raise RuntimeError(f"Worker {i} failed: {err}")
+            if num_w == 1:
+                read_worker(0)
+            else:
+                threads = [threading.Thread(target=read_worker, args=(i,)) for i in range(num_w)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
 
-        # Merge rollout data from all workers
-        merged = results[0]
-        assert merged is not None and merged["type"] == "rollout", f"Worker 0: expected rollout, got {merged}"
-        if num_w > 1:
-            for i in range(1, num_w):
-                r = results[i]
-                assert r is not None and r["type"] == "rollout", f"Worker {i}: expected rollout, got {r}"
+            failed = [i for i, err in enumerate(errors) if err is not None]
+            if failed:
+                if attempt == 0:
+                    print(f"  Worker failure detected ({failed}), restarting and retrying collect once...")
+                    for idx in failed:
+                        self._restart_worker(idx)
+                    self._send_weights()
+                    continue
+                detail = ", ".join(f"worker {i}: {errors[i]}" for i in failed)
+                raise RuntimeError(f"Rollout collection failed after retry: {detail}")
+
+            # Merge rollout data and preserve per-worker chunks for correct GAE.
+            merged: Dict[str, Any] = {
+                "type": "rollout",
+                "n_steps": 0,
+                "obs": [],
+                "actions": [],
+                "rewards": [],
+                "episode_starts": [],
+                "values": [],
+                "log_probs": [],
+                "episode_rewards": [],
+                "episode_lengths": [],
+                "episode_wins": [],
+                "episode_levels": [],
+                "episode_reward_breakdowns": [],
+                "worker_rollouts": [],
+            }
+
+            for i, r in enumerate(results):
+                assert r is not None and r.get("type") == "rollout", f"Worker {i}: expected rollout, got {r}"
                 merged["obs"].extend(r["obs"])
                 merged["actions"].extend(r["actions"])
                 merged["rewards"].extend(r["rewards"])
@@ -528,12 +606,54 @@ class HybridTrainer:
                 merged["episode_wins"].extend(r.get("episode_wins", []))
                 merged["episode_levels"].extend(r.get("episode_levels", []))
                 merged["episode_reward_breakdowns"].extend(r.get("episode_reward_breakdowns", []))
-                # Use last worker's bootstrap values
-                merged["last_obs"] = r["last_obs"]
-                merged["last_done"] = r["last_done"]
-                merged["last_value"] = r["last_value"]
-            merged["n_steps"] = self.n_steps
-        return merged
+                merged["worker_rollouts"].append({
+                    "n_steps": r["n_steps"],
+                    "obs": r["obs"],
+                    "actions": r["actions"],
+                    "rewards": r["rewards"],
+                    "episode_starts": r["episode_starts"],
+                    "values": r["values"],
+                    "log_probs": r["log_probs"],
+                    "last_done": r["last_done"],
+                    "last_value": r["last_value"],
+                })
+
+            merged["n_steps"] = len(cast(List[Any], merged["obs"]))
+            if merged["n_steps"] != self.n_steps:
+                raise RuntimeError(
+                    f"Collected rollout size mismatch: expected {self.n_steps}, got {merged['n_steps']}"
+                )
+            self.seed_counter = running_seed
+            return merged
+
+        raise RuntimeError("Unreachable collect retry state")
+
+    def _compute_chunk_gae(
+        self,
+        rewards: NDArray[np.float32],
+        episode_starts: NDArray[np.float32],
+        values: NDArray[np.float32],
+        last_value: float,
+        last_done: bool,
+    ) -> Tuple[NDArray[np.float32], NDArray[np.float32]]:
+        """Compute GAE/returns for an independent rollout chunk."""
+        advantages = np.zeros_like(rewards, dtype=np.float32)
+        last_gae_lam = 0.0
+        n = rewards.shape[0]
+        for step in range(n - 1, -1, -1):
+            if step == n - 1:
+                next_non_terminal = 1.0 - float(last_done)
+                next_values = float(last_value)
+            else:
+                next_non_terminal = 1.0 - float(episode_starts[step + 1])
+                next_values = float(values[step + 1])
+
+            delta = float(rewards[step]) + self.gamma * next_values * next_non_terminal - float(values[step])
+            last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
+            advantages[step] = last_gae_lam
+
+        returns = advantages + values
+        return advantages, returns
 
     @staticmethod
     def _reward_source_percentages(breakdowns: List[Dict[str, Any]]) -> Tuple[float, float, float]:
@@ -561,28 +681,65 @@ class HybridTrainer:
         buf = self.model.rollout_buffer
         buf.reset()
 
-        obs_arr = np.array(rollout["obs"], dtype=np.float32)
-        actions_arr = np.array(rollout["actions"], dtype=np.float32)
-        rewards_arr = np.array(rollout["rewards"], dtype=np.float32)
-        episode_starts_arr = np.array(rollout["episode_starts"], dtype=np.float32)
-        values_arr = np.array(rollout["values"], dtype=np.float32)
-        log_probs_arr = np.array(rollout["log_probs"], dtype=np.float32)
+        worker_rollouts = cast(List[Dict[str, Any]], rollout.get("worker_rollouts", []))
+        if not worker_rollouts:
+            worker_rollouts = [rollout]
 
-        n_steps = len(obs_arr)
-        for i in range(n_steps):
-            buf.add(
-                obs=obs_arr[i:i+1],  # (1, obs_dim) for n_envs=1
-                action=actions_arr[i:i+1],
-                reward=np.array([rewards_arr[i]]),
-                episode_start=np.array([episode_starts_arr[i]]),
-                value=torch.tensor([values_arr[i]]),
-                log_prob=torch.tensor([log_probs_arr[i]]),
+        obs_parts: List[NDArray[np.float32]] = []
+        actions_parts: List[NDArray[np.float32]] = []
+        rewards_parts: List[NDArray[np.float32]] = []
+        starts_parts: List[NDArray[np.float32]] = []
+        values_parts: List[NDArray[np.float32]] = []
+        log_probs_parts: List[NDArray[np.float32]] = []
+        adv_parts: List[NDArray[np.float32]] = []
+        returns_parts: List[NDArray[np.float32]] = []
+
+        for chunk in worker_rollouts:
+            rewards_arr = np.array(chunk["rewards"], dtype=np.float32)
+            starts_arr = np.array(chunk["episode_starts"], dtype=np.float32)
+            values_arr = np.array(chunk["values"], dtype=np.float32)
+            advantages_arr, returns_arr = self._compute_chunk_gae(
+                rewards=rewards_arr,
+                episode_starts=starts_arr,
+                values=values_arr,
+                last_value=float(chunk["last_value"]),
+                last_done=bool(chunk["last_done"]),
             )
 
-        # Compute returns and advantages (GAE)
-        last_values = torch.tensor([rollout["last_value"]])
-        last_dones = np.array([1.0 if rollout["last_done"] else 0.0])
-        buf.compute_returns_and_advantage(last_values=last_values, dones=last_dones)
+            obs_parts.append(np.array(chunk["obs"], dtype=np.float32))
+            actions_parts.append(np.array(chunk["actions"], dtype=np.float32))
+            rewards_parts.append(rewards_arr)
+            starts_parts.append(starts_arr)
+            values_parts.append(values_arr)
+            log_probs_parts.append(np.array(chunk["log_probs"], dtype=np.float32))
+            adv_parts.append(advantages_arr)
+            returns_parts.append(returns_arr)
+
+        obs_arr = np.concatenate(obs_parts, axis=0)
+        actions_arr = np.concatenate(actions_parts, axis=0)
+        rewards_arr = np.concatenate(rewards_parts, axis=0)
+        episode_starts_arr = np.concatenate(starts_parts, axis=0)
+        values_arr = np.concatenate(values_parts, axis=0)
+        log_probs_arr = np.concatenate(log_probs_parts, axis=0)
+        advantages_arr = np.concatenate(adv_parts, axis=0)
+        returns_arr = np.concatenate(returns_parts, axis=0)
+
+        if obs_arr.shape[0] != buf.buffer_size:
+            raise RuntimeError(
+                f"RolloutBuffer size mismatch: expected {buf.buffer_size}, got {obs_arr.shape[0]}"
+            )
+
+        # Populate buffer directly; training uses these tensors via RolloutBuffer.get().
+        buf.observations[:, 0, :] = obs_arr
+        buf.actions[:, 0, :] = actions_arr
+        buf.rewards[:, 0] = rewards_arr
+        buf.episode_starts[:, 0] = episode_starts_arr
+        buf.values[:, 0] = values_arr
+        buf.log_probs[:, 0] = log_probs_arr
+        buf.advantages[:, 0] = advantages_arr
+        buf.returns[:, 0] = returns_arr
+        buf.pos = buf.buffer_size
+        buf.full = True
 
     def _log_episodes(self, rollout: Dict[str, Any], iteration: int) -> Tuple[float, float]:
         """Log episode statistics from the rollout."""
@@ -731,16 +888,16 @@ class HybridTrainer:
 
                 if self.episode_reward_breakdowns:
                     recent_breakdowns = self.episode_reward_breakdowns[-50:]
-                    avg_tick = np.mean([float(b.get("tick", 0.0)) for b in recent_breakdowns])
-                    avg_hit = np.mean([float(b.get("hit", 0.0)) for b in recent_breakdowns])
-                    avg_hurt = np.mean([float(b.get("hurt", 0.0)) for b in recent_breakdowns])
-                    avg_kill = np.mean([float(b.get("kill", 0.0)) for b in recent_breakdowns])
-                    avg_death = np.mean([float(b.get("death", 0.0)) for b in recent_breakdowns])
-                    avg_terminal_win = np.mean([float(b.get("terminalWin", 0.0)) for b in recent_breakdowns])
-                    avg_terminal_loss = np.mean([float(b.get("terminalLoss", 0.0)) for b in recent_breakdowns])
-                    avg_timeout = np.mean([float(b.get("timeout", 0.0)) for b in recent_breakdowns])
-                    avg_approach = np.mean([float(b.get("approach", 0.0)) for b in recent_breakdowns])
-                    avg_dodge = np.mean([float(b.get("dodge", 0.0)) for b in recent_breakdowns])
+                    avg_tick = float(np.mean([float(b.get("tick", 0.0)) for b in recent_breakdowns]))
+                    avg_hit = float(np.mean([float(b.get("hit", 0.0)) for b in recent_breakdowns]))
+                    avg_hurt = float(np.mean([float(b.get("hurt", 0.0)) for b in recent_breakdowns]))
+                    avg_kill = float(np.mean([float(b.get("kill", 0.0)) for b in recent_breakdowns]))
+                    avg_death = float(np.mean([float(b.get("death", 0.0)) for b in recent_breakdowns]))
+                    avg_terminal_win = float(np.mean([float(b.get("terminalWin", 0.0)) for b in recent_breakdowns]))
+                    avg_terminal_loss = float(np.mean([float(b.get("terminalLoss", 0.0)) for b in recent_breakdowns]))
+                    avg_timeout = float(np.mean([float(b.get("timeout", 0.0)) for b in recent_breakdowns]))
+                    avg_approach = float(np.mean([float(b.get("approach", 0.0)) for b in recent_breakdowns]))
+                    avg_dodge = float(np.mean([float(b.get("dodge", 0.0)) for b in recent_breakdowns]))
                 else:
                     avg_tick = avg_hit = avg_hurt = avg_kill = avg_death = avg_terminal_win = avg_terminal_loss = avg_timeout = avg_approach = avg_dodge = 0.0
 
@@ -918,11 +1075,18 @@ def train() -> None:
     parser.add_argument("--num-workers", type=int, default=default_workers, help=f"Number of parallel rollout workers (default: {default_workers}, detected {cpu_count} cores)")
     args = parser.parse_args()
 
-    # Scale n_steps so each worker gets at least 2048 steps (enough for 1-2 full episodes)
+    # Scale n_steps so each worker gets at least 2048 steps and total steps are divisible by worker count.
     min_steps_per_worker = 2048
     effective_n_steps = max(args.n_steps, args.num_workers * min_steps_per_worker)
+    remainder = effective_n_steps % args.num_workers
+    if remainder != 0:
+        effective_n_steps += args.num_workers - remainder
     if effective_n_steps != args.n_steps:
-        print(f"Auto-scaling n_steps: {args.n_steps} -> {effective_n_steps} ({args.num_workers} workers x {min_steps_per_worker} min steps/worker)")
+        print(
+            "Auto-scaling n_steps: "
+            f"{args.n_steps} -> {effective_n_steps} "
+            f"({args.num_workers} workers, min {min_steps_per_worker}/worker, evenly divisible)"
+        )
 
     levels = [int(x) for x in args.levels.split(",") if x.strip()] if args.levels else None
 

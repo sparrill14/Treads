@@ -175,7 +175,7 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
     result[idx + 4] = has_los
     result[idx + 5] = 1.0 if bool(self_data.get("wasLastMoveBlocked", False)) else 0.0
     result[idx + 6] = min(float(self_data.get("invulnerabilityTicksRemaining", 0.0)) / 8.0, 1.0)
-    result[idx + 7] = min(float(obs_raw.get("tick", 0.0)) / 1080.0, 1.0)
+    result[idx + 7] = min(float(obs_raw.get("tick", 0.0)) / 720.0, 1.0)
     result[idx + 8] = float(self_data["health"]) / max(float(self_data["maxHealth"]), 1.0)
 
     if living_enemies:

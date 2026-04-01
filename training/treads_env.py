@@ -43,7 +43,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
 
     metadata = {"render_modes": []}
 
-    def __init__(self, level: int = 1, seed_start: int = 0, max_episode_steps: int = 1800) -> None:
+    def __init__(self, level: int = 1, seed_start: int = 0, max_episode_steps: int = 720) -> None:
         super().__init__()
         self.level = level
         self.seed_counter = seed_start
@@ -85,6 +85,12 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         if self._persistent and self.process is not None:
             # Persistent mode: process already running, just send reset command
             return
+
+        if not os.path.exists(CLI_RUNNER_PATH):
+            raise FileNotFoundError(
+                "Compiled CLI runner not found. Run `npm run build:training` first. "
+                f"Expected: {CLI_RUNNER_PATH}"
+            )
 
         if self.process is not None:
             self._kill_process()
@@ -129,12 +135,12 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
                         if self.process.stdin is not None:
                             self.process.stdin.write(json.dumps({"type": "exit"}) + "\n")
                             self.process.stdin.flush()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        print(f"WARNING: failed to send exit command to cli-runner: {exc}")
                 if self.process.stdin is not None:
                     self.process.stdin.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"WARNING: failed while closing cli-runner stdin: {exc}")
             try:
                 self.process.wait(timeout=2)
             except subprocess.TimeoutExpired:
@@ -144,8 +150,8 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
                 try:
                     self.process.kill()
                     self.process.wait(timeout=5)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print(f"WARNING: failed to terminate cli-runner process cleanly: {exc}")
             self.process = None
 
     def _read_message(self) -> Dict[str, Any]:
@@ -153,8 +159,21 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         assert self.process is not None and self.process.stdout is not None
         line = self.process.stdout.readline()
         if not line:
-            raise RuntimeError("CLI runner process terminated unexpectedly")
-        return json.loads(line.strip())  # type: ignore[no-any-return]
+            stderr_tail = ""
+            if self.process.stderr is not None:
+                try:
+                    stderr_tail = self.process.stderr.read().strip()
+                except Exception:
+                    stderr_tail = ""
+            raise RuntimeError(
+                "CLI runner process terminated unexpectedly. "
+                f"stderr: {stderr_tail[-2000:] if stderr_tail else '<empty>'}"
+            )
+
+        msg = cast(Dict[str, Any], json.loads(line.strip()))
+        if msg.get("type") == "error":
+            raise RuntimeError(f"CLI runner reported error: {msg}")
+        return msg
 
     def _send_action(self, action_dict: Dict[str, Any]) -> None:
         """Send an action as JSON to the subprocess stdin."""
@@ -375,7 +394,7 @@ class TreadsEnvDiscrete(gym.Env[NDArray[np.float32], Any]):
 
     metadata = {"render_modes": []}
 
-    def __init__(self, level: int = 1, seed_start: int = 0, max_episode_steps: int = 1800) -> None:
+    def __init__(self, level: int = 1, seed_start: int = 0, max_episode_steps: int = 720) -> None:
         super().__init__()
         self._env = TreadsEnv(
             level=level, seed_start=seed_start, max_episode_steps=max_episode_steps

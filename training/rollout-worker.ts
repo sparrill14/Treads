@@ -544,7 +544,7 @@ function normalizeObs(obs: TankObservation): number[] {
 	result[idx + 4] = hasLOS;
 	result[idx + 5] = s.wasLastMoveBlocked ? 1.0 : 0.0;
 	result[idx + 6] = Math.min(s.invulnerabilityTicksRemaining / 8.0, 1.0);
-	result[idx + 7] = Math.min(obs.tick / 1080.0, 1.0);
+	result[idx + 7] = Math.min(obs.tick / 720.0, 1.0);
 	result[idx + 8] = s.health / Math.max(s.maxHealth, 1);
 
 	// Derived aim features (relative to nearest enemy)
@@ -1132,6 +1132,7 @@ function collectRollout(
 	replayEveryEpisodes: number,
 	replayDir: string,
 	episodeOffset: number,
+	workerId: number,
 	shapingScale: number
 ): RolloutData {
 	const obs: number[][] = [];
@@ -1256,7 +1257,7 @@ function collectRollout(
 				fs.mkdirSync(replayDir, { recursive: true });
 				const replayPath = path.join(
 					replayDir,
-					`episode_${absoluteEpisode}_L${currentLevel}_S${seed - 1}_${state.status}.json`
+					`episode_${absoluteEpisode}_W${workerId}_L${currentLevel}_S${seed - 1}_${state.status}.json`
 				);
 				fs.writeFileSync(replayPath, JSON.stringify((replayRecorder as ReplayRecorder).toJSON()));
 			}
@@ -1360,11 +1361,23 @@ async function main(): Promise<void> {
 		try {
 			cmd = JSON.parse(line);
 		} catch {
+			writeLine({ type: 'error', message: 'Invalid JSON command received by rollout worker' });
 			continue;
 		}
 
 		if (cmd.type === 'set_weights') {
 			const stateDict = cmd.state_dict as Record<string, number[][] | number[]>;
+			const weights = parseWeightsFromStateDict(stateDict);
+			mlp = new PolicyMLP(weights);
+			writeLine({ type: 'weights_set' });
+		} else if (cmd.type === 'set_weights_from_file') {
+			const filePath = String(cmd.path ?? '');
+			if (!filePath) {
+				writeLine({ type: 'error', message: 'Missing path for set_weights_from_file' });
+				continue;
+			}
+			const raw = fs.readFileSync(filePath, 'utf8');
+			const stateDict = JSON.parse(raw) as Record<string, number[][] | number[]>;
 			const weights = parseWeightsFromStateDict(stateDict);
 			mlp = new PolicyMLP(weights);
 			writeLine({ type: 'weights_set' });
@@ -1380,6 +1393,7 @@ async function main(): Promise<void> {
 			const replayEveryEpisodes = (cmd.replayEveryEpisodes as number) ?? 0;
 			const replayDir = (cmd.replayDir as string) ?? path.join(__dirname, '..', '..', 'training', 'output', 'replays');
 			const episodeOffset = (cmd.episodeOffset as number) ?? 0;
+			const workerId = (cmd.workerId as number) ?? 0;
 			const shapingScale = Math.max(0, Math.min(1, (cmd.shapingScale as number) ?? 1.0));
 			const rollout = collectRollout(
 				mlp,
@@ -1390,6 +1404,7 @@ async function main(): Promise<void> {
 				replayEveryEpisodes,
 				replayDir,
 				episodeOffset,
+				workerId,
 				shapingScale
 			);
 			writeLine(rollout);
@@ -1409,6 +1424,8 @@ async function main(): Promise<void> {
 			writeLine({ type: 'test_result', logits, values: vals });
 		} else if (cmd.type === 'exit') {
 			process.exit(0);
+		} else {
+			writeLine({ type: 'error', message: `Unknown command type: ${String(cmd.type ?? 'undefined')}` });
 		}
 	}
 }

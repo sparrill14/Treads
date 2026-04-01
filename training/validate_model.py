@@ -144,7 +144,7 @@ def validate(
     deterministic: bool,
 ) -> None:
     model = cast(Any, PPO.load(model_path, device="cpu"))  # pyright: ignore[reportUnknownMemberType]
-    model_obs_shape = tuple(cast(Any, model.observation_space).shape or ())
+    model_obs_shape = tuple(model.observation_space.shape or ())
     if model_obs_shape != (OBS_SIZE,):
         raise ValueError(
             "Checkpoint observation shape does not match the current runtime contract: "
@@ -163,49 +163,50 @@ def validate(
     for level in levels:
         for _ in range(episodes_per_level):
             env = TreadsEnv(level=level, seed_start=seed, max_episode_steps=max_ticks)
-            obs, _ = env.reset()
-            done = False
-            total_reward = 0.0
-            steps = 0
-            fires = 0
-            bombs = 0
-            info: dict[str, object] = {}
+            try:
+                obs, _ = env.reset()
+                done = False
+                total_reward = 0.0
+                steps = 0
+                fires = 0
+                bombs = 0
+                info: dict[str, object] = {}
 
-            while not done:
-                action, _ = model.predict(obs, deterministic=deterministic)
-                obs_raw = cast(Optional[ObsDict], getattr(env, "_last_obs_raw", None))
-                decoded = decode_continuous_action(action, obs_raw)
+                while not done:
+                    action, _ = model.predict(obs, deterministic=deterministic)
+                    obs_raw = cast(Optional[ObsDict], getattr(env, "_last_obs_raw", None))
+                    decoded = decode_continuous_action(action, obs_raw)
 
-                fires += int(decoded["fire"])
-                bombs += int(decoded["plant_bomb"])
+                    fires += int(decoded["fire"])
+                    bombs += int(decoded["plant_bomb"])
 
-                obs, reward, terminated, truncated, info = env.step(decoded)
-                total_reward += float(reward)
-                steps += 1
-                done = terminated or truncated
+                    obs, reward, terminated, truncated, info = env.step(decoded)
+                    total_reward += float(reward)
+                    steps += 1
+                    done = terminated or truncated
 
-            result = cast(dict[str, Any], info.get("result", {}))
-            win = int(bool(result.get("win", False)))
-            kind = LEVEL_TO_OPPONENT_KIND.get(level, "unknown")
-            stats.append(
-                EpisodeStats(
-                    win=win,
-                    reward=total_reward,
-                    steps=steps,
-                    fires=fires,
-                    bombs=bombs,
-                    level=level,
-                    opponent_kind=kind,
+                result = cast(dict[str, Any], info.get("result", {}))
+                win = int(bool(result.get("win", False)))
+                kind = LEVEL_TO_OPPONENT_KIND.get(level, "unknown")
+                stats.append(
+                    EpisodeStats(
+                        win=win,
+                        reward=total_reward,
+                        steps=steps,
+                        fires=fires,
+                        bombs=bombs,
+                        level=level,
+                        opponent_kind=kind,
+                    )
                 )
-            )
 
-            print(
-                f"Episode L{level} seed={seed}: steps={steps} win={bool(win)} "
-                f"reward={total_reward:.3f} fires={fires} bombs={bombs}"
-            )
-
-            env.close()
-            seed += 1
+                print(
+                    f"Episode L{level} seed={seed}: steps={steps} win={bool(win)} "
+                    f"reward={total_reward:.3f} fires={fires} bombs={bombs}"
+                )
+            finally:
+                env.close()
+                seed += 1
 
     _print_summary(stats)
 
