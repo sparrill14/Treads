@@ -1124,6 +1124,113 @@ function applySpawnJitter(config: LevelConfig, seed: number): LevelConfig {
 	return jittered;
 }
 
+function clamp(value: number, minValue: number, maxValue: number): number {
+	return Math.max(minValue, Math.min(maxValue, value));
+}
+
+function deepCloneLevel(config: LevelConfig): LevelConfig {
+	return JSON.parse(JSON.stringify(config)) as LevelConfig;
+}
+
+function applyProceduralDifficulty(config: LevelConfig, seed: number, difficultyBand: number): LevelConfig {
+	const d = clamp(difficultyBand, 0, 1);
+	if (d <= 0) {
+		return config;
+	}
+
+	const rng = new SeededRandom(seed * 3571 + 97);
+	const varied = deepCloneLevel(config);
+	const tankSize = 30;
+	const clampX = (x: number) => clamp(x, 0, ARENA_WIDTH - tankSize);
+	const clampY = (y: number) => clamp(y, 0, ARENA_HEIGHT - tankSize);
+
+	if (varied.player) {
+		const playerJitter = 8 + 24 * d;
+		varied.player.x = clampX(varied.player.x + rng.nextRange(-playerJitter, playerJitter));
+		varied.player.y = clampY(varied.player.y + rng.nextRange(-playerJitter, playerJitter));
+	}
+
+	if (varied.enemies) {
+		const enemyJitter = 12 + 36 * d;
+		varied.enemies = varied.enemies.map((enemy) => {
+			const nextEnemy = { ...enemy };
+			nextEnemy.x = clampX(nextEnemy.x + rng.nextRange(-enemyJitter, enemyJitter));
+			nextEnemy.y = clampY(nextEnemy.y + rng.nextRange(-enemyJitter, enemyJitter));
+
+			if (nextEnemy.type === 'stationary' && rng.nextFloat() < 0.2 * d) {
+				nextEnemy.type = 'stationary-random-aim';
+			}
+			if (nextEnemy.type === 'stationary-random-aim' && rng.nextFloat() < 0.15 * Math.max(0, d - 0.3)) {
+				nextEnemy.type = 'simple-moving';
+				nextEnemy.navigator = nextEnemy.navigator ?? { type: 'simple' };
+			}
+			if (nextEnemy.type === 'simple-moving' && rng.nextFloat() < 0.12 * Math.max(0, d - 0.55)) {
+				nextEnemy.type = 'bomber';
+				nextEnemy.navigator = { type: 'astar' };
+				nextEnemy.bombs = nextEnemy.bombs ?? { type: 'basic', count: 1 };
+			}
+
+			if (rng.nextFloat() < 0.45 * d) {
+				const ammoType = nextEnemy.ammo?.type ?? 'basic';
+				const ammoCount = Math.min(3, (nextEnemy.ammo?.count ?? 1) + 1);
+				nextEnemy.ammo = { type: ammoType, count: ammoCount };
+			}
+
+			if ((nextEnemy.type === 'bomber' || nextEnemy.type === 'super-bomber') && !nextEnemy.bombs) {
+				nextEnemy.bombs = { type: 'basic', count: 1 };
+			}
+
+			return nextEnemy;
+		});
+
+		if (d > 0.45 && varied.enemies.length < 4 && rng.nextFloat() < 0.35 * (d - 0.45)) {
+			const template = varied.enemies[rng.nextInt(0, varied.enemies.length - 1)] ?? varied.enemies[0];
+			if (template) {
+				const clone = deepCloneLevel({ enemies: [template], obstacles: [] }).enemies?.[0];
+				if (clone) {
+					clone.x = clampX(rng.nextRange(560, 900));
+					clone.y = clampY(rng.nextRange(80, 420));
+					varied.enemies.push(clone);
+				}
+			}
+		}
+	}
+
+	if (varied.obstacles) {
+		const obsJitter = 6 + 18 * d;
+		varied.obstacles = varied.obstacles.map((obs) => {
+			const widthScale = 1 + rng.nextRange(-0.1 * d, 0.14 * d);
+			const heightScale = 1 + rng.nextRange(-0.1 * d, 0.14 * d);
+			const width = clamp(obs.width * widthScale, 18, 260);
+			const height = clamp(obs.height * heightScale, 18, 280);
+			const x = clamp(obs.x + rng.nextRange(-obsJitter, obsJitter), 0, ARENA_WIDTH - width);
+			const y = clamp(obs.y + rng.nextRange(-obsJitter, obsJitter), 0, ARENA_HEIGHT - height);
+			return { x, y, width, height };
+		});
+
+		if (d > 0.55 && varied.obstacles.length < 5 && rng.nextFloat() < 0.22 * (d - 0.55) * 2.0) {
+			const width = rng.nextRange(24, 80);
+			const height = rng.nextRange(24, 140);
+			varied.obstacles.push({
+				x: clamp(rng.nextRange(240, 820), 0, ARENA_WIDTH - width),
+				y: clamp(rng.nextRange(60, 420), 0, ARENA_HEIGHT - height),
+				width,
+				height,
+			});
+		}
+	}
+
+	const rules = { ...(varied.rules ?? {}) };
+	const baseTurret = rules.turretSpeedMultiplier ?? 1.0;
+	rules.turretSpeedMultiplier = clamp(baseTurret * (1 + 0.35 * d + rng.nextRange(-0.08, 0.08)), 0.8, 3.5);
+	if (d > 0.7 && rng.nextFloat() < (d - 0.7) * 1.8) {
+		rules.projectileBounces = true;
+	}
+	varied.rules = rules;
+
+	return varied;
+}
+
 function collectRollout(
 	mlp: PolicyMLP,
 	nSteps: number,
@@ -1134,7 +1241,9 @@ function collectRollout(
 	replayDir: string,
 	workerId: number,
 	shapingScale: number,
-	startEpisode: number
+	startEpisode: number,
+	proceduralLevels: boolean,
+	difficultyBand: number
 ): RolloutData {
 	const obs: number[][] = [];
 	const actions: number[][] = [];
@@ -1165,7 +1274,9 @@ function collectRollout(
 		// Pick scenario uniformly at random from the active curriculum pool
 		currentLevel = levels[levelRng.nextInt(0, levels.length - 1)];
 		const baseConfig = resolveScenarioConfig(currentLevel);
-		const levelConfig = applySpawnJitter(baseConfig, seed);
+		const levelConfig = proceduralLevels
+			? applyProceduralDifficulty(applySpawnJitter(baseConfig, seed), seed, difficultyBand)
+			: applySpawnJitter(baseConfig, seed);
 		const initialState = createInitialGameState(levelConfig, seed);
 		const controllers = createDefaultControllers(levelConfig);
 		controllers[PLAYER_TANK_ID] = rlController;
@@ -1397,6 +1508,8 @@ async function main(): Promise<void> {
 			const replayDir = (cmd.replayDir as string) ?? path.join(__dirname, '..', '..', 'training', 'output', 'replays');
 			const workerId = (cmd.workerId as number) ?? 0;
 			const shapingScale = Math.max(0, Math.min(1, (cmd.shapingScale as number) ?? 1.0));
+			const proceduralLevels = Boolean((cmd.proceduralLevels as boolean) ?? true);
+			const difficultyBand = clamp(Number((cmd.difficultyBand as number) ?? 0), 0, 1);
 			const rollout = collectRollout(
 				mlp,
 				nSteps,
@@ -1407,7 +1520,9 @@ async function main(): Promise<void> {
 				replayDir,
 				workerId,
 				shapingScale,
-				workerTotalEpisodes
+				workerTotalEpisodes,
+				proceduralLevels,
+				difficultyBand
 			);
 			workerTotalEpisodes += (rollout.episode_rewards as number[]).length;
 			writeLine(rollout);

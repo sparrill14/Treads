@@ -132,6 +132,8 @@ class HybridTrainer:
         self.eval_episodes = max(1, eval_episodes)
         self.eval_levels = eval_levels or [1, 2, 3, 4, 5, 6, 7, 8, 9]
         self.eval_seed_start = eval_seed_start
+        self.procedural_levels = not self._explicit_levels
+        self.curriculum_difficulty_band = 0.0 if not self._explicit_levels else 0.5
 
         self.output_dir = output_dir or os.path.join(os.path.dirname(__file__), "output")
         os.makedirs(self.output_dir, exist_ok=True)
@@ -318,6 +320,7 @@ class HybridTrainer:
                 "currentPhaseName": self._get_curriculum_phase()["name"] if not self._explicit_levels else "Explicit levels",
                 "activeScenarios": self.levels,
                 "rehearsalScenarios": self.rehearsal_ids,
+                "difficultyBand": self.curriculum_difficulty_band,
             },
             "hyperparameters": {
                 "nSteps": self.n_steps,
@@ -335,6 +338,7 @@ class HybridTrainer:
                 "evalIntervalEpisodes": self.eval_interval_episodes,
                 "evalEpisodesPerLevel": self.eval_episodes,
                 "evalLevels": self.eval_levels,
+                "proceduralLevels": self.procedural_levels,
             },
             "paths": {
                 "trainingLog": os.path.abspath(self.training_log_path),
@@ -383,6 +387,7 @@ class HybridTrainer:
             "currentPhaseIndex": self.current_phase_index if not self._explicit_levels else None,
             "activeScenarios": list(self.levels),
             "rehearsalScenarios": list(self.rehearsal_ids),
+            "difficultyBand": self.curriculum_difficulty_band,
             "phaseRecentWinrate500": self._phase_recent_win_rate() if not self._explicit_levels else None,
             "avgReward50": avg_reward,
             "avgWinrate50": avg_winrate,
@@ -505,6 +510,35 @@ class HybridTrainer:
         # Scale current repetitions to approximate target mix while keeping scenario diversity.
         current_reps = max(1, round((target_current / target_rehearsal) * (n_rehearsal / max(n_current, 1))))
         return current * current_reps + rehearsal_unique
+
+    def _target_difficulty_band(self) -> float:
+        """Map phase progress + competence into a smooth [0,1] difficulty target."""
+        if self._explicit_levels:
+            return 0.5
+
+        phase_count = max(1, len(self.curriculum) - 1)
+        phase_position = self.current_phase_index / phase_count
+        phase = self._get_curriculum_phase()
+        min_phase_episodes = int(phase.get("min_phase_episodes") or 2000)
+        in_phase_progress = min(1.0, max(0.0, self._phase_episode_count() / max(min_phase_episodes, 1)))
+        base = 0.80 * phase_position + 0.20 * in_phase_progress
+
+        wr = self._phase_recent_win_rate()
+        if wr < 0.15:
+            base -= 0.15
+        elif wr < 0.25:
+            base -= 0.08
+        elif wr > 0.80:
+            base += 0.08
+        elif wr > 0.65:
+            base += 0.05
+
+        return min(1.0, max(0.0, base))
+
+    def _update_difficulty_band(self) -> None:
+        """EMA update to create many micro-levels instead of abrupt jumps."""
+        target = self._target_difficulty_band()
+        self.curriculum_difficulty_band = 0.90 * self.curriculum_difficulty_band + 0.10 * target
 
     def _phase_recent_win_rate(self) -> float:
         if not self.phase_episode_wins:
@@ -696,6 +730,8 @@ class HybridTrainer:
                     "workerId": i,
                     "targetEpisodes": target_episodes,
                     "shapingScale": max(0.3, 1.0 - self._phase_recent_win_rate() * 2.0),
+                    "proceduralLevels": self.procedural_levels,
+                    "difficultyBand": self.curriculum_difficulty_band,
                 })
 
             # Read results from all workers in parallel using threads
@@ -971,6 +1007,7 @@ class HybridTrainer:
         csv_writer = csv.writer(csv_file)
         csv_writer.writerow([
             "iteration", "timesteps", "episodes", "curriculum_phase", "active_scenarios", "phase_recent_winrate_500",
+            "difficulty_band",
             "avg_reward_50", "avg_winrate_50",
             "avg_tick_50", "avg_hit_50", "avg_hurt_50", "avg_kill_50", "avg_death_50", "avg_terminal_win_50", "avg_terminal_loss_50", "avg_timeout_50", "avg_approach_50", "avg_dodge_50",
             "steps_per_sec", "elapsed_sec"
@@ -991,6 +1028,7 @@ class HybridTrainer:
                 # Update adaptive rehearsal mix continuously within a phase.
                 if not self._explicit_levels and self.rehearsal_ids:
                     self.levels = self._build_mixed_levels()
+                self._update_difficulty_band()
 
                 # 1. Send current weights to worker
                 t0 = time.perf_counter()
@@ -1078,6 +1116,7 @@ class HybridTrainer:
                     curr_phase_name,
                     ",".join(str(l) for l in self.levels),
                     f"{self._phase_recent_win_rate():.3f}" if not self._explicit_levels else "",
+                    f"{self.curriculum_difficulty_band:.3f}",
                     f"{avg_reward:.3f}" if self.episode_rewards else "0",
                     f"{avg_winrate:.3f}" if self.episode_wins else "0",
                     f"{avg_tick:.3f}",
