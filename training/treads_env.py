@@ -7,6 +7,7 @@ import os
 import json
 import math
 import subprocess
+import threading
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
@@ -159,14 +160,29 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
     def _read_message(self) -> Dict[str, Any]:
         """Read a single JSON line from the subprocess stdout."""
         assert self.process is not None and self.process.stdout is not None
-        line = self.process.stdout.readline()
+        stdout = self.process.stdout
+        holder: Dict[str, str] = {"line": ""}
+
+        def _reader() -> None:
+            holder["line"] = stdout.readline()
+
+        t = threading.Thread(target=_reader, daemon=True)
+        t.start()
+        t.join(timeout=60.0)
+        if t.is_alive():
+            # Pipe deadlock — kill the subprocess so the reader thread unblocks eventually.
+            self._kill_process()
+            raise TimeoutError("TreadsEnv._read_message timed out after 60s (pipe deadlock suspected)")
+
+        line = holder["line"]
         if not line:
             stderr_tail = ""
-            if self.process.stderr is not None:
-                try:
-                    stderr_tail = self.process.stderr.read().strip()
-                except Exception:
-                    stderr_tail = ""
+            try:
+                # Best-effort: the process may have exited already.
+                if self.process.stderr is not None:  # type: ignore[union-attr]
+                    stderr_tail = self.process.stderr.read().strip()  # type: ignore[union-attr]
+            except Exception:
+                pass
             raise RuntimeError(
                 "CLI runner process terminated unexpectedly. "
                 f"stderr: {stderr_tail[-2000:] if stderr_tail else '<empty>'}"

@@ -32,7 +32,7 @@ MOVE_INTENTS = ["none", "n", "s", "e", "w", "ne", "nw", "se", "sw"]
 FIRE_THRESHOLD = 0.0
 BOMB_THRESHOLD = 0.5
 MOVE_DEAD_ZONE = 0.33
-AIM_OFFSET_LIMIT = math.pi
+AIM_OFFSET_LIMIT = math.pi / 18.0
 ARENA_DIAGONAL = math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * ARENA_HEIGHT)
 tick_norm_ticks = 720.0
 

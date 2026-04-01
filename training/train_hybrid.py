@@ -189,6 +189,7 @@ class HybridTrainer:
                 gamma=gamma,
                 gae_lambda=gae_lambda,
                 clip_range=clip_schedule,
+                clip_range_vf=clip_schedule,
                 ent_coef=ent_coef,
                 target_kl=target_kl,
             ))
@@ -213,6 +214,7 @@ class HybridTrainer:
                 gamma=gamma,
                 gae_lambda=gae_lambda,
                 clip_range=clip_schedule,
+                clip_range_vf=clip_schedule,
                 ent_coef=ent_coef,
                 target_kl=target_kl,
                 device="cpu",
@@ -474,12 +476,21 @@ class HybridTrainer:
         return self.total_episodes - self.phase_start_episode
 
     def _target_current_share(self) -> float:
-        """Anneal current-phase share from 60% to 80% over early phase episodes."""
+        """Adaptive current-phase share with stronger rehearsal during collapse."""
         if self._explicit_levels:
             return 1.0
         anneal_episodes = 2000.0
         progress = min(1.0, max(0.0, self._phase_episode_count() / anneal_episodes))
-        return 0.60 + 0.20 * progress
+        base = 0.60 + 0.20 * progress
+        phase_wr = self._phase_recent_win_rate()
+        # When current phase is unstable, increase rehearsal to prevent forgetting.
+        if phase_wr < 0.12:
+            return min(base, 0.45)
+        if phase_wr < 0.20:
+            return min(base, 0.55)
+        if phase_wr < 0.30:
+            return min(base, 0.65)
+        return base
 
     def _build_mixed_levels(self) -> List[int]:
         """Build level list with adaptive rehearsal mix (starts ~60/40, anneals to ~80/20)."""
@@ -544,8 +555,8 @@ class HybridTrainer:
                 return None
 
             reward_trend = self._phase_reward_trend(window=200)
-            minimally_competent = win_rate >= (required_wr * 0.85)
-            if reward_trend < 0.0 or not minimally_competent:
+            minimally_competent = win_rate >= (required_wr * 0.95)
+            if reward_trend <= 0.0 or not minimally_competent or not stable:
                 return None
 
             print(
@@ -561,6 +572,31 @@ class HybridTrainer:
         recent_phases = completed_phases[-3:] if len(completed_phases) > 3 else completed_phases
         self.rehearsal_ids = [sid for phase in recent_phases for sid in phase["scenario_ids"]]
         self.current_phase_index += 1
+        self.levels = self._build_mixed_levels()
+        self.phase_episode_wins = []
+        self.phase_episode_rewards = []
+        self.phase_start_episode = self.total_episodes
+        return previous, self._get_curriculum_phase(), win_rate
+
+    def _maybe_rollback_curriculum(self) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], float]]:
+        """Rollback one phase when sustained collapse is detected in current phase."""
+        if self._explicit_levels or self.current_phase_index <= 0:
+            return None
+
+        phase_episodes = self._phase_episode_count()
+        if phase_episodes < 700:
+            return None
+
+        win_rate = self._phase_recent_win_rate()
+        reward_trend = self._phase_reward_trend(window=200)
+        if win_rate >= 0.12 or reward_trend > 0.0:
+            return None
+
+        previous = self._get_curriculum_phase()
+        self.current_phase_index -= 1
+        completed_phases = self.curriculum[: self.current_phase_index + 1]
+        recent_phases = completed_phases[-3:] if len(completed_phases) > 3 else completed_phases
+        self.rehearsal_ids = [sid for phase in recent_phases for sid in phase["scenario_ids"]]
         self.levels = self._build_mixed_levels()
         self.phase_episode_wins = []
         self.phase_episode_rewards = []
@@ -1092,6 +1128,15 @@ class HybridTrainer:
                     )
                     print("  RewardBreakdown(trigger window): " + " ".join(summary_parts) + "\n")
 
+                phase_rollback = self._maybe_rollback_curriculum()
+                if phase_rollback is not None:
+                    previous_phase, rollback_phase, collapse_win_rate = phase_rollback
+                    print(
+                        f"\n*** Curriculum rollback at episode {self.total_episodes}: "
+                        f"{previous_phase['name']} -> {rollback_phase['name']} | "
+                        f"phase_recent_winrate_500={collapse_win_rate:.3f} ***\n"
+                    )
+
                 # 7. Track best training-window model separately from eval best.
                 if len(self.episode_rewards) >= 20 and avg_winrate > self.best_train_win_rate:
                     self.best_train_win_rate = avg_winrate
@@ -1100,17 +1145,20 @@ class HybridTrainer:
 
                 # 7b. Periodic deterministic eval for robust best checkpoint selection.
                 while self.total_episodes >= next_eval_episode:
-                    eval_win_rate = self._evaluate_policy()
-                    print(
-                        f"  Eval | Episodes={self.total_episodes} | "
-                        f"WinRate={eval_win_rate:.3f} on levels={self.eval_levels}"
-                    )
-                    if eval_win_rate > self.best_eval_win_rate:
-                        self.best_eval_win_rate = eval_win_rate
-                        self.best_win_rate = eval_win_rate
-                        cast(Any, self.model).save(self.best_model_path)
-                        self._export_policy_onnx(self.best_model_path)
-                        print(f"  ** New best eval model! Win rate: {eval_win_rate:.3f} **")
+                    try:
+                        eval_win_rate = self._evaluate_policy()
+                        print(
+                            f"  Eval | Episodes={self.total_episodes} | "
+                            f"WinRate={eval_win_rate:.3f} on levels={self.eval_levels}"
+                        )
+                        if eval_win_rate > self.best_eval_win_rate:
+                            self.best_eval_win_rate = eval_win_rate
+                            self.best_win_rate = eval_win_rate
+                            cast(Any, self.model).save(self.best_model_path)
+                            self._export_policy_onnx(self.best_model_path)
+                            print(f"  ** New best eval model! Win rate: {eval_win_rate:.3f} **")
+                    except Exception as eval_exc:
+                        print(f"  WARNING: _evaluate_policy failed ({eval_exc}) - skipping this eval.")
                     next_eval_episode += self.eval_interval_episodes
                     self._write_run_manifest(status="running")
 

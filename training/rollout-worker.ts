@@ -60,7 +60,7 @@ const OBS_SIZE =
 const PLAYER_TANK_ID = 'player-0';
 const FIRE_THRESHOLD = 0.0; // Fire only when signal > 0.
 const BOMB_THRESHOLD = 0.5;
-const AIM_OFFSET_LIMIT = Math.PI; // Full-range offset around nearest-enemy angle.
+const AIM_OFFSET_LIMIT = Math.PI / 18; // Keep exploration near target bearing (~10deg).
 const STEP_PENALTY = -0.001;
 const HIT_REWARD = 0.3;
 const TOOK_DAMAGE_PENALTY = -0.3;
@@ -1133,7 +1133,8 @@ function collectRollout(
 	replayEveryEpisodes: number,
 	replayDir: string,
 	workerId: number,
-	shapingScale: number
+	shapingScale: number,
+	startEpisode: number
 ): RolloutData {
 	const obs: number[][] = [];
 	const actions: number[][] = [];
@@ -1247,17 +1248,17 @@ function collectRollout(
 
 		if (done) {
 			completedEpisodes += 1;
-			const workerEpisode = completedEpisodes;
 			episodeRewards.push(episodeReward);
 			episodeLengths.push(episodeTick);
 			episodeWins.push(state.status === 'player_win' ? 1 : 0);
 			episodeLevels.push(currentLevel);
 			episodeRewardBreakdowns.push(episodeBreakdown);
-			if (replayEveryEpisodes > 0 && workerEpisode % replayEveryEpisodes === 0 && replayRecorder !== null) {
+			const absoluteEpisode = startEpisode + completedEpisodes;
+			if (replayEveryEpisodes > 0 && absoluteEpisode % replayEveryEpisodes === 0 && replayRecorder !== null) {
 				fs.mkdirSync(replayDir, { recursive: true });
 				const replayPath = path.join(
 					replayDir,
-					`episode_${workerEpisode}_W${workerId}_L${currentLevel}_S${seed - 1}_${state.status}.json`
+					`episode_${absoluteEpisode}_W${workerId}_L${currentLevel}_S${seed - 1}_${state.status}.json`
 				);
 				fs.writeFileSync(replayPath, JSON.stringify((replayRecorder as ReplayRecorder).toJSON()));
 			}
@@ -1352,6 +1353,7 @@ function readLine(): Promise<string> {
 // ---- Main loop ----
 async function main(): Promise<void> {
 	let mlp: PolicyMLP | null = null;
+	let workerTotalEpisodes = 0;
 
 	writeLine({ type: 'ready' });
 
@@ -1404,8 +1406,10 @@ async function main(): Promise<void> {
 				replayEveryEpisodes,
 				replayDir,
 				workerId,
-				shapingScale
+				shapingScale,
+				workerTotalEpisodes
 			);
+			workerTotalEpisodes += (rollout.episode_rewards as number[]).length;
 			writeLine(rollout);
 		} else if (cmd.type === 'test_forward') {
 			if (!mlp) {
