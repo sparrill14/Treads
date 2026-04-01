@@ -86,6 +86,7 @@ message CollectRequest {
   double shaping_scale = 10;
   bool procedural_levels = 11;
   double difficulty_band = 12;
+  int32 player_max_ammo = 13;
 }
 
 message CollectResponse {

@@ -60,6 +60,7 @@ interface CollectRequest {
 	shapingScale?: number;
 	proceduralLevels?: boolean;
 	difficultyBand?: number;
+	playerMaxAmmo?: number;
 }
 
 interface CollectResponse {
@@ -796,6 +797,7 @@ function applySpawnJitter(config: LevelConfig, seed: number): LevelConfig {
 
 	if (config.player) {
 		jittered.player = {
+			...config.player,
 			x: clampX(config.player.x + jitter()),
 			y: clampY(config.player.y + jitter()),
 		};
@@ -939,7 +941,8 @@ function collectRollout(
 	shapingScale: number,
 	startEpisode: number,
 	proceduralLevels: boolean,
-	difficultyBand: number
+	difficultyBand: number,
+	playerMaxAmmo: number
 ): RolloutData {
 	const obs: number[][] = [];
 	const actions: number[][] = [];
@@ -973,6 +976,9 @@ function collectRollout(
 		const levelConfig = proceduralLevels
 			? applyProceduralDifficulty(applySpawnJitter(baseConfig, seed), seed, difficultyBand)
 			: applySpawnJitter(baseConfig, seed);
+		if (playerMaxAmmo > 0 && levelConfig.player) {
+			levelConfig.player.ammo = { type: levelConfig.player.ammo?.type ?? 'basic', count: playerMaxAmmo };
+		}
 		const initialState = createInitialGameState(levelConfig, seed);
 		const controllers = createDefaultControllers(levelConfig);
 		controllers[PLAYER_TANK_ID] = rlController;
@@ -1187,6 +1193,7 @@ function collect(
 		const shapingScale = Math.max(0, Math.min(1, Number(req.shapingScale ?? 1.0)));
 		const proceduralLevels = Boolean(req.proceduralLevels ?? true);
 		const difficultyBand = clamp(Number(req.difficultyBand ?? 0), 0, 1);
+		const playerMaxAmmo = Number(req.playerMaxAmmo ?? 0);
 
 		const rollout = collectRollout(
 			mlp,
@@ -1200,7 +1207,8 @@ function collect(
 			shapingScale,
 			workerTotalEpisodes,
 			proceduralLevels,
-			difficultyBand
+			difficultyBand,
+			playerMaxAmmo
 		);
 		workerTotalEpisodes += (rollout.episode_rewards as number[]).length;
 		callback(null, { rolloutJson: JSON.stringify(rollout) });

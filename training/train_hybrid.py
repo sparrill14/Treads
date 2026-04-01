@@ -99,25 +99,25 @@ TREADS_PB2, TREADS_PB2_GRPC = _ensure_proto_stubs()
 
 # ---- Curriculum configuration ----
 DEFAULT_CURRICULUM: List[Dict[str, Any]] = [
-    {"name": "Phase 1 (aim + track)", "scenario_ids": [111, 112, 114], "min_phase_episodes": 1200, "force_phase_episodes": 4800, "required_win_rate": 0.50},
-    {"name": "Phase 2 (dodge + fight)", "scenario_ids": [121, 122, 123], "min_phase_episodes": 1600, "force_phase_episodes": 5600, "required_win_rate": 0.45},
+    {"name": "Phase 1 (aim + track)", "scenario_ids": [111, 112, 114], "min_phase_episodes": 1200, "force_phase_episodes": 4800, "required_win_rate": 0.50, "player_max_ammo": 2},
+    {"name": "Phase 2 (dodge + fight)", "scenario_ids": [121, 122, 123], "min_phase_episodes": 1600, "force_phase_episodes": 5600, "required_win_rate": 0.45, "player_max_ammo": 2},
     # Bridge 2->3: gradually remove turret assist and increase baseline pressure.
-    {"name": "Phase 2.5 (bridge to full turret)", "scenario_ids": [123, 131, 132], "min_phase_episodes": 1400, "force_phase_episodes": 5600, "required_win_rate": 0.45},
-    {"name": "Phase 3 (full turret)", "scenario_ids": [131, 132, 133], "min_phase_episodes": 1800, "force_phase_episodes": 6400, "required_win_rate": 0.45},
+    {"name": "Phase 2.5 (bridge to full turret)", "scenario_ids": [123, 131, 132], "min_phase_episodes": 1400, "force_phase_episodes": 5600, "required_win_rate": 0.45, "player_max_ammo": 2},
+    {"name": "Phase 3 (full turret)", "scenario_ids": [131, 132, 133], "min_phase_episodes": 1800, "force_phase_episodes": 6400, "required_win_rate": 0.45, "player_max_ammo": 3},
     # Bridge 3->4: introduce obstacles while keeping enemy count low.
-    {"name": "Phase 3.5 (bridge to obstacles)", "scenario_ids": [132, 133, 141, 142], "min_phase_episodes": 1400, "force_phase_episodes": 5600, "required_win_rate": 0.45},
-    {"name": "Phase 4 (obstacles)", "scenario_ids": [141, 142, 143], "min_phase_episodes": 2000, "force_phase_episodes": 7600, "required_win_rate": 0.45},
+    {"name": "Phase 3.5 (bridge to obstacles)", "scenario_ids": [132, 133, 141, 142], "min_phase_episodes": 1400, "force_phase_episodes": 5600, "required_win_rate": 0.45, "player_max_ammo": 3},
+    {"name": "Phase 4 (obstacles)", "scenario_ids": [141, 142, 143], "min_phase_episodes": 2000, "force_phase_episodes": 7600, "required_win_rate": 0.45, "player_max_ammo": 3},
     # Bridge 4->5: add multi-enemy mixes before full multi-enemy obstacle phases.
-    {"name": "Phase 4.5 (bridge to multi-enemy)", "scenario_ids": [142, 143, 151], "min_phase_episodes": 1600, "force_phase_episodes": 6400, "required_win_rate": 0.45},
-    {"name": "Phase 5 (multi-enemy + obs)", "scenario_ids": [151, 152, 153], "min_phase_episodes": 2200, "force_phase_episodes": 8200, "required_win_rate": 0.45},
-    {"name": "Phase 6 (bouncing shots)", "scenario_ids": [161, 162, 163], "min_phase_episodes": 2200, "force_phase_episodes": 8200, "required_win_rate": 0.45},
+    {"name": "Phase 4.5 (bridge to multi-enemy)", "scenario_ids": [142, 143, 151], "min_phase_episodes": 1600, "force_phase_episodes": 6400, "required_win_rate": 0.45, "player_max_ammo": 4},
+    {"name": "Phase 5 (multi-enemy + obs)", "scenario_ids": [151, 152, 153], "min_phase_episodes": 2200, "force_phase_episodes": 8200, "required_win_rate": 0.45, "player_max_ammo": 4},
+    {"name": "Phase 6 (bouncing shots)", "scenario_ids": [161, 162, 163], "min_phase_episodes": 2200, "force_phase_episodes": 8200, "required_win_rate": 0.45, "player_max_ammo": 4},
     # Bridge 6->7: introduce bomber behavior before full bomber curriculum.
-    {"name": "Phase 6.5 (bridge to bombers)", "scenario_ids": [163, 171, 172], "min_phase_episodes": 1800, "force_phase_episodes": 7200, "required_win_rate": 0.42},
-    {"name": "Phase 7 (bombers)", "scenario_ids": [171, 172, 173], "min_phase_episodes": 2400, "force_phase_episodes": 9200, "required_win_rate": 0.40},
-    {"name": "Phase 8 (full mix)", "scenario_ids": [181, 182, 183], "min_phase_episodes": 2600, "force_phase_episodes": 9800, "required_win_rate": 0.40},
-    {"name": "Phase 9 (easy levels)", "scenario_ids": [1, 2, 3, 4], "min_phase_episodes": 2600, "force_phase_episodes": 9800, "required_win_rate": 0.38},
-    {"name": "Phase 10 (mid levels)", "scenario_ids": [1, 2, 3, 4, 5, 6], "min_phase_episodes": 3000, "force_phase_episodes": 11000, "required_win_rate": 0.35},
-    {"name": "Phase 11 (all levels)", "scenario_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9], "min_phase_episodes": None, "required_win_rate": 0.35},
+    {"name": "Phase 6.5 (bridge to bombers)", "scenario_ids": [163, 171, 172], "min_phase_episodes": 1800, "force_phase_episodes": 7200, "required_win_rate": 0.42, "player_max_ammo": 5},
+    {"name": "Phase 7 (bombers)", "scenario_ids": [171, 172, 173], "min_phase_episodes": 2400, "force_phase_episodes": 9200, "required_win_rate": 0.40, "player_max_ammo": 5},
+    {"name": "Phase 8 (full mix)", "scenario_ids": [181, 182, 183], "min_phase_episodes": 2600, "force_phase_episodes": 9800, "required_win_rate": 0.40, "player_max_ammo": 5},
+    {"name": "Phase 9 (easy levels)", "scenario_ids": [1, 2, 3, 4], "min_phase_episodes": 2600, "force_phase_episodes": 9800, "required_win_rate": 0.38, "player_max_ammo": 5},
+    {"name": "Phase 10 (mid levels)", "scenario_ids": [1, 2, 3, 4, 5, 6], "min_phase_episodes": 3000, "force_phase_episodes": 11000, "required_win_rate": 0.35, "player_max_ammo": 5},
+    {"name": "Phase 11 (all levels)", "scenario_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9], "min_phase_episodes": None, "required_win_rate": 0.35, "player_max_ammo": 5},
 ]
 
 
@@ -436,6 +436,7 @@ class HybridTrainer:
                 "activeScenarios": self.levels,
                 "rehearsalScenarios": self.rehearsal_ids,
                 "difficultyBand": self.curriculum_difficulty_band,
+                "playerMaxAmmo": self._get_player_max_ammo(),
             },
             "hyperparameters": {
                 "nSteps": self.n_steps,
@@ -637,6 +638,9 @@ class HybridTrainer:
 
     def _get_curriculum_phase(self) -> Dict[str, Any]:
         return self.curriculum[self.current_phase_index]
+
+    def _get_player_max_ammo(self) -> int:
+        return int(self._get_curriculum_phase().get("player_max_ammo", 5))
 
     def _get_curriculum_levels(self) -> List[int]:
         return list(self._get_curriculum_phase()["scenario_ids"])
@@ -856,6 +860,7 @@ class HybridTrainer:
                     shaping_scale=float(req.get("shapingScale", 1.0)),
                     procedural_levels=bool(req.get("proceduralLevels", True)),
                     difficulty_band=float(req.get("difficultyBand", 0.0)),
+                    player_max_ammo=int(req.get("playerMaxAmmo", 0)),
                 ),
                 timeout=timeout_sec,
             )
@@ -931,6 +936,7 @@ class HybridTrainer:
                     "shapingScale": max(0.3, 1.0 - self._phase_recent_win_rate() * 2.0),
                     "proceduralLevels": self.procedural_levels,
                     "difficultyBand": self.curriculum_difficulty_band,
+                    "playerMaxAmmo": self._get_player_max_ammo(),
                 })
 
             # Read results from all workers in parallel using threads

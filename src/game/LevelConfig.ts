@@ -31,6 +31,8 @@ export interface EnemyConfig {
 export interface PlayerConfig {
 	x: number;
 	y: number;
+	ammo?: { type: AmmoType; count: number };
+	bombs?: { type: BombType; count: number };
 }
 
 export interface TankConfig {
@@ -88,6 +90,8 @@ export function getLevelTankConfigs(level: LevelConfig): TankConfig[] {
 			x: level.player.x,
 			y: level.player.y,
 			control: 'human',
+			ammo: level.player.ammo ? { ...level.player.ammo } : undefined,
+			bombs: level.player.bombs ? { ...level.player.bombs } : undefined,
 		});
 	}
 
