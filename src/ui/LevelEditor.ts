@@ -9,6 +9,7 @@ import {
 } from '../game/LevelConfig';
 
 type EditorTool = 'move' | 'tank' | 'obstacle' | 'erase';
+type PlaceableTankKind = TankKind | 'super-heuristic';
 
 type DragTarget =
 	| { kind: 'tank'; index: number; offsetX: number; offsetY: number }
@@ -18,6 +19,15 @@ interface LevelEditorOptions {
 	canvas: HTMLCanvasElement;
 	onPlaytest: (config: LevelConfig) => void;
 	onStopPlaytest: () => void;
+}
+
+interface ProceduralAxes {
+	tacticalPressure: number;
+	enemyDensity: number;
+	obstacleComplexity: number;
+	bomberPressure: number;
+	turretPressure: number;
+	bouncePressure: number;
 }
 
 const ARENA_WIDTH = 1000;
@@ -94,6 +104,45 @@ function isPointInRect(x: number, y: number, rect: ObstacleConfig): boolean {
 	return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
 }
 
+function rectsOverlap(
+	a: { x: number; y: number; width: number; height: number },
+	b: { x: number; y: number; width: number; height: number }
+): boolean {
+	return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+function tankRect(tank: Pick<TankConfig, 'x' | 'y'>): ObstacleConfig {
+	return { x: tank.x, y: tank.y, width: TANK_SIZE, height: TANK_SIZE };
+}
+
+function intersectsObstacle(
+	rect: ObstacleConfig,
+	obstacles: ObstacleConfig[],
+	ignoreIndex: number | null = null
+): boolean {
+	for (let i = 0; i < obstacles.length; i += 1) {
+		if (ignoreIndex !== null && i === ignoreIndex) {
+			continue;
+		}
+		if (rectsOverlap(rect, obstacles[i])) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function intersectsTank(rect: ObstacleConfig, tanks: TankConfig[], ignoreIndex: number | null = null): boolean {
+	for (let i = 0; i < tanks.length; i += 1) {
+		if (ignoreIndex !== null && i === ignoreIndex) {
+			continue;
+		}
+		if (rectsOverlap(rect, tankRect(tanks[i]))) {
+			return true;
+		}
+	}
+	return false;
+}
+
 function teamColor(team: string): string {
 	const value = [...team].reduce((sum, char) => sum + char.charCodeAt(0), 0);
 	const hue = value % 360;
@@ -120,6 +169,22 @@ function defaultTankForKind(kind: TankKind): Pick<TankConfig, 'ammo' | 'bombs' |
 	return {};
 }
 
+function applySuperHeuristicDefaults(tank: TankConfig, strength: number): void {
+	tank.kind = 'super-bomber';
+	tank.ammo = { type: 'super', count: 4 };
+	tank.bombs = { type: 'love', count: 2 };
+	tank.navigator = {
+		type: 'astar-avoidance',
+		aggressionFactor: clamp(Math.round(strength), 1, 25),
+		heuristicProfile: 'advanced',
+		tacticalRole: 'pressure',
+	};
+}
+
+function isSuperHeuristicTank(tank: TankConfig): boolean {
+	return tank.kind === 'super-bomber' && tank.navigator?.heuristicProfile === 'advanced';
+}
+
 function makeTank(kind: TankKind, team: string, control: ControlType, x: number, y: number, index: number): TankConfig {
 	return {
 		id: `tank-${index}`,
@@ -143,6 +208,7 @@ export class LevelEditor {
 	private toolSelect: HTMLSelectElement | null = null;
 	private kindSelect: HTMLSelectElement | null = null;
 	private controlSelect: HTMLSelectElement | null = null;
+	private heuristicStrengthInput: HTMLInputElement | null = null;
 	private teamInput: HTMLInputElement | null = null;
 	private obstacleWidthInput: HTMLInputElement | null = null;
 	private obstacleHeightInput: HTMLInputElement | null = null;
@@ -152,8 +218,14 @@ export class LevelEditor {
 	private obstaclesList: HTMLDivElement | null = null;
 	private playtestButton: HTMLButtonElement | null = null;
 	private stopPlaytestButton: HTMLButtonElement | null = null;
+	private restartPlaytestButton: HTMLButtonElement | null = null;
+	private proceduralDifficultyInput: HTMLInputElement | null = null;
+	private proceduralSeedInput: HTMLInputElement | null = null;
+	private proceduralAxisInputs: Partial<Record<keyof ProceduralAxes, HTMLInputElement>> = {};
+	private aiVsAiButton: HTMLButtonElement | null = null;
 
 	private config: LevelConfig = deepClone(DEFAULT_LEVEL_CONFIG);
+	private aiVsAiMode = false;
 	private visible = false;
 	private playtesting = false;
 	private drag: DragTarget | null = null;
@@ -181,10 +253,15 @@ export class LevelEditor {
 		this.host = host;
 		this.overlay = document.createElement('div');
 		this.overlay.className = 'editor-overlay';
-		host.appendChild(this.overlay);
+		host.insertBefore(this.overlay, this.canvas);
 
 		const topBar = document.createElement('div');
 		topBar.className = 'editor-topbar';
+
+		const primaryToolbar = document.createElement('div');
+		primaryToolbar.className = 'editor-toolbar-row';
+		const secondaryToolbar = document.createElement('div');
+		secondaryToolbar.className = 'editor-toolbar-row';
 
 		this.toolSelect = document.createElement('select');
 		this.toolSelect.className = 'editor-select';
@@ -205,10 +282,11 @@ export class LevelEditor {
 			'simple-moving',
 			'bomber',
 			'super-bomber',
-		] as TankKind[]) {
+			'super-heuristic',
+		] as PlaceableTankKind[]) {
 			const option = document.createElement('option');
 			option.value = kind;
-			option.textContent = `Tank: ${kind}`;
+			option.textContent = kind === 'super-heuristic' ? 'Tank: super-heuristic' : `Tank: ${kind}`;
 			this.kindSelect.appendChild(option);
 		}
 
@@ -222,14 +300,24 @@ export class LevelEditor {
 		}
 		this.controlSelect.value = 'human';
 
+		this.heuristicStrengthInput = document.createElement('input');
+		this.heuristicStrengthInput.type = 'number';
+		this.heuristicStrengthInput.className = 'editor-input compact';
+		this.heuristicStrengthInput.min = '1';
+		this.heuristicStrengthInput.max = '25';
+		this.heuristicStrengthInput.step = '1';
+		this.heuristicStrengthInput.value = '11';
+		this.heuristicStrengthInput.title = 'Heuristic strength';
+
 		const toolPalette = document.createElement('div');
 		toolPalette.className = 'editor-tool-palette';
 		for (const tool of ['move', 'tank', 'obstacle', 'erase'] as EditorTool[]) {
 			const button = document.createElement('button');
 			button.type = 'button';
-			button.className = 'editor-palette-button';
+			button.className = 'editor-palette-button editor-toolbar-button';
 			button.dataset.editorTool = tool;
-			button.textContent = tool === 'tank' ? 'Place Tank' : tool === 'obstacle' ? 'Draw Obstacle' : tool;
+			button.textContent =
+				tool === 'move' ? '✥ Move' : tool === 'tank' ? '▣ Tank' : tool === 'obstacle' ? '▥ Obstacle' : '⌫ Erase';
 			button.addEventListener('click', () => {
 				this.activeTool = tool;
 				if (this.toolSelect) {
@@ -242,12 +330,30 @@ export class LevelEditor {
 
 		const kindPalette = document.createElement('div');
 		kindPalette.className = 'editor-kind-palette';
-		for (const kind of ['player', 'stationary', 'simple-moving', 'bomber', 'super-bomber'] as TankKind[]) {
+		for (const kind of [
+			'player',
+			'stationary',
+			'simple-moving',
+			'bomber',
+			'super-bomber',
+			'super-heuristic',
+		] as PlaceableTankKind[]) {
 			const button = document.createElement('button');
 			button.type = 'button';
-			button.className = 'editor-palette-button';
+			button.className = 'editor-palette-button editor-toolbar-button';
 			button.dataset.editorKind = kind;
-			button.textContent = `Tank: ${kind}`;
+			button.textContent =
+				kind === 'player'
+					? '🟢 Player'
+					: kind === 'stationary'
+						? '🟡 Stationary'
+						: kind === 'simple-moving'
+							? '🔵 Moving'
+							: kind === 'bomber'
+								? '🟠 Bomber'
+								: kind === 'super-bomber'
+									? '🔴 Super'
+									: '🧠 Super Heuristic';
 			button.addEventListener('click', () => {
 				if (this.kindSelect) {
 					this.kindSelect.value = kind;
@@ -280,8 +386,8 @@ export class LevelEditor {
 
 		const newButton = document.createElement('button');
 		newButton.type = 'button';
-		newButton.className = 'control-button';
-		newButton.textContent = 'New';
+		newButton.className = 'control-button editor-toolbar-button';
+		newButton.textContent = '✧ New';
 		newButton.addEventListener('click', () => {
 			this.config = deepClone(DEFAULT_LEVEL_CONFIG);
 			this.selectedTankIndex = null;
@@ -290,10 +396,68 @@ export class LevelEditor {
 			this.draw();
 		});
 
+		this.proceduralDifficultyInput = document.createElement('input');
+		this.proceduralDifficultyInput.type = 'range';
+		this.proceduralDifficultyInput.min = '0';
+		this.proceduralDifficultyInput.max = '100';
+		this.proceduralDifficultyInput.value = '45';
+		this.proceduralDifficultyInput.className = 'editor-range';
+		this.proceduralDifficultyInput.title = 'Procedural difficulty';
+
+		const proceduralAxesRow = document.createElement('div');
+		proceduralAxesRow.className = 'editor-procedural-axes';
+		const addAxisControl = (key: keyof ProceduralAxes, label: string, value: number): void => {
+			const wrap = document.createElement('label');
+			wrap.className = 'editor-axis-control';
+			const text = document.createElement('span');
+			text.textContent = label;
+			const input = document.createElement('input');
+			input.type = 'range';
+			input.min = '0';
+			input.max = '100';
+			input.value = String(value);
+			input.className = 'editor-range';
+			input.title = label;
+			const valueText = document.createElement('strong');
+			const syncValue = (): void => {
+				valueText.textContent = `${Math.round(Number(input.value))}%`;
+			};
+			input.addEventListener('input', syncValue);
+			syncValue();
+			wrap.append(text, input, valueText);
+			proceduralAxesRow.appendChild(wrap);
+			this.proceduralAxisInputs[key] = input;
+		};
+
+		addAxisControl('tacticalPressure', 'Tactical', 45);
+		addAxisControl('enemyDensity', 'Enemy Count', 45);
+		addAxisControl('obstacleComplexity', 'Obstacles', 45);
+		addAxisControl('bomberPressure', 'Bombers', 35);
+		addAxisControl('turretPressure', 'Turret', 45);
+		addAxisControl('bouncePressure', 'Bounces', 35);
+
+		this.proceduralSeedInput = document.createElement('input');
+		this.proceduralSeedInput.type = 'number';
+		this.proceduralSeedInput.className = 'editor-input compact';
+		this.proceduralSeedInput.value = String(Math.floor(Date.now() % 100000));
+		this.proceduralSeedInput.title = 'Procedural seed';
+
+		const generateButton = document.createElement('button');
+		generateButton.type = 'button';
+		generateButton.className = 'control-button editor-toolbar-button';
+		generateButton.textContent = '⚙ Generate';
+		generateButton.addEventListener('click', () => this.generateProceduralLevel(false));
+
+		const remixButton = document.createElement('button');
+		remixButton.type = 'button';
+		remixButton.className = 'control-button editor-toolbar-button';
+		remixButton.textContent = '↻ Remix';
+		remixButton.addEventListener('click', () => this.generateProceduralLevel(true));
+
 		this.playtestButton = document.createElement('button');
 		this.playtestButton.type = 'button';
-		this.playtestButton.className = 'control-button';
-		this.playtestButton.textContent = 'Playtest';
+		this.playtestButton.className = 'control-button editor-toolbar-button';
+		this.playtestButton.textContent = '▶ Play';
 		this.playtestButton.addEventListener('click', () => {
 			if (this.playtesting) return;
 			this.playtesting = true;
@@ -303,8 +467,8 @@ export class LevelEditor {
 
 		this.stopPlaytestButton = document.createElement('button');
 		this.stopPlaytestButton.type = 'button';
-		this.stopPlaytestButton.className = 'control-button';
-		this.stopPlaytestButton.textContent = 'Stop';
+		this.stopPlaytestButton.className = 'control-button editor-toolbar-button';
+		this.stopPlaytestButton.textContent = '■ Stop';
 		this.stopPlaytestButton.addEventListener('click', () => {
 			if (!this.playtesting) return;
 			this.playtesting = false;
@@ -313,40 +477,67 @@ export class LevelEditor {
 			this.draw();
 		});
 
-		topBar.append(
+		this.restartPlaytestButton = document.createElement('button');
+		this.restartPlaytestButton.type = 'button';
+		this.restartPlaytestButton.className = 'control-button editor-toolbar-button';
+		this.restartPlaytestButton.textContent = '⟲ Restart';
+		this.restartPlaytestButton.addEventListener('click', () => {
+			if (this.playtesting) {
+				this.onStopPlaytest();
+			}
+			this.playtesting = true;
+			this.onPlaytest(this.getConfig());
+			this.refreshPlaytestButtons();
+		});
+
+		primaryToolbar.append(
 			toolPalette,
 			kindPalette,
 			this.controlSelect,
+			this.heuristicStrengthInput,
 			this.teamInput,
 			this.obstacleWidthInput,
-			this.obstacleHeightInput,
-			newButton,
-			this.playtestButton,
-			this.stopPlaytestButton
+			this.obstacleHeightInput
 		);
 
-		const palette = document.createElement('div');
-		palette.className = 'editor-palette';
-		for (const kind of ['player', 'stationary', 'simple-moving', 'bomber', 'super-bomber'] as TankKind[]) {
-			const chip = document.createElement('button');
-			chip.type = 'button';
-			chip.className = 'editor-chip';
-			chip.draggable = true;
-			chip.textContent = `Drop ${kind}`;
-			chip.addEventListener('click', () => {
-				if (this.kindSelect) this.kindSelect.value = kind;
-				if (this.toolSelect) this.toolSelect.value = 'tank';
-			});
-			chip.addEventListener('dragstart', (event) => {
-				event.dataTransfer?.setData('text/tank-kind', kind);
-			});
-			palette.appendChild(chip);
-		}
+		this.aiVsAiButton = document.createElement('button');
+		this.aiVsAiButton.type = 'button';
+		this.aiVsAiButton.className = 'control-button editor-toolbar-button';
+		this.aiVsAiButton.textContent = '🤖 AI vs AI';
+		this.aiVsAiButton.title = 'Toggle AI vs AI mode (all tanks scripted)';
+		this.aiVsAiButton.addEventListener('click', () => {
+			this.aiVsAiMode = !this.aiVsAiMode;
+			this.syncAiVsAiButton();
+			if (this.aiVsAiMode) {
+				const tanks = this.config.tanks ?? [];
+				for (const tank of tanks) {
+					tank.control = 'scripted';
+				}
+				this.persistToStorage();
+				this.refreshOverlay();
+				this.setStatus('AI vs AI mode on — all tanks set to scripted.');
+			} else {
+				this.setStatus('AI vs AI mode off — new tanks will use selected control.');
+			}
+		});
+
+		secondaryToolbar.append(
+			this.proceduralDifficultyInput,
+			this.proceduralSeedInput,
+			generateButton,
+			remixButton,
+			newButton,
+			this.aiVsAiButton,
+			this.playtestButton,
+			this.stopPlaytestButton,
+			this.restartPlaytestButton
+		);
+
+		topBar.append(primaryToolbar, secondaryToolbar, proceduralAxesRow);
 
 		this.status = document.createElement('p');
 		this.status.className = 'editor-status';
-		this.status.textContent =
-			'Drag a tank chip onto the arena, click-drag to move items, and use teams/controls for AI vs AI or human vs AI.';
+		this.status.textContent = 'Click-drag to move items, and use teams/controls for AI vs AI or human vs AI.';
 
 		const details = document.createElement('details');
 		details.className = 'editor-details';
@@ -414,11 +605,18 @@ export class LevelEditor {
 		this.jsonArea.className = 'editor-json';
 		jsonSection.append(jsonTitle, jsonButtons, this.jsonArea);
 
-		this.overlay.append(topBar, palette, this.status, details, jsonSection);
+		this.overlay.append(topBar, this.status, details, jsonSection);
 		this.syncPaletteButtons();
+		this.syncAiVsAiButton();
 		this.refreshOverlay();
 		this.refreshPlaytestButtons();
 		this.setVisible(false);
+	}
+
+	private syncAiVsAiButton(): void {
+		if (!this.aiVsAiButton) return;
+		this.aiVsAiButton.classList.toggle('active', this.aiVsAiMode);
+		this.aiVsAiButton.textContent = this.aiVsAiMode ? '🤖 AI vs AI ✓' : '🤖 AI vs AI';
 	}
 
 	private syncPaletteButtons(): void {
@@ -543,35 +741,40 @@ export class LevelEditor {
 			this.draftObstacleStart = null;
 			this.draftObstacleCurrent = null;
 		});
+	}
 
-		this.canvas.addEventListener('dragover', (event) => {
-			if (!this.visible || this.playtesting) return;
-			event.preventDefault();
-		});
-
-		this.canvas.addEventListener('drop', (event) => {
-			if (!this.visible || this.playtesting) return;
-			event.preventDefault();
-			const kind = (event.dataTransfer?.getData('text/tank-kind') ?? '') as TankKind;
-			if (!kind) return;
-			const point = this.getCanvasPoint(event);
-			if (this.kindSelect) this.kindSelect.value = kind;
-			if (this.toolSelect) this.toolSelect.value = 'tank';
-			this.addTankAt(point.x, point.y);
-			this.persistToStorage();
-			this.refreshOverlay();
-			this.draw();
-		});
+	private readProceduralAxes(): ProceduralAxes {
+		const read = (key: keyof ProceduralAxes, fallback: number): number => {
+			const input = this.proceduralAxisInputs[key];
+			const value = Number(input?.value ?? fallback);
+			return clamp(value, 0, 100) / 100;
+		};
+		return {
+			tacticalPressure: read('tacticalPressure', 45),
+			enemyDensity: read('enemyDensity', 45),
+			obstacleComplexity: read('obstacleComplexity', 45),
+			bomberPressure: read('bomberPressure', 35),
+			turretPressure: read('turretPressure', 45),
+			bouncePressure: read('bouncePressure', 35),
+		};
 	}
 
 	private addTankAt(x: number, y: number): void {
-		const kind = (this.kindSelect?.value ?? 'player') as TankKind;
+		const selectedKind = (this.kindSelect?.value ?? 'player') as PlaceableTankKind;
+		const kind = selectedKind === 'super-heuristic' ? 'super-bomber' : selectedKind;
 		const team = this.teamInput?.value.trim() || 'alpha';
 		const control = (this.controlSelect?.value ?? (kind === 'player' ? 'human' : 'scripted')) as ControlType;
 		this.config.tanks = this.config.tanks ?? [];
-		this.config.tanks.push(
-			makeTank(kind, team, control, x - TANK_SIZE / 2, y - TANK_SIZE / 2, this.config.tanks.length)
-		);
+		const candidate = makeTank(kind, team, control, x - TANK_SIZE / 2, y - TANK_SIZE / 2, this.config.tanks.length);
+		if (selectedKind === 'super-heuristic') {
+			const strength = Number(this.heuristicStrengthInput?.value ?? 11);
+			applySuperHeuristicDefaults(candidate, strength);
+		}
+		if (intersectsObstacle(tankRect(candidate), this.config.obstacles)) {
+			this.setStatus('Cannot place tank on an obstacle.');
+			return;
+		}
+		this.config.tanks.push(candidate);
 	}
 
 	private findDragTarget(x: number, y: number): DragTarget | null {
@@ -597,40 +800,69 @@ export class LevelEditor {
 		if (this.drag.kind === 'tank') {
 			const tank = this.config.tanks?.[this.drag.index];
 			if (!tank) return;
-			tank.x = clampTankX(x - this.drag.offsetX);
-			tank.y = clampTankY(y - this.drag.offsetY);
+			const nextX = clampTankX(x - this.drag.offsetX);
+			const nextY = clampTankY(y - this.drag.offsetY);
+			const nextRect = tankRect({ x: nextX, y: nextY });
+			if (!intersectsObstacle(nextRect, this.config.obstacles)) {
+				tank.x = nextX;
+				tank.y = nextY;
+			}
 			return;
 		}
 		const obstacle = this.config.obstacles[this.drag.index];
 		if (!obstacle) return;
-		obstacle.x = clamp(Math.round(x - this.drag.offsetX), 0, ARENA_WIDTH - obstacle.width);
-		obstacle.y = clamp(Math.round(y - this.drag.offsetY), 0, ARENA_HEIGHT - obstacle.height);
+		const nextObstacle = {
+			x: clamp(Math.round(x - this.drag.offsetX), 0, ARENA_WIDTH - obstacle.width),
+			y: clamp(Math.round(y - this.drag.offsetY), 0, ARENA_HEIGHT - obstacle.height),
+			width: obstacle.width,
+			height: obstacle.height,
+		};
+		const tanks = this.config.tanks ?? [];
+		if (
+			!intersectsObstacle(nextObstacle, this.config.obstacles, this.drag.index) &&
+			!intersectsTank(nextObstacle, tanks)
+		) {
+			obstacle.x = nextObstacle.x;
+			obstacle.y = nextObstacle.y;
+		}
 	}
 
 	private commitDraftObstacle(endX: number, endY: number): void {
+		const tanks = this.config.tanks ?? [];
+		let candidate: ObstacleConfig;
 		if (!this.draftObstacleStart) {
 			const width = clamp(Number(this.obstacleWidthInput?.value ?? DEFAULT_OBSTACLE_WIDTH), 8, ARENA_WIDTH);
 			const height = clamp(Number(this.obstacleHeightInput?.value ?? DEFAULT_OBSTACLE_HEIGHT), 8, ARENA_HEIGHT);
-			this.config.obstacles.push(sanitizeObstacle({ x: endX - width / 2, y: endY - height / 2, width, height }));
-			return;
-		}
-		const minX = Math.min(this.draftObstacleStart.x, endX);
-		const minY = Math.min(this.draftObstacleStart.y, endY);
-		const width = Math.abs(endX - this.draftObstacleStart.x);
-		const height = Math.abs(endY - this.draftObstacleStart.y);
-		if (width >= 8 && height >= 8) {
-			this.config.obstacles.push(sanitizeObstacle({ x: minX, y: minY, width, height }));
+			candidate = sanitizeObstacle({ x: endX - width / 2, y: endY - height / 2, width, height });
 		} else {
-			const fallbackWidth = clamp(Number(this.obstacleWidthInput?.value ?? DEFAULT_OBSTACLE_WIDTH), 8, ARENA_WIDTH);
-			const fallbackHeight = clamp(Number(this.obstacleHeightInput?.value ?? DEFAULT_OBSTACLE_HEIGHT), 8, ARENA_HEIGHT);
-			this.config.obstacles.push(
-				sanitizeObstacle({
+			const minX = Math.min(this.draftObstacleStart.x, endX);
+			const minY = Math.min(this.draftObstacleStart.y, endY);
+			const width = Math.abs(endX - this.draftObstacleStart.x);
+			const height = Math.abs(endY - this.draftObstacleStart.y);
+			if (width >= 8 && height >= 8) {
+				candidate = sanitizeObstacle({ x: minX, y: minY, width, height });
+			} else {
+				const fallbackWidth = clamp(Number(this.obstacleWidthInput?.value ?? DEFAULT_OBSTACLE_WIDTH), 8, ARENA_WIDTH);
+				const fallbackHeight = clamp(
+					Number(this.obstacleHeightInput?.value ?? DEFAULT_OBSTACLE_HEIGHT),
+					8,
+					ARENA_HEIGHT
+				);
+				candidate = sanitizeObstacle({
 					x: endX - fallbackWidth / 2,
 					y: endY - fallbackHeight / 2,
 					width: fallbackWidth,
 					height: fallbackHeight,
-				})
-			);
+				});
+			}
+		}
+
+		if (intersectsObstacle(candidate, this.config.obstacles)) {
+			this.setStatus('Obstacles cannot overlap each other.');
+		} else if (intersectsTank(candidate, tanks)) {
+			this.setStatus('Cannot place obstacle on top of a tank.');
+		} else {
+			this.config.obstacles.push(candidate);
 		}
 		this.draftObstacleStart = null;
 		this.draftObstacleCurrent = null;
@@ -720,16 +952,22 @@ export class LevelEditor {
 					'simple-moving',
 					'bomber',
 					'super-bomber',
-				] as TankKind[]) {
+					'super-heuristic',
+				] as PlaceableTankKind[]) {
 					const option = document.createElement('option');
 					option.value = value;
 					option.textContent = value;
 					kind.appendChild(option);
 				}
-				kind.value = tank.kind;
+				kind.value = isSuperHeuristicTank(tank) ? 'super-heuristic' : tank.kind;
 				kind.addEventListener('change', () => {
-					tank.kind = kind.value as TankKind;
+					const selectedKind = kind.value as PlaceableTankKind;
+					tank.kind = selectedKind === 'super-heuristic' ? 'super-bomber' : selectedKind;
 					Object.assign(tank, defaultTankForKind(tank.kind));
+					if (selectedKind === 'super-heuristic') {
+						const strength = Number(this.heuristicStrengthInput?.value ?? 11);
+						applySuperHeuristicDefaults(tank, strength);
+					}
 					this.persistToStorage();
 					this.refreshOverlay();
 					this.draw();
@@ -758,6 +996,32 @@ export class LevelEditor {
 					this.persistToStorage();
 				});
 
+				const heuristicStrength = document.createElement('input');
+				heuristicStrength.type = 'number';
+				heuristicStrength.className = 'editor-input compact';
+				heuristicStrength.min = '1';
+				heuristicStrength.max = '25';
+				heuristicStrength.step = '1';
+				heuristicStrength.title = 'Heuristic strength';
+				heuristicStrength.value = String(clamp(Math.round(tank.navigator?.aggressionFactor ?? 11), 1, 25));
+				heuristicStrength.style.display = tank.kind === 'super-bomber' ? 'inline-block' : 'none';
+				heuristicStrength.addEventListener('change', () => {
+					const nextStrength = clamp(Math.round(Number(heuristicStrength.value || '11')), 1, 25);
+					heuristicStrength.value = String(nextStrength);
+					if (tank.kind !== 'super-bomber') {
+						return;
+					}
+					tank.navigator = {
+						type: 'astar-avoidance',
+						aggressionFactor: nextStrength,
+						heuristicProfile: tank.navigator?.heuristicProfile ?? 'advanced',
+						tacticalRole: tank.navigator?.tacticalRole ?? 'pressure',
+					};
+					this.persistToStorage();
+					this.refreshOverlay();
+					this.draw();
+				});
+
 				const remove = document.createElement('button');
 				remove.type = 'button';
 				remove.className = 'control-button danger';
@@ -769,7 +1033,7 @@ export class LevelEditor {
 					this.draw();
 				});
 
-				row.append(kind, team, control, remove);
+				row.append(kind, team, control, heuristicStrength, remove);
 				this.tanksList?.appendChild(row);
 			});
 		}
@@ -839,6 +1103,149 @@ export class LevelEditor {
 	private refreshPlaytestButtons(): void {
 		if (this.playtestButton) this.playtestButton.disabled = this.playtesting;
 		if (this.stopPlaytestButton) this.stopPlaytestButton.disabled = !this.playtesting;
+		if (this.restartPlaytestButton) this.restartPlaytestButton.disabled = false;
+	}
+
+	private generateProceduralLevel(remixOnly: boolean): void {
+		const difficultyPct = clamp(Number(this.proceduralDifficultyInput?.value ?? 45), 0, 100);
+		const difficulty = difficultyPct / 100;
+		const axes = this.readProceduralAxes();
+		let seed = Number(this.proceduralSeedInput?.value ?? 0);
+		if (!Number.isFinite(seed)) {
+			seed = Math.floor(Date.now() % 100000);
+		}
+		const rng = (value: number): number => {
+			let t = value + 0x6d2b79f5;
+			t = Math.imul(t ^ (t >>> 15), t | 1);
+			t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+			return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+		};
+		let tick = seed;
+		const next = (): number => {
+			tick += 1;
+			return rng(tick);
+		};
+
+		const obstacleAxis = clamp((difficulty + axes.obstacleComplexity) * 0.5, 0, 1);
+		const enemyAxis = clamp((difficulty + axes.enemyDensity) * 0.5, 0, 1);
+		const tacticalAxis = clamp((difficulty + axes.tacticalPressure) * 0.5, 0, 1);
+		const bomberAxis = clamp((difficulty + axes.bomberPressure) * 0.5, 0, 1);
+		const turretAxis = clamp((difficulty + axes.turretPressure) * 0.5, 0, 1);
+		const bounceAxis = clamp((difficulty + axes.bouncePressure) * 0.5, 0, 1);
+
+		const obstacleCount = Math.max(0, Math.round(1 + obstacleAxis * 4 + next() * 2));
+		const enemyCount = Math.max(1, Math.round(1 + enemyAxis * 3 + next() * 1.5));
+
+		const existing = remixOnly ? deepClone(this.config) : deepClone(DEFAULT_LEVEL_CONFIG);
+		existing.obstacles = [];
+		existing.tanks = [];
+
+		for (let i = 0; i < obstacleCount; i += 1) {
+			const width = Math.round(40 + next() * (60 + 120 * obstacleAxis));
+			const height = Math.round(30 + next() * (50 + 120 * obstacleAxis));
+			let placed = false;
+			for (let attempt = 0; attempt < 30; attempt += 1) {
+				const candidate = sanitizeObstacle({
+					x: Math.round(180 + next() * (ARENA_WIDTH - 260 - width)),
+					y: Math.round(30 + next() * (ARENA_HEIGHT - 60 - height)),
+					width,
+					height,
+				});
+				if (!intersectsObstacle(candidate, existing.obstacles)) {
+					existing.obstacles.push(candidate);
+					placed = true;
+					break;
+				}
+			}
+			if (!placed) {
+				// Skip this obstacle when legal placement cannot be found quickly.
+				continue;
+			}
+		}
+
+		const placeTankLegal = (candidate: TankConfig): boolean => {
+			const rect = tankRect(candidate);
+			return !intersectsObstacle(rect, existing.obstacles) && !intersectsTank(rect, existing.tanks ?? []);
+		};
+
+		const alphaControl: ControlType = this.aiVsAiMode ? 'scripted' : 'human';
+		for (let attempt = 0; attempt < 40; attempt += 1) {
+			const player = makeTank('player', 'alpha', alphaControl, 80 + next() * 120, 180 + next() * 160, 0);
+			if (placeTankLegal(player)) {
+				existing.tanks.push(player);
+				break;
+			}
+		}
+		if (existing.tanks.length === 0) {
+			existing.tanks.push(makeTank('player', 'alpha', alphaControl, 80, 220, 0));
+		}
+
+		const kinds: TankKind[] = ['stationary', 'stationary-random-aim', 'simple-moving', 'bomber', 'super-bomber'];
+		for (let i = 0; i < enemyCount; i += 1) {
+			const progression = clamp(tacticalAxis * 0.65 + bomberAxis * 0.35, 0, 1);
+			const kindIndex = Math.min(kinds.length - 1, Math.floor(next() * (1 + progression * kinds.length)));
+			const kind = kinds[kindIndex];
+			for (let attempt = 0; attempt < 40; attempt += 1) {
+				const candidate = makeTank(
+					kind,
+					'beta',
+					'scripted',
+					ARENA_WIDTH - 220 - next() * 180,
+					40 + next() * (ARENA_HEIGHT - 80),
+					existing.tanks.length
+				);
+				if (placeTankLegal(candidate)) {
+					existing.tanks.push(candidate);
+					break;
+				}
+			}
+		}
+
+		for (const tank of existing.tanks) {
+			if (tank.team !== 'beta') {
+				continue;
+			}
+			if (tank.kind === 'stationary' && next() < 0.2 * tacticalAxis) {
+				tank.kind = 'stationary-random-aim';
+				Object.assign(tank, defaultTankForKind(tank.kind));
+			}
+			if (tank.kind === 'stationary-random-aim' && next() < 0.15 * tacticalAxis) {
+				tank.kind = 'simple-moving';
+				Object.assign(tank, defaultTankForKind(tank.kind));
+			}
+			if (tank.kind === 'simple-moving' && next() < 0.18 * bomberAxis) {
+				tank.kind = 'bomber';
+				Object.assign(tank, defaultTankForKind(tank.kind));
+			}
+			if ((tank.kind === 'bomber' || tank.kind === 'super-bomber') && !tank.bombs) {
+				tank.bombs = { type: 'basic', count: 1 };
+			}
+			if (next() < 0.45 * tacticalAxis) {
+				const ammoType = tank.ammo?.type ?? 'basic';
+				const ammoCount = Math.min(3, (tank.ammo?.count ?? 1) + 1);
+				tank.ammo = { type: ammoType, count: ammoCount };
+			}
+		}
+
+		existing.rules = normalizeRules({
+			tankHitPoints: Math.round(3 + difficulty * 2),
+			projectileDamage: Math.round(1 + tacticalAxis),
+			bombDamage: Math.round(2 + bomberAxis * 2),
+			invulnerabilityTicks: Math.round(8 - difficulty * 4),
+			projectileBounces: bounceAxis > 0.58,
+			turretSpeedMultiplier: 0.8 + turretAxis * 1.5,
+		});
+
+		this.config = this.sanitizeConfig(existing);
+		if (this.proceduralSeedInput) {
+			this.proceduralSeedInput.value = String(seed + 37);
+		}
+		this.persistToStorage();
+		this.refreshOverlay();
+		this.draw();
+		this.setStatus(
+			`Generated procedural level (difficulty ${difficultyPct}%, enemy ${Math.round(enemyAxis * 100)}%, obstacle ${Math.round(obstacleAxis * 100)}%).`
+		);
 	}
 
 	private applyJson(): void {
@@ -915,7 +1322,7 @@ export class LevelEditor {
 		ctx.fillStyle = '#eef5ff';
 		ctx.font = '13px Consolas, monospace';
 		ctx.fillText(`Tanks ${tanks.length} | Teams ${teams.size} | Obstacles ${this.config.obstacles.length}`, 20, 34);
-		ctx.fillText(`Drop tanks for AI vs AI, and set any tank control to human for player input`, 20, 54);
+		ctx.fillText(`Use Tank tool to place units; set any tank control to human for player input`, 20, 54);
 	}
 
 	private getCanvasPoint(event: MouseEvent | DragEvent): { x: number; y: number } {
