@@ -1,6 +1,5 @@
 import { PastelColorPalette } from '../../ui/PastelColorPalette';
-import type { AmmoType, BombType, EnemyType } from '../LevelConfig';
-import type { TankKind } from './types';
+import type { AmmoType, BombType, EnemyType, TankKind } from '../LevelConfig';
 
 export interface ProjectileSpec {
 	speed: number;

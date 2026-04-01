@@ -2,6 +2,8 @@ export type AmmoType = 'basic' | 'super';
 export type BombType = 'basic' | 'love';
 export type NavigatorType = 'simple' | 'astar' | 'astar-avoidance';
 export type EnemyType = 'stationary' | 'stationary-random-aim' | 'simple-moving' | 'bomber' | 'super-bomber';
+export type TankKind = 'player' | EnemyType;
+export type ControlType = 'human' | 'scripted';
 
 export interface ObstacleConfig {
 	x: number;
@@ -31,6 +33,19 @@ export interface PlayerConfig {
 	y: number;
 }
 
+export interface TankConfig {
+	id?: string;
+	team: string;
+	kind: TankKind;
+	x: number;
+	y: number;
+	control?: ControlType;
+	color?: string;
+	ammo?: { type: AmmoType; count: number };
+	bombs?: { type: BombType; count: number };
+	navigator?: NavigatorConfig;
+}
+
 export interface MatchRulesConfig {
 	tankHitPoints?: number;
 	projectileDamage?: number;
@@ -42,9 +57,55 @@ export interface MatchRulesConfig {
 
 export interface LevelConfig {
 	obstacles: ObstacleConfig[];
-	enemies: EnemyConfig[];
-	player: PlayerConfig;
+	enemies?: EnemyConfig[];
+	player?: PlayerConfig;
+	tanks?: TankConfig[];
 	rules?: MatchRulesConfig;
+}
+
+export function getLevelTankConfigs(level: LevelConfig): TankConfig[] {
+	if (Array.isArray(level.tanks) && level.tanks.length > 0) {
+		return level.tanks.map((tank, index) => ({
+			id: tank.id ?? `tank-${index}`,
+			team: tank.team,
+			kind: tank.kind,
+			x: tank.x,
+			y: tank.y,
+			control: tank.control,
+			color: tank.color,
+			ammo: tank.ammo ? { ...tank.ammo } : undefined,
+			bombs: tank.bombs ? { ...tank.bombs } : undefined,
+			navigator: tank.navigator ? { ...tank.navigator } : undefined,
+		}));
+	}
+
+	const tanks: TankConfig[] = [];
+	if (level.player) {
+		tanks.push({
+			id: 'player-0',
+			team: 'player',
+			kind: 'player',
+			x: level.player.x,
+			y: level.player.y,
+			control: 'human',
+		});
+	}
+
+	for (const [index, enemy] of (level.enemies ?? []).entries()) {
+		tanks.push({
+			id: `enemy-${index}`,
+			team: 'enemy',
+			kind: enemy.type,
+			x: enemy.x,
+			y: enemy.y,
+			control: 'scripted',
+			ammo: enemy.ammo ? { ...enemy.ammo } : undefined,
+			bombs: enemy.bombs ? { ...enemy.bombs } : undefined,
+			navigator: enemy.navigator ? { ...enemy.navigator } : undefined,
+		});
+	}
+
+	return tanks;
 }
 
 export const LEVEL_CONFIGS: LevelConfig[] = [

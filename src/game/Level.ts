@@ -1,7 +1,7 @@
 import { InputManager } from '../utils/InputManager';
 import { AudioManager } from './AudioManager';
 import { GameCanvas } from './GameCanvas';
-import type { LevelConfig } from './LevelConfig';
+import { getLevelTankConfigs, type LevelConfig } from './LevelConfig';
 import { HumanInputController } from './controllers/HumanInputController';
 import { createMatchBootstrap } from './core/MatchFactory';
 import { Simulation } from './core/Simulation';
@@ -29,7 +29,10 @@ export class Level {
 		this.audioManager = options.audioManager;
 
 		let playerController = options.playerController;
-		if (!this.headless) {
+		const hasHumanTank = getLevelTankConfigs(config).some(
+			(tank) => (tank.control ?? (tank.kind === 'player' ? 'human' : 'scripted')) === 'human'
+		);
+		if (!this.headless && hasHumanTank) {
 			const gameCanvasElement = document.querySelector('#game-canvas') as HTMLCanvasElement;
 			this.inputManager = new InputManager(gameCanvasElement);
 			playerController = playerController ?? new HumanInputController(this.inputManager);

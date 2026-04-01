@@ -268,8 +268,22 @@ p {
 	color: #effff5;
 }
 
+.control-button.active {
+	background: linear-gradient(135deg, rgba(255, 122, 24, 0.26), rgba(123, 223, 242, 0.16)), rgba(255, 255, 255, 0.1);
+	box-shadow:
+		inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+		0 10px 22px rgba(0, 0, 0, 0.2);
+}
+
+.control-button.danger {
+	background: linear-gradient(135deg, rgba(255, 100, 116, 0.24), rgba(255, 122, 24, 0.1)), rgba(255, 255, 255, 0.05);
+}
+
 .canvas-frame {
 	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
 	padding: 10px;
 	border-radius: calc(var(--radius-xl) - 8px);
 	background:
@@ -288,6 +302,185 @@ p {
 	border: 1px solid rgba(255, 255, 255, 0.08);
 	box-shadow: 0 0 0 6px rgba(7, 14, 23, 0.65);
 	cursor: none;
+}
+
+.game-canvas.editor-active {
+	cursor: crosshair;
+}
+
+.editor-overlay {
+	position: static;
+	max-height: 420px;
+	overflow: auto;
+	padding: 10px;
+	border-radius: var(--radius-md);
+	border: 1px solid rgba(255, 255, 255, 0.12);
+	background: rgba(6, 12, 22, 0.86);
+	backdrop-filter: blur(10px);
+	box-shadow: 0 16px 32px rgba(0, 0, 0, 0.3);
+	display: grid;
+	gap: 12px;
+}
+
+.editor-topbar,
+.editor-toolbar,
+.editor-palette {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	align-items: center;
+}
+
+.editor-tool-palette,
+.editor-kind-palette {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.editor-palette-button {
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	border-radius: 999px;
+	padding: 8px 12px;
+	background: rgba(255, 255, 255, 0.08);
+	color: var(--text);
+	cursor: pointer;
+	font-weight: 700;
+}
+
+.editor-palette-button.active {
+	background: linear-gradient(135deg, rgba(255, 122, 24, 0.22), rgba(123, 223, 242, 0.14)), rgba(255, 255, 255, 0.1);
+	border-color: rgba(255, 190, 131, 0.55);
+}
+
+.editor-palette {
+	padding-top: 2px;
+}
+
+.editor-chip {
+	border: 1px solid rgba(255, 255, 255, 0.12);
+	border-radius: 999px;
+	padding: 8px 12px;
+	background: rgba(255, 255, 255, 0.08);
+	color: var(--text);
+	cursor: grab;
+}
+
+.editor-chip:active {
+	cursor: grabbing;
+}
+
+.editor-select,
+.editor-input {
+	border-radius: 10px;
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	background: rgba(7, 14, 24, 0.82);
+	color: var(--text);
+	padding: 8px 10px;
+	min-height: 38px;
+	min-width: 86px;
+}
+
+.editor-input.compact {
+	width: 86px;
+	min-width: 86px;
+}
+
+.editor-status {
+	color: #d3def4;
+	font-size: 0.92rem;
+	line-height: 1.35;
+}
+
+.editor-inspector {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 12px;
+}
+
+.editor-section {
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: var(--radius-md);
+	padding: 12px;
+	background: rgba(6, 13, 22, 0.6);
+	display: grid;
+	gap: 10px;
+}
+
+.editor-section h3 {
+	font-size: 1rem;
+	letter-spacing: -0.02em;
+}
+
+.editor-field-row,
+.editor-list-row,
+.editor-rules-grid {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+}
+
+.editor-list-row.selected {
+	outline: 1px solid rgba(123, 223, 242, 0.6);
+	border-radius: 8px;
+	padding: 4px;
+}
+
+.editor-list {
+	display: grid;
+	gap: 8px;
+	max-height: 180px;
+	overflow: auto;
+	padding-right: 4px;
+}
+
+.editor-empty {
+	color: var(--muted);
+	font-size: 0.9rem;
+	margin: 0;
+}
+
+.editor-rule-row {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 10px;
+	width: min(240px, 100%);
+}
+
+.editor-rule-row span {
+	color: var(--muted);
+	font-size: 0.9rem;
+}
+
+.editor-json {
+	width: 100%;
+	min-height: 140px;
+	resize: vertical;
+	background: rgba(6, 13, 22, 0.72);
+	border: 1px solid rgba(255, 255, 255, 0.12);
+	border-radius: var(--radius-md);
+	color: #dbe8ff;
+	padding: 12px;
+	font:
+		12px/1.35 Consolas,
+		'Courier New',
+		monospace;
+}
+
+.editor-details {
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	border-radius: var(--radius-md);
+	padding: 8px;
+	background: rgba(9, 16, 27, 0.6);
+}
+
+.editor-details summary {
+	cursor: pointer;
+	font-weight: 700;
+	color: #dbe8ff;
+	margin-bottom: 8px;
 }
 
 .level-grid {
@@ -590,6 +783,14 @@ p {
 	.hero-status {
 		width: 100%;
 	}
+
+	.editor-inspector {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.editor-overlay {
+		max-height: 360px;
+	}
 }
 
 @media (max-width: 800px) {
@@ -616,6 +817,18 @@ p {
 
 	.stage-actions {
 		justify-content: flex-start;
+	}
+
+	.editor-toolbar {
+		justify-content: flex-start;
+	}
+
+	.editor-overlay {
+		max-height: 320px;
+	}
+
+	.editor-inspector {
+		grid-template-columns: 1fr;
 	}
 }
 

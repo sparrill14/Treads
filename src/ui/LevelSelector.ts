@@ -3,15 +3,16 @@ import { AudioManager } from '../game/AudioManager';
 import { NeuralNetController } from '../game/controllers/NeuralNetController';
 import type { TankController } from '../game/core/types';
 import { Level } from '../game/Level';
-import { LEVEL_CONFIGS } from '../game/LevelConfig';
+import { LEVEL_CONFIGS, type LevelConfig } from '../game/LevelConfig';
 import { DashboardApiClient, type ModelStatus, type RunsResponse } from './dashboardApi';
+import { LevelEditor } from './LevelEditor';
 import { ReplayViewer } from './ReplayViewer';
 import { TrainingDashboard } from './TrainingDashboard';
 
 function levelSubtitle(levelNumber: number): string {
 	const config = LEVEL_CONFIGS[levelNumber - 1];
 	const tags = [
-		`${config.enemies.length} enemies`,
+		`${config.enemies?.length ?? 0} enemies`,
 		`${config.obstacles.length} obstacles`,
 		config.rules?.projectileBounces === false ? 'no bounces' : 'bounces on',
 	];
@@ -41,8 +42,12 @@ export class LevelSelector {
 	private modelStatus: ModelStatus | null = null;
 	private replayViewer: ReplayViewer | null = null;
 	private trainingDashboard: TrainingDashboard | null = null;
+	private levelEditor: LevelEditor | null = null;
+	private editorMode = false;
+	private editorPlaying = false;
 
 	private aiToggleBtn: HTMLButtonElement | null = null;
+	private editorToggleBtn: HTMLButtonElement | null = null;
 	private modelBadge: HTMLDivElement | null = null;
 	private stageModeBadge: HTMLDivElement | null = null;
 	private stageTitle: HTMLHeadingElement | null = null;
@@ -50,6 +55,7 @@ export class LevelSelector {
 	private heroMeta: HTMLDivElement | null = null;
 	private levelGrid: HTMLDivElement | null = null;
 	private canvas: HTMLCanvasElement | null = null;
+	private canvasFrame: HTMLDivElement | null = null;
 
 	public constructor(levels: number) {
 		this.numLevels = levels;
@@ -138,17 +144,25 @@ export class LevelSelector {
 			void this.toggleAiMode();
 		});
 
-		stageActions.append(this.stageModeBadge, this.modelBadge, this.aiToggleBtn);
+		this.editorToggleBtn = document.createElement('button');
+		this.editorToggleBtn.type = 'button';
+		this.editorToggleBtn.className = 'control-button';
+		this.editorToggleBtn.textContent = 'Level Editor';
+		this.editorToggleBtn.addEventListener('click', () => {
+			this.setEditorMode(!this.editorMode);
+		});
+
+		stageActions.append(this.stageModeBadge, this.modelBadge, this.aiToggleBtn, this.editorToggleBtn);
 		stageHeader.append(stageCopy, stageActions);
 
-		const canvasFrame = document.createElement('div');
-		canvasFrame.className = 'canvas-frame';
+		this.canvasFrame = document.createElement('div');
+		this.canvasFrame.className = 'canvas-frame';
 		this.canvas = document.createElement('canvas');
 		this.canvas.id = 'game-canvas';
 		this.canvas.className = 'game-canvas';
-		canvasFrame.appendChild(this.canvas);
+		this.canvasFrame.appendChild(this.canvas);
 
-		stageCard.append(stageHeader, canvasFrame);
+		stageCard.append(stageHeader, this.canvasFrame);
 
 		const levelPanel = document.createElement('div');
 		levelPanel.className = 'panel-card level-panel';
@@ -194,8 +208,27 @@ export class LevelSelector {
 		if (!this.canvas) {
 			throw new Error('Game canvas was not created.');
 		}
+		if (!this.canvasFrame) {
+			throw new Error('Canvas frame was not created.');
+		}
+
+		this.levelEditor = new LevelEditor({
+			canvas: this.canvas,
+			onPlaytest: (config) => {
+				this.startEditorPlaytest(config);
+			},
+			onStopPlaytest: () => {
+				this.stopEditorPlaytest();
+			},
+		});
+		this.levelEditor.mount(this.canvasFrame);
+		this.levelEditor.setVisible(false);
+
 		this.replayViewer = new ReplayViewer(this.api, {
 			onReplayLoaded: (summary) => {
+				if (this.editorMode) {
+					this.setEditorMode(false);
+				}
 				this.activeLevel?.stop();
 				if (this.stageModeBadge) {
 					this.stageModeBadge.className = 'status-pill running';
@@ -238,6 +271,9 @@ export class LevelSelector {
 			card.type = 'button';
 			card.className = `level-card${level === this.activeLevelNumber ? ' selected' : ''}`;
 			card.addEventListener('click', () => {
+				if (this.editorMode) {
+					this.setEditorMode(false);
+				}
 				this.activeLevelNumber = level;
 				this.updateStageLabels();
 				this.renderLevelGrid();
@@ -251,7 +287,7 @@ export class LevelSelector {
 			const title = document.createElement('strong');
 			title.textContent = `Level ${level}`;
 			const meta = document.createElement('span');
-			meta.textContent = `${config.enemies.length} enemy | ${config.obstacles.length} obstacle`;
+			meta.textContent = `${config.enemies?.length ?? 0} enemy | ${config.obstacles.length} obstacle`;
 			const rules = document.createElement('small');
 			rules.textContent = config.rules?.projectileBounces === false ? 'No bounce ruleset' : 'Standard bounce ruleset';
 			card.append(title, meta, rules);
@@ -345,6 +381,10 @@ export class LevelSelector {
 				? `Model ${this.modelStatus.runId === '__root__' ? 'current output' : (this.modelStatus.runId ?? 'ready')}`
 				: 'Model unavailable';
 		}
+		if (this.editorToggleBtn) {
+			this.editorToggleBtn.classList.toggle('active', this.editorMode);
+			this.editorToggleBtn.textContent = this.editorMode ? 'Exit Editor' : 'Level Editor';
+		}
 	}
 
 	private async reloadAiController(): Promise<void> {
@@ -381,6 +421,17 @@ export class LevelSelector {
 	}
 
 	private updateStageLabels(): void {
+		if (this.editorMode) {
+			if (this.stageTitle) {
+				this.stageTitle.textContent = this.editorPlaying ? 'Custom Level Playtest' : 'Custom Level Editor';
+			}
+			if (this.stageSubtitle) {
+				this.stageSubtitle.textContent = this.editorPlaying
+					? 'Testing your custom map in the live arena'
+					: 'Use tools below to place units, draw obstacles, and tune rules';
+			}
+			return;
+		}
 		if (this.stageTitle) {
 			this.stageTitle.textContent = `Level ${this.activeLevelNumber}`;
 		}
@@ -390,6 +441,9 @@ export class LevelSelector {
 	}
 
 	private startActiveLevel(): void {
+		if (this.editorMode) {
+			return;
+		}
 		if (this.replayViewer?.hasActiveReplay()) {
 			return;
 		}
@@ -408,5 +462,78 @@ export class LevelSelector {
 			this.stageModeBadge.className = 'status-pill idle';
 			this.stageModeBadge.textContent = this.aiMode ? 'AI live' : 'Live arena';
 		}
+	}
+
+	private setEditorMode(enabled: boolean): void {
+		if (!this.levelEditor) {
+			return;
+		}
+		if (enabled === this.editorMode) {
+			return;
+		}
+
+		if (enabled) {
+			if (this.replayViewer?.hasActiveReplay()) {
+				this.replayViewer.exitReplay();
+			}
+			this.activeLevel?.stop();
+			this.activeLevel = null;
+			this.editorMode = true;
+			this.editorPlaying = false;
+			this.levelEditor.setVisible(true);
+			this.levelEditor.setPlaytesting(false);
+			if (this.stageModeBadge) {
+				this.stageModeBadge.className = 'status-pill running';
+				this.stageModeBadge.textContent = 'Editor';
+			}
+			this.updateStageLabels();
+			this.updateAiControls();
+			return;
+		}
+
+		this.stopEditorPlaytest();
+		this.editorMode = false;
+		this.editorPlaying = false;
+		this.levelEditor.setVisible(false);
+		this.updateAiControls();
+		this.startActiveLevel();
+	}
+
+	private startEditorPlaytest(config: LevelConfig): void {
+		if (!this.editorMode) {
+			return;
+		}
+		this.activeLevel?.stop();
+		const playerController = this.aiMode ? (this.aiController ?? undefined) : undefined;
+		this.activeLevel = new Level(config, {
+			audioManager: this.audioManager,
+			seed: 9991,
+			playerController,
+		});
+		this.activeLevel.start();
+		this.editorPlaying = true;
+		this.levelEditor?.setPlaytesting(true);
+		if (this.stageModeBadge) {
+			this.stageModeBadge.className = 'status-pill running';
+			this.stageModeBadge.textContent = this.aiMode ? 'Editor AI playtest' : 'Editor playtest';
+		}
+		this.updateStageLabels();
+	}
+
+	private stopEditorPlaytest(): void {
+		if (!this.editorMode) {
+			return;
+		}
+		if (this.activeLevel) {
+			this.activeLevel.stop();
+			this.activeLevel = null;
+		}
+		this.editorPlaying = false;
+		this.levelEditor?.setPlaytesting(false);
+		if (this.stageModeBadge) {
+			this.stageModeBadge.className = 'status-pill running';
+			this.stageModeBadge.textContent = 'Editor';
+		}
+		this.updateStageLabels();
 	}
 }

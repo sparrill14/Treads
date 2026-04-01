@@ -1093,18 +1093,34 @@ function applySpawnJitter(config: LevelConfig, seed: number): LevelConfig {
 	const jitter = () => rng.nextRange(-JITTER, JITTER);
 	const clampX = (x: number) => Math.max(0, Math.min(ARENA_WIDTH - TANK_SIZE, x));
 	const clampY = (y: number) => Math.max(0, Math.min(ARENA_HEIGHT - TANK_SIZE, y));
-	return {
+	const jittered: LevelConfig = {
 		...config,
-		player: {
+	};
+
+	if (config.player) {
+		jittered.player = {
 			x: clampX(config.player.x + jitter()),
 			y: clampY(config.player.y + jitter()),
-		},
-		enemies: config.enemies.map((e) => ({
-			...e,
-			x: clampX(e.x + jitter()),
-			y: clampY(e.y + jitter()),
-		})),
-	};
+		};
+	}
+
+	if (config.enemies) {
+		jittered.enemies = config.enemies.map((enemy) => ({
+			...enemy,
+			x: clampX(enemy.x + jitter()),
+			y: clampY(enemy.y + jitter()),
+		}));
+	}
+
+	if (config.tanks) {
+		jittered.tanks = config.tanks.map((tank) => ({
+			...tank,
+			x: clampX(tank.x + jitter()),
+			y: clampY(tank.y + jitter()),
+		}));
+	}
+
+	return jittered;
 }
 
 function collectRollout(

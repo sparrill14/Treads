@@ -1,6 +1,12 @@
 import { PassiveTankController } from '../controllers/ReplayController';
 import { ScriptedEnemyController } from '../controllers/ScriptedEnemyController';
-import type { EnemyConfig, LevelConfig, NavigatorType } from '../LevelConfig';
+import {
+	getLevelTankConfigs,
+	type LevelConfig,
+	type NavigatorType,
+	type TankConfig,
+	type TankKind,
+} from '../LevelConfig';
 import { getTankSpec } from './specs';
 import type { GameState, MatchBootstrap, MatchRules, TankController, TankStateView } from './types';
 
@@ -34,11 +40,14 @@ function createMatchRules(levelConfig: LevelConfig, options: MatchFactoryOptions
 	};
 }
 
-function getNavigationMode(enemy: EnemyConfig): 'stationary' | NavigatorType {
-	if (enemy.type === 'stationary' || enemy.type === 'stationary-random-aim') {
+function getNavigationMode(kind: TankKind, navigatorType: NavigatorType | undefined): 'stationary' | NavigatorType {
+	if (kind === 'stationary' || kind === 'stationary-random-aim') {
 		return 'stationary';
 	}
-	return enemy.navigator?.type ?? 'astar';
+	if (kind === 'player') {
+		return navigatorType ?? 'simple';
+	}
+	return navigatorType ?? 'astar';
 }
 
 function getRecalculationInterval(navigationMode: 'stationary' | NavigatorType): number {
@@ -54,19 +63,24 @@ function getRecalculationInterval(navigationMode: 'stationary' | NavigatorType):
 	}
 }
 
-function createPlayerTankState(id: string, config: LevelConfig['player'], rules: MatchRules): TankStateView {
-	const spec = getTankSpec('player');
+function createTankState(id: string, config: TankConfig, rules: MatchRules): TankStateView {
+	const spec = getTankSpec(config.kind);
 	const hitPoints = rules.tankHitPoints;
+	const defaultAmmo = config.kind === 'super-bomber' ? 'super' : 'basic';
+	const defaultBombCount =
+		config.kind === 'bomber' || config.kind === 'super-bomber' ? 2 : config.kind === 'player' ? 2 : 0;
+	const defaultBombType = config.kind === 'super-bomber' ? 'love' : 'basic';
+	const bombCount = config.bombs?.count ?? defaultBombCount;
 	return {
 		id,
 		controllerId: id,
-		team: 'player',
-		kind: 'player',
+		team: config.team,
+		kind: config.kind,
 		x: config.x,
 		y: config.y,
 		size: spec.size,
 		speed: spec.speed,
-		color: spec.color,
+		color: config.color ?? spec.color,
 		aimAngle: 0,
 		aimTargetX: null,
 		aimTargetY: null,
@@ -74,49 +88,10 @@ function createPlayerTankState(id: string, config: LevelConfig['player'], rules:
 		maxHealth: hitPoints,
 		invulnerabilityTicksRemaining: 0,
 		destroyed: false,
-		ammoType: 'basic',
-		maxAmmo: 5,
+		ammoType: config.ammo?.type ?? defaultAmmo,
+		maxAmmo: config.ammo?.count ?? (config.kind === 'player' ? 5 : 1),
 		activeAmmo: 0,
-		bombType: 'basic',
-		maxBombs: 2,
-		activeBombs: 0,
-		shotCooldownTicks: spec.initialShotCooldownTicks,
-		shotCooldownTicksOnFire: spec.shotCooldownTicksOnFire,
-		bombCooldownTicks: spec.initialBombCooldownTicks,
-		bombCooldownTicksOnPlant: spec.bombCooldownTicksOnPlant,
-		wasLastMoveBlocked: false,
-		lastMoveIntent: 'none',
-		consecutiveDirectionMoves: 0,
-		aggressionFactor: spec.aggressionFactor,
-	};
-}
-
-function createEnemyTankState(id: string, config: EnemyConfig, rules: MatchRules): TankStateView {
-	const spec = getTankSpec(config.type);
-	const aggressionFactor = config.navigator?.aggressionFactor ?? spec.aggressionFactor;
-	const bombCount = config.bombs?.count ?? 0;
-	const hitPoints = rules.tankHitPoints;
-	return {
-		id,
-		controllerId: id,
-		team: 'enemy',
-		kind: config.type,
-		x: config.x,
-		y: config.y,
-		size: spec.size,
-		speed: spec.speed,
-		color: spec.color,
-		aimAngle: 0,
-		aimTargetX: null,
-		aimTargetY: null,
-		health: hitPoints,
-		maxHealth: hitPoints,
-		invulnerabilityTicksRemaining: 0,
-		destroyed: false,
-		ammoType: config.ammo?.type ?? (config.type === 'super-bomber' ? 'super' : 'basic'),
-		maxAmmo: config.ammo?.count ?? 1,
-		activeAmmo: 0,
-		bombType: bombCount > 0 ? (config.bombs?.type ?? 'basic') : null,
+		bombType: bombCount > 0 ? (config.bombs?.type ?? defaultBombType) : null,
 		maxBombs: bombCount,
 		activeBombs: 0,
 		shotCooldownTicks: spec.initialShotCooldownTicks,
@@ -126,7 +101,7 @@ function createEnemyTankState(id: string, config: EnemyConfig, rules: MatchRules
 		wasLastMoveBlocked: false,
 		lastMoveIntent: 'none',
 		consecutiveDirectionMoves: 0,
-		aggressionFactor: aggressionFactor,
+		aggressionFactor: config.navigator?.aggressionFactor ?? spec.aggressionFactor,
 	};
 }
 
@@ -136,11 +111,11 @@ export function createInitialGameState(
 	options: MatchFactoryOptions = {}
 ): GameState {
 	const rules = createMatchRules(levelConfig, options);
-	const playerTankId = 'player-0';
-	const tanks: TankStateView[] = [createPlayerTankState(playerTankId, levelConfig.player, rules)];
-	levelConfig.enemies.forEach((enemy, index) => {
-		tanks.push(createEnemyTankState(`enemy-${index}`, enemy, rules));
-	});
+	const tankConfigs = getLevelTankConfigs(levelConfig);
+	const tanks = tankConfigs.map((tankConfig, index) =>
+		createTankState(tankConfig.id ?? `tank-${index}`, tankConfig, rules)
+	);
+	const playerTank = tankConfigs.find((tank) => tank.team === 'player' || tank.control === 'human') ?? null;
 	return {
 		seed,
 		rngState: seed >>> 0,
@@ -149,7 +124,8 @@ export function createInitialGameState(
 		status: 'running',
 		rules,
 		arena: { width: 1000, height: 500 },
-		playerTankId,
+		playerTankId: playerTank?.id ?? null,
+		winnerTeam: null,
 		nextEntityId: 1,
 		obstacles: levelConfig.obstacles.map((obstacle, index) => ({
 			id: `obstacle-${index}`,
@@ -168,20 +144,27 @@ export function createDefaultControllers(
 	levelConfig: LevelConfig,
 	options: MatchFactoryOptions = {}
 ): Record<string, TankController> {
-	const controllers: Record<string, TankController> = {
-		'player-0': options.playerController ?? new PassiveTankController(),
-	};
-	levelConfig.enemies.forEach((enemy, index) => {
-		const navigationMode = getNavigationMode(enemy);
-		controllers[`enemy-${index}`] = new ScriptedEnemyController({
+	const controllers: Record<string, TankController> = {};
+	let humanAssigned = false;
+	for (const [index, tank] of getLevelTankConfigs(levelConfig).entries()) {
+		const tankId = tank.id ?? `tank-${index}`;
+		const control = tank.control ?? (tank.kind === 'player' ? 'human' : 'scripted');
+		if (control === 'human' && !humanAssigned) {
+			controllers[tankId] = options.playerController ?? new PassiveTankController();
+			humanAssigned = true;
+			continue;
+		}
+
+		const navigationMode = getNavigationMode(tank.kind, tank.navigator?.type);
+		controllers[tankId] = new ScriptedEnemyController({
 			navigationMode,
-			randomAim: enemy.type === 'stationary-random-aim',
+			randomAim: tank.kind === 'stationary-random-aim',
 			recalculationInterval: getRecalculationInterval(navigationMode),
-			aggressionFactor: enemy.navigator?.aggressionFactor ?? getTankSpec(enemy.type).aggressionFactor,
-			heuristicProfile: enemy.navigator?.heuristicProfile,
-			tacticalRole: enemy.navigator?.tacticalRole,
+			aggressionFactor: tank.navigator?.aggressionFactor ?? getTankSpec(tank.kind).aggressionFactor,
+			heuristicProfile: tank.navigator?.heuristicProfile,
+			tacticalRole: tank.navigator?.tacticalRole,
 		});
-	});
+	}
 	return controllers;
 }
 

@@ -127,13 +127,13 @@ export class GameRenderer {
 	}
 
 	private drawTanks(state: DeepReadonly<GameState>, previousState: GameState | null, alpha: number): void {
-		const enemyTanks = state.tanks.filter((tank) => tank.team === 'enemy');
-		const playerTank = state.tanks.find((tank) => tank.team === 'player') ?? null;
-		for (const tank of enemyTanks) {
-			this.drawTank(tank, previousState, alpha, false);
-		}
-		if (playerTank) {
-			this.drawTank(playerTank, previousState, alpha, true);
+		const tanks = [...state.tanks].sort((left, right) => {
+			if (left.team === 'player' && right.team !== 'player') return 1;
+			if (left.team !== 'player' && right.team === 'player') return -1;
+			return left.id.localeCompare(right.id);
+		});
+		for (const tank of tanks) {
+			this.drawTank(tank, previousState, alpha, tank.team === 'player');
 		}
 	}
 
@@ -240,12 +240,23 @@ export class GameRenderer {
 		if (state.status === 'running') {
 			return;
 		}
-		const message = state.status === 'player_win' ? 'Win' : 'Lose';
+		let message = 'Draw';
+		let color = '#d8d8d8';
+		if (state.status === 'player_win') {
+			message = 'Win';
+			color = 'green';
+		} else if (state.status === 'enemy_win') {
+			message = 'Lose';
+			color = 'red';
+		} else if (state.status === 'team_win') {
+			message = state.winnerTeam ? `${state.winnerTeam} wins` : 'Team wins';
+			color = '#6ef3a5';
+		}
 		const fontSize = 100;
 		this.context.font = `${fontSize}px Arial`;
 		this.context.lineWidth = 5;
-		this.context.strokeStyle = state.status === 'player_win' ? 'green' : 'red';
-		this.context.fillStyle = state.status === 'player_win' ? 'green' : 'red';
+		this.context.strokeStyle = color;
+		this.context.fillStyle = color;
 		const textWidth = this.context.measureText(message).width;
 		const x = (this.canvas.width - textWidth) / 2;
 		const y = this.canvas.height / 2 + fontSize / 2;

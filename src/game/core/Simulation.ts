@@ -61,8 +61,7 @@ interface SharedObservationViews {
 	obstacles: GameState['obstacles'];
 	projectiles: GameState['projectiles'];
 	bombs: GameState['bombs'];
-	playerTeam: GameState['tanks'];
-	enemyTeam: GameState['tanks'];
+	tanks: GameState['tanks'];
 }
 
 export interface SimulationOptions {
@@ -131,8 +130,7 @@ export class Simulation {
 	private sharedObstacles: ObstacleStateView[] = [];
 	private sharedProjectiles: ProjectileStateView[] = [];
 	private sharedBombs: BombStateView[] = [];
-	private sharedPlayerTeam: TankStateView[] = [];
-	private sharedEnemyTeam: TankStateView[] = [];
+	private sharedTanks: TankStateView[] = [];
 
 	// Profiling
 	private profilingStats: ProfilingStats = emptyProfilingStats();
@@ -292,8 +290,7 @@ export class Simulation {
 				obstacles: cloneJson(this.state.obstacles),
 				projectiles: cloneJson(this.state.projectiles),
 				bombs: cloneJson(this.state.bombs),
-				playerTeam: cloneJson(this.state.tanks.filter((tank) => tank.team === 'player')),
-				enemyTeam: cloneJson(this.state.tanks.filter((tank) => tank.team === 'enemy')),
+				tanks: cloneJson(this.state.tanks),
 			};
 		}
 
@@ -318,16 +315,10 @@ export class Simulation {
 			copyBomb(bombs[i], this.sharedBombs[i]);
 		}
 
-		let pCount = 0,
-			eCount = 0;
-		for (const tank of this.state.tanks) {
-			if (tank.team === 'player') {
-				this.ensureArrayCapacity(this.sharedPlayerTeam, pCount + 1, blankTank);
-				copyTank(tank, this.sharedPlayerTeam[pCount++]);
-			} else {
-				this.ensureArrayCapacity(this.sharedEnemyTeam, eCount + 1, blankTank);
-				copyTank(tank, this.sharedEnemyTeam[eCount++]);
-			}
+		const tanks = this.state.tanks;
+		this.ensureArrayCapacity(this.sharedTanks, tanks.length, blankTank);
+		for (let i = 0; i < tanks.length; i++) {
+			copyTank(tanks[i], this.sharedTanks[i]);
 		}
 
 		return {
@@ -336,8 +327,7 @@ export class Simulation {
 			obstacles: this.sharedObstacles.slice(0, obstacles.length),
 			projectiles: this.sharedProjectiles.slice(0, projectiles.length),
 			bombs: this.sharedBombs.slice(0, bombs.length),
-			playerTeam: this.sharedPlayerTeam.slice(0, pCount),
-			enemyTeam: this.sharedEnemyTeam.slice(0, eCount),
+			tanks: this.sharedTanks.slice(0, tanks.length),
 		};
 	}
 
@@ -412,18 +402,16 @@ export class Simulation {
 
 	private buildObservation(tankId: string, sharedViews: SharedObservationViews): TankObservation {
 		const self = this.requireTank(tankId);
+		const sameTeamTanks = sharedViews.tanks.filter((tank) => tank.team === self.team);
+		const enemyTeamTanks = sharedViews.tanks.filter((tank) => tank.team !== self.team);
 
 		if (this.debugFreeze) {
 			// Legacy path: clone self, freeze entire observation for mutation safety.
 			const observation: TankObservation = {
 				tick: sharedViews.tick,
 				self: cloneJson(self),
-				allies: cloneJson(
-					(self.team === 'player' ? sharedViews.playerTeam : sharedViews.enemyTeam).filter(
-						(tank) => tank.id !== self.id
-					)
-				),
-				enemies: self.team === 'player' ? sharedViews.enemyTeam : sharedViews.playerTeam,
+				allies: cloneJson(sameTeamTanks.filter((tank) => tank.id !== self.id)),
+				enemies: cloneJson(enemyTeamTanks),
 				projectiles: sharedViews.projectiles,
 				bombs: sharedViews.bombs,
 				obstacles: sharedViews.obstacles,
@@ -440,14 +428,14 @@ export class Simulation {
 		buf.obs.tick = sharedViews.tick;
 		copyTank(self, buf.selfBuf);
 
-		const enemies = self.team === 'player' ? sharedViews.enemyTeam : sharedViews.playerTeam;
+		const enemies = enemyTeamTanks;
 		this.ensureArrayCapacity(buf.enemyBufs, enemies.length, blankTank);
 		for (let i = 0; i < enemies.length; i++) {
 			copyTank(enemies[i], buf.enemyBufs[i]);
 		}
 		buf.obs.enemies = buf.enemyBufs.slice(0, enemies.length);
 
-		const sameTeam = self.team === 'player' ? sharedViews.playerTeam : sharedViews.enemyTeam;
+		const sameTeam = sameTeamTanks;
 		this.ensureArrayCapacity(buf.allyBufs, sameTeam.length, blankTank);
 		let allyCount = 0;
 		for (const teammate of sameTeam) {
@@ -845,19 +833,36 @@ export class Simulation {
 		if (this.state.status === 'enemy_win') {
 			reward += observation.self.team === 'enemy' ? 5 : -3;
 		}
+		if (this.state.status === 'team_win' && this.state.winnerTeam) {
+			reward += observation.self.team === this.state.winnerTeam ? 5 : -3;
+		}
+		if (this.state.status === 'draw') {
+			reward -= 0.5;
+		}
 		return reward;
 	}
 
 	private updateStatus(): void {
-		const playerTank = this.requireTank(this.state.playerTankId);
-		if (playerTank.destroyed) {
-			this.state.status = 'enemy_win';
+		const aliveTeams = new Set(this.state.tanks.filter((tank) => !tank.destroyed).map((tank) => tank.team));
+		if (aliveTeams.size === 0) {
+			this.state.status = 'draw';
+			this.state.winnerTeam = null;
 			return;
 		}
-		const allEnemiesDestroyed = this.state.tanks
-			.filter((tank) => tank.team === 'enemy')
-			.every((tank) => tank.destroyed);
-		this.state.status = allEnemiesDestroyed ? 'player_win' : 'running';
+		if (aliveTeams.size > 1) {
+			this.state.status = 'running';
+			this.state.winnerTeam = null;
+			return;
+		}
+
+		const [winnerTeam] = [...aliveTeams];
+		this.state.winnerTeam = winnerTeam;
+		const hasPlayerTeam = this.state.tanks.some((tank) => tank.team === 'player');
+		if (hasPlayerTeam) {
+			this.state.status = winnerTeam === 'player' ? 'player_win' : 'enemy_win';
+			return;
+		}
+		this.state.status = 'team_win';
 	}
 
 	private refreshDerivedState(): void {
