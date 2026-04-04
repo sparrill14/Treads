@@ -190,7 +190,10 @@ class HybridTrainer:
         self.phase_eval_pass_streak = 0
         self.phase_eval_fail_streak = 0
         self.last_phase_eval_win_rate = 0.0
-        self.last_stable_checkpoint_path: Optional[str] = None
+        self.stable_checkpoints: Dict[int, str] = {}
+        self.peak_phase_index: int = 0
+        self.last_rollback_episode: int = 0
+        self._ent_coef_boost: float = 0.0
 
         self.output_dir = output_dir or os.path.join(os.path.dirname(__file__), "output")
         os.makedirs(self.output_dir, exist_ok=True)
@@ -347,18 +350,25 @@ class HybridTrainer:
     def _save_stable_checkpoint(self, phase_index: int, eval_win_rate: float) -> None:
         path = os.path.join(self.output_dir, f"treads_ppo_phase{phase_index}_stable")
         cast(Any, self.model).save(path)
-        self.last_stable_checkpoint_path = path + ".zip"
+        self.stable_checkpoints[phase_index] = path + ".zip"
         print(
             f"  Stable checkpoint saved for phase {phase_index + 1} "
-            f"(eval wr={eval_win_rate:.3f}): {self.last_stable_checkpoint_path}"
+            f"(eval wr={eval_win_rate:.3f}): {self.stable_checkpoints[phase_index]}"
         )
 
     def _restore_stable_checkpoint(self) -> bool:
-        if not self.last_stable_checkpoint_path or not os.path.exists(self.last_stable_checkpoint_path):
+        # Find the best available checkpoint at or below the current phase
+        ckpt_path: Optional[str] = None
+        for idx in range(self.current_phase_index, -1, -1):
+            candidate = self.stable_checkpoints.get(idx)
+            if candidate and os.path.exists(candidate):
+                ckpt_path = candidate
+                break
+        if not ckpt_path:
             return False
         try:
-            cast(Any, self.model).set_parameters(self.last_stable_checkpoint_path, exact_match=False, device="cpu")
-            print(f"  Restored stable checkpoint: {self.last_stable_checkpoint_path}")
+            cast(Any, self.model).set_parameters(ckpt_path, exact_match=False, device="cpu")
+            print(f"  Restored stable checkpoint: {ckpt_path}")
             return True
         except Exception as exc:
             print(f"  WARNING: failed to restore stable checkpoint ({exc})")
@@ -372,6 +382,7 @@ class HybridTrainer:
         recent_phases = completed_phases[-3:] if len(completed_phases) > 3 else completed_phases
         self.rehearsal_ids = [sid for phase in recent_phases for sid in phase["scenario_ids"]]
         self.current_phase_index += 1
+        self.peak_phase_index = max(self.peak_phase_index, self.current_phase_index)
         self.levels = self._build_mixed_levels()
         self.phase_episode_wins = []
         self.phase_episode_rewards = []
@@ -384,18 +395,32 @@ class HybridTrainer:
     def _rollback_curriculum_from_eval(self) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
         if self._explicit_levels or self.current_phase_index <= 0:
             return None
+        # Enforce depth limit: never roll back more than 2 phases below peak
+        rollback_floor = max(0, self.peak_phase_index - 2)
+        if self.current_phase_index - 1 < rollback_floor:
+            print(f"  Rollback blocked: would go below floor phase {rollback_floor + 1} (peak={self.peak_phase_index + 1})")
+            return None
+        # Enforce cooldown: require 1500+ episodes between rollbacks
+        if self.total_episodes - self.last_rollback_episode < 1500:
+            print(f"  Rollback blocked: cooldown ({self.total_episodes - self.last_rollback_episode}/1500 episodes)")
+            return None
         previous = self._get_curriculum_phase()
         self.current_phase_index -= 1
         completed_phases = self.curriculum[: self.current_phase_index + 1]
         recent_phases = completed_phases[-3:] if len(completed_phases) > 3 else completed_phases
         self.rehearsal_ids = [sid for phase in recent_phases for sid in phase["scenario_ids"]]
         self.levels = self._build_mixed_levels()
-        self.phase_episode_wins = []
-        self.phase_episode_rewards = []
+        # Seed phase history with neutral data instead of wiping
+        target_wr = float(self._get_curriculum_phase().get("required_win_rate", 0.40))
+        seed_count = 100
+        self.phase_episode_wins = [1 if i < int(seed_count * target_wr) else 0 for i in range(seed_count)]
+        self.phase_episode_rewards = [0.0] * seed_count
         self.phase_start_episode = self.total_episodes
         self.phase_eval_pass_streak = 0
         self.phase_eval_fail_streak = 0
         self.last_phase_eval_win_rate = 0.0
+        self.last_rollback_episode = self.total_episodes
+        self._ent_coef_boost = self.ent_coef_start * 0.5
         return previous, self._get_curriculum_phase()
 
     def _now_iso(self) -> str:
@@ -730,7 +755,7 @@ class HybridTrainer:
     def _phase_is_stable(self) -> bool:
         """Require non-collapsing reward dynamics before curriculum promotion."""
         if len(self.phase_episode_rewards) < 300:
-            return True
+            return False  # insufficient data to judge stability
         # Disallow large drops in the recent trend.
         return self._phase_reward_trend(window=150) >= -0.35
 
@@ -774,6 +799,7 @@ class HybridTrainer:
         recent_phases = completed_phases[-3:] if len(completed_phases) > 3 else completed_phases
         self.rehearsal_ids = [sid for phase in recent_phases for sid in phase["scenario_ids"]]
         self.current_phase_index += 1
+        self.peak_phase_index = max(self.peak_phase_index, self.current_phase_index)
         self.levels = self._build_mixed_levels()
         self.phase_episode_wins = []
         self.phase_episode_rewards = []
@@ -791,7 +817,17 @@ class HybridTrainer:
 
         win_rate = self._phase_recent_win_rate()
         reward_trend = self._phase_reward_trend(window=200)
-        if win_rate >= 0.12 or reward_trend > 0.0:
+        if win_rate >= 0.25 or reward_trend > 0.0:
+            return None
+
+        # Enforce depth limit: never roll back more than 2 phases below peak
+        rollback_floor = max(0, self.peak_phase_index - 2)
+        if self.current_phase_index - 1 < rollback_floor:
+            print(f"  Rollback blocked: would go below floor phase {rollback_floor + 1} (peak={self.peak_phase_index + 1})")
+            return None
+        # Enforce cooldown: require 1500+ episodes between rollbacks
+        if self.total_episodes - self.last_rollback_episode < 1500:
+            print(f"  Rollback blocked: cooldown ({self.total_episodes - self.last_rollback_episode}/1500 episodes)")
             return None
 
         previous = self._get_curriculum_phase()
@@ -800,9 +836,17 @@ class HybridTrainer:
         recent_phases = completed_phases[-3:] if len(completed_phases) > 3 else completed_phases
         self.rehearsal_ids = [sid for phase in recent_phases for sid in phase["scenario_ids"]]
         self.levels = self._build_mixed_levels()
-        self.phase_episode_wins = []
-        self.phase_episode_rewards = []
+        # Seed phase history with neutral data instead of wiping
+        target_wr = float(self._get_curriculum_phase().get("required_win_rate", 0.40))
+        seed_count = 100
+        self.phase_episode_wins = [1 if i < int(seed_count * target_wr) else 0 for i in range(seed_count)]
+        self.phase_episode_rewards = [0.0] * seed_count
         self.phase_start_episode = self.total_episodes
+        self.last_rollback_episode = self.total_episodes
+        self._ent_coef_boost = self.ent_coef_start * 0.5
+        self.phase_eval_pass_streak = 0
+        self.phase_eval_fail_streak = 0
+        self.last_phase_eval_win_rate = 0.0
         return previous, self._get_curriculum_phase(), win_rate
 
     @staticmethod
@@ -934,7 +978,7 @@ class HybridTrainer:
                     "replayDir": self.replay_dir,
                     "workerId": i,
                     "targetEpisodes": target_episodes,
-                    "shapingScale": max(0.3, 1.0 - self._phase_recent_win_rate() * 2.0),
+                    "shapingScale": max(0.3, 1.0 - self.current_phase_index * 0.06),
                     "proceduralLevels": self.procedural_levels,
                     "difficultyBand": self.curriculum_difficulty_band,
                     "playerMaxAmmo": self._get_player_max_ammo(),
@@ -1263,6 +1307,9 @@ class HybridTrainer:
                 timestep_progress = min(1.0, max(0.0, self.total_timesteps / max(max_timesteps, 1)))
                 cast(Any, self.model)._current_progress_remaining = 1.0 - timestep_progress
                 current_ent_coef = self.ent_coef_final + (self.ent_coef_start - self.ent_coef_final) * (1.0 - timestep_progress)
+                # Apply entropy boost from rollback recovery (decays each iteration)
+                current_ent_coef = min(self.ent_coef_start, current_ent_coef + self._ent_coef_boost)
+                self._ent_coef_boost = max(0.0, self._ent_coef_boost - 0.0005)
                 cast(Any, self.model).ent_coef = float(current_ent_coef)
                 cast(Any, self.model).num_timesteps = self.total_timesteps
 
@@ -1433,7 +1480,7 @@ class HybridTrainer:
                         current = self._get_curriculum_phase()
                         required_wr = float(current.get("required_win_rate", 0.40))
                         promote_threshold = required_wr if phase_eval_source == "deterministic" else max(required_wr, 0.65)
-                        collapse_threshold = max(0.10, required_wr * 0.60)
+                        collapse_threshold = max(0.15, required_wr * 0.75)
 
                         if phase_eval >= promote_threshold:
                             self.phase_eval_pass_streak += 1
@@ -1478,10 +1525,13 @@ class HybridTrainer:
                                     f"phase_eval={phase_eval:.3f} ({phase_eval_source}) ***\n"
                                 )
 
+                        rollback_floor = max(0, self.peak_phase_index - 2)
                         can_rollback = (
                             self.current_phase_index > 0
+                            and self.current_phase_index - 1 >= rollback_floor
                             and phase_episodes >= 700
                             and self.phase_eval_fail_streak >= self.phase_fail_evals_before_rollback
+                            and self.total_episodes - self.last_rollback_episode >= 1500
                         )
                         if can_rollback:
                             rollback = self._rollback_curriculum_from_eval()

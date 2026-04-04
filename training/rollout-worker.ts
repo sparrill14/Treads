@@ -120,7 +120,6 @@ const DEATH_REWARD = -2.0;
 const TERMINAL_WIN_REWARD = 5.0;
 const TERMINAL_LOSS_REWARD = -3.0;
 const TIMEOUT_REWARD = -1.0;
-const APPROACH_SCALE = 0.5; // potential-based: total ~0.5 for full diagonal approach (~10% of win reward)
 const DODGE_SCALE = 0.15; // potential-based: reward for staying away from enemy projectiles
 const ARENA_DIAGONAL = Math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * ARENA_HEIGHT);
 const MAX_FUSE_TICKS = 360.0; // Max fuse ticks for any bomb type
@@ -435,9 +434,7 @@ interface RewardTracker {
 	prevEnemyAliveCount: number;
 	prevEnemyHealthTotal: number;
 	prevSelfHealth: number;
-	prevEnemyPathDist: number;
 	prevEnemyProjDist: number;
-	approachTargetId: string;
 }
 
 interface RewardBreakdown {
@@ -553,36 +550,11 @@ function decodeActionSignal(signal: number[], rawObs: TankObservation): { decode
 	};
 }
 
-function initRewardTracker(obs: TankObservation, navPlanner: NavigationPlanner | null): RewardTracker {
+function initRewardTracker(obs: TankObservation, _navPlanner: NavigationPlanner | null): RewardTracker {
 	const alive = obs.enemies.filter((e) => !e.destroyed);
 	const sx = obs.self.x + obs.self.size / 2;
 	const sy = obs.self.y + obs.self.size / 2;
-	let initialDist = 0;
-	let nearestId = '';
-	if (alive.length > 0) {
-		let nearestEnemy = alive[0];
-		let nearestDistSq = Infinity;
-		for (const e of alive) {
-			const dx = e.x + e.size / 2 - sx;
-			const dy = e.y + e.size / 2 - sy;
-			const dSq = dx * dx + dy * dy;
-			if (dSq < nearestDistSq) {
-				nearestDistSq = dSq;
-				nearestEnemy = e;
-			}
-		}
-		nearestId = nearestEnemy.id;
-		if (navPlanner) {
-			initialDist = navPlanner.getPathDistance(
-				sx,
-				sy,
-				nearestEnemy.x + nearestEnemy.size / 2,
-				nearestEnemy.y + nearestEnemy.size / 2
-			);
-		} else {
-			initialDist = Math.sqrt(nearestDistSq);
-		}
-	}
+
 	// Initial closest enemy projectile distance for dodge shaping
 	const enemyProjs = obs.projectiles.filter((p) => p.team === 'enemy');
 	let initialProjDist = ARENA_DIAGONAL;
@@ -601,9 +573,7 @@ function initRewardTracker(obs: TankObservation, navPlanner: NavigationPlanner |
 		prevEnemyAliveCount: alive.length,
 		prevEnemyHealthTotal: alive.reduce((total, enemy) => total + enemy.health, 0),
 		prevSelfHealth: obs.self.health,
-		prevEnemyPathDist: initialDist,
 		prevEnemyProjDist: initialProjDist,
-		approachTargetId: nearestId,
 	};
 }
 
@@ -613,7 +583,7 @@ function computeSteppingReward(
 	decodedAction: TankAction,
 	_rawObs: TankObservation,
 	shapingScale: number,
-	navPlanner: NavigationPlanner | null
+	_navPlanner: NavigationPlanner | null
 ): { reward: number; breakdown: RewardBreakdown } {
 	let reward = STEP_PENALTY;
 	const breakdown = createRewardBreakdown();
@@ -646,54 +616,8 @@ function computeSteppingReward(
 		const value = KILL_REWARD * enemiesKilled;
 		reward += value;
 		breakdown.kill += value;
-		// Reset approach tracking: the nearest enemy changed, so prevDist
-		// was computed against a now-dead enemy. Skip approach delta this tick.
-		tracker.prevEnemyPathDist = -1;
-		tracker.approachTargetId = '';
 	}
 	tracker.prevEnemyAliveCount = aliveEnemies.length;
-
-	// ── Shaping: potential-based approach reward (Ng et al. 1999) ──
-	// Φ(s) = -dist/ARENA_DIAGONAL, reward = γ·Φ(s') - Φ(s) ≈ Φ(s') - Φ(s) since γ≈1
-	// Uses A* pathfinding distance so flanking around obstacles is rewarded correctly.
-	if (aliveEnemies.length > 0) {
-		const px = player.x + player.size / 2;
-		const py = player.y + player.size / 2;
-		let nearestEnemy = aliveEnemies[0];
-		let nearestDistSq = Infinity;
-		for (const e of aliveEnemies) {
-			const dx = e.x + e.size / 2 - px;
-			const dy = e.y + e.size / 2 - py;
-			const dSq = dx * dx + dy * dy;
-			if (dSq < nearestDistSq) {
-				nearestDistSq = dSq;
-				nearestEnemy = e;
-			}
-		}
-		let currDist: number;
-		if (navPlanner) {
-			currDist = navPlanner.getPathDistance(
-				px,
-				py,
-				nearestEnemy.x + nearestEnemy.size / 2,
-				nearestEnemy.y + nearestEnemy.size / 2
-			);
-		} else {
-			currDist = Math.sqrt(nearestDistSq);
-		}
-		const prevDist = tracker.prevEnemyPathDist;
-		// Skip approach delta when target switched (kill or natural retarget)
-		const targetSwitched = nearestEnemy.id !== tracker.approachTargetId;
-		if (prevDist >= 0 && !targetSwitched) {
-			const approachReward = (APPROACH_SCALE * (prevDist - currDist) * shapingScale) / ARENA_DIAGONAL;
-			if (Math.abs(approachReward) > 1e-8) {
-				reward += approachReward;
-				breakdown.approach += approachReward;
-			}
-		}
-		tracker.prevEnemyPathDist = currDist;
-		tracker.approachTargetId = nearestEnemy.id;
-	}
 
 	// ── Shaping: dodge reward — potential-based on distance to nearest enemy projectile ──
 	// Φ(s) = dist/ARENA_DIAGONAL, reward = Φ(s') - Φ(s) — moving away from incoming fire is positive
