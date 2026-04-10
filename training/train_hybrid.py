@@ -312,7 +312,7 @@ class HybridTrainer:
                 clip_range_vf=None,
                 ent_coef=ent_coef,
                 target_kl=target_kl,
-                optimizer_kwargs=dict(eps=1e-5),
+                policy_kwargs=dict(optimizer_kwargs=dict(eps=1e-5)),
             ))
             print(
                 "  Resume settings: "
@@ -339,9 +339,8 @@ class HybridTrainer:
                 ent_coef=ent_coef,
                 target_kl=target_kl,
                 device="cpu",
-                policy_kwargs=dict(net_arch=[256, 256]),
+                policy_kwargs=dict(net_arch=[256, 256], optimizer_kwargs=dict(eps=1e-5)),
                 seed=seed,
-                optimizer_kwargs=dict(eps=1e-5),  # pyright: ignore[reportCallIssue]
             )
         if cast(int, self.model.n_steps) != self.n_steps or cast(int, self.model.rollout_buffer.buffer_size) != self.n_steps:
             raise RuntimeError(
