@@ -62,6 +62,7 @@ interface CollectRequest {
 	difficultyBand?: number;
 	playerMaxAmmo?: number;
 	globalEpisodeOffset?: number;
+	gamma?: number;
 }
 
 interface CollectResponse {
@@ -120,6 +121,7 @@ const DEATH_REWARD = -2.0;
 const TERMINAL_WIN_REWARD = 5.0;
 const TERMINAL_LOSS_REWARD = -3.0;
 const TIMEOUT_REWARD = -1.0;
+let GAMMA = 0.99; // Updated from CollectRequest; must match train_hybrid.py gamma
 const DODGE_SCALE = 0.15; // potential-based: reward for staying away from enemy projectiles
 const ARENA_DIAGONAL = Math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * ARENA_HEIGHT);
 const MAX_FUSE_TICKS = 360.0; // Max fuse ticks for any bomb type
@@ -971,7 +973,12 @@ function collectRollout(
 			done = true;
 		} else if (episodeTick >= maxTicks) {
 			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner);
-			stepReward = stepping.reward + TIMEOUT_REWARD;
+			// Truncation bootstrap: add gamma * V(s_T) to the reward so GAE
+			// correctly accounts for the continuation value at timeout boundaries.
+			// Without this, timeouts are treated as terminal (V=0), biasing the
+			// value function downward near the horizon.
+			const { value: truncValue } = mlp.forward(rlController.lastNormalizedObs);
+			stepReward = stepping.reward + TIMEOUT_REWARD + GAMMA * truncValue;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 			episodeBreakdown.timeout += TIMEOUT_REWARD;
 			done = true;
@@ -1120,6 +1127,8 @@ function collect(
 		const difficultyBand = clamp(Number(req.difficultyBand ?? 0), 0, 1);
 		const playerMaxAmmo = Number(req.playerMaxAmmo ?? 0);
 		const globalEpisodeOffset = Number(req.globalEpisodeOffset ?? 0);
+		const gamma = Number(req.gamma ?? 0);
+		if (gamma > 0) GAMMA = gamma;
 
 		const rollout = collectRollout(
 			mlp,

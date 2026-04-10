@@ -40,6 +40,40 @@ from treads_env import OBS_SIZE, TreadsEnv
 ensure_pickle_compat()
 
 
+class RunningMeanStd:
+    """Welford's online algorithm for running mean/variance (reward normalization)."""
+
+    def __init__(self, epsilon: float = 1e-4) -> None:
+        self.mean = 0.0
+        self.var = 1.0
+        self.count = epsilon
+
+    def update(self, x: NDArray[np.float32]) -> None:
+        batch_mean = float(np.mean(x))
+        batch_var = float(np.var(x))
+        batch_count = x.shape[0]
+        delta = batch_mean - self.mean
+        tot_count = self.count + batch_count
+        new_mean = self.mean + delta * batch_count / tot_count
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        m2 = m_a + m_b + delta ** 2 * self.count * batch_count / tot_count
+        self.var = m2 / tot_count
+        self.mean = new_mean
+        self.count = tot_count
+
+    def to_dict(self) -> Dict[str, float]:
+        return {"mean": self.mean, "var": self.var, "count": self.count}
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, float]) -> "RunningMeanStd":
+        rms = cls()
+        rms.mean = float(d.get("mean", 0.0))
+        rms.var = float(d.get("var", 1.0))
+        rms.count = float(d.get("count", 1e-4))
+        return rms
+
+
 def linear_schedule_between(start: float, end: float) -> Callable[[float], float]:
     """Schedule where progress=1 -> start and progress=0 -> end."""
     def _schedule(progress_remaining: float) -> float:
@@ -99,25 +133,32 @@ TREADS_PB2, TREADS_PB2_GRPC = _ensure_proto_stubs()
 
 # ---- Curriculum configuration ----
 DEFAULT_CURRICULUM: List[Dict[str, Any]] = [
+    # ── Phase 1-3: Fundamentals (mastered quickly) ──
     {"name": "Phase 1 (aim + track)", "scenario_ids": [111, 112, 114], "min_phase_episodes": 1200, "force_phase_episodes": 4800, "required_win_rate": 0.50, "player_max_ammo": 2},
     {"name": "Phase 2 (dodge + fight)", "scenario_ids": [121, 122, 123], "min_phase_episodes": 1600, "force_phase_episodes": 5600, "required_win_rate": 0.45, "player_max_ammo": 2},
-    # Bridge 2->3: gradually remove turret assist and increase baseline pressure.
-    {"name": "Phase 2.5 (bridge to full turret)", "scenario_ids": [123, 131, 132], "min_phase_episodes": 1400, "force_phase_episodes": 5600, "required_win_rate": 0.45, "player_max_ammo": 2},
+    {"name": "Phase 2.5 (bridge to full turret)", "scenario_ids": [122, 123, 131, 132], "min_phase_episodes": 1400, "force_phase_episodes": 5600, "required_win_rate": 0.45, "player_max_ammo": 2},
     {"name": "Phase 3 (full turret)", "scenario_ids": [131, 132, 133], "min_phase_episodes": 1800, "force_phase_episodes": 6400, "required_win_rate": 0.45, "player_max_ammo": 3},
-    # Bridge 3->4: introduce obstacles while keeping enemy count low.
-    {"name": "Phase 3.5 (bridge to obstacles)", "scenario_ids": [132, 133, 141, 142], "min_phase_episodes": 1400, "force_phase_episodes": 5600, "required_win_rate": 0.45, "player_max_ammo": 3},
-    {"name": "Phase 4 (obstacles)", "scenario_ids": [141, 142, 143], "min_phase_episodes": 2000, "force_phase_episodes": 7600, "required_win_rate": 0.45, "player_max_ammo": 3},
-    # Bridge 4->5: add multi-enemy mixes before full multi-enemy obstacle phases.
-    {"name": "Phase 4.5 (bridge to multi-enemy)", "scenario_ids": [142, 143, 151], "min_phase_episodes": 1600, "force_phase_episodes": 6400, "required_win_rate": 0.45, "player_max_ammo": 4},
-    {"name": "Phase 5 (multi-enemy + obs)", "scenario_ids": [151, 152, 153], "min_phase_episodes": 2200, "force_phase_episodes": 8200, "required_win_rate": 0.45, "player_max_ammo": 4},
-    {"name": "Phase 6 (bouncing shots)", "scenario_ids": [161, 162, 163], "min_phase_episodes": 2200, "force_phase_episodes": 8200, "required_win_rate": 0.45, "player_max_ammo": 4},
-    # Bridge 6->7: introduce bomber behavior before full bomber curriculum.
-    {"name": "Phase 6.5 (bridge to bombers)", "scenario_ids": [163, 171, 172], "min_phase_episodes": 1800, "force_phase_episodes": 7200, "required_win_rate": 0.42, "player_max_ammo": 5},
-    {"name": "Phase 7 (bombers)", "scenario_ids": [171, 172, 173], "min_phase_episodes": 2400, "force_phase_episodes": 9200, "required_win_rate": 0.40, "player_max_ammo": 5},
-    {"name": "Phase 8 (full mix)", "scenario_ids": [181, 182, 183], "min_phase_episodes": 2600, "force_phase_episodes": 9800, "required_win_rate": 0.40, "player_max_ammo": 5},
-    {"name": "Phase 9 (easy levels)", "scenario_ids": [1, 2, 3, 4], "min_phase_episodes": 2600, "force_phase_episodes": 9800, "required_win_rate": 0.38, "player_max_ammo": 5},
-    {"name": "Phase 10 (mid levels)", "scenario_ids": [1, 2, 3, 4, 5, 6], "min_phase_episodes": 3000, "force_phase_episodes": 11000, "required_win_rate": 0.35, "player_max_ammo": 5},
-    {"name": "Phase 11 (all levels)", "scenario_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9], "min_phase_episodes": None, "required_win_rate": 0.35, "player_max_ammo": 5},
+    # ── Phase 3→4: Obstacle introduction (overlap both neighbors) ──
+    {"name": "Phase 3.5 (bridge to obstacles)", "scenario_ids": [132, 133, 141], "min_phase_episodes": 1600, "force_phase_episodes": 6400, "required_win_rate": 0.45, "player_max_ammo": 3},
+    {"name": "Phase 4 (obstacles)", "scenario_ids": [141, 142, 143], "min_phase_episodes": 2000, "force_phase_episodes": 8000, "required_win_rate": 0.42, "player_max_ammo": 3},
+    # ── Phase 4→5: Multi-enemy ramp (gentle bridge via 145-148, then full) ──
+    {"name": "Phase 4.5a (unarmed 2nd target)", "scenario_ids": [143, 145, 146], "min_phase_episodes": 2400, "force_phase_episodes": 10000, "required_win_rate": 0.42, "player_max_ammo": 4},
+    {"name": "Phase 4.5b (armed multi open)", "scenario_ids": [146, 147, 148], "min_phase_episodes": 2800, "force_phase_episodes": 12000, "required_win_rate": 0.40, "player_max_ammo": 4},
+    {"name": "Phase 4.5c (multi + obstacles)", "scenario_ids": [148, 151, 152], "min_phase_episodes": 3200, "force_phase_episodes": 14000, "required_win_rate": 0.38, "player_max_ammo": 4},
+    {"name": "Phase 5 (multi-enemy full)", "scenario_ids": [151, 152, 153], "min_phase_episodes": 3600, "force_phase_episodes": 15000, "required_win_rate": 0.36, "player_max_ammo": 4},
+    # ── Phase 5→6: Bouncing shots introduction ──
+    {"name": "Phase 5.5 (bridge to bouncing)", "scenario_ids": [152, 153, 161], "min_phase_episodes": 2800, "force_phase_episodes": 12000, "required_win_rate": 0.36, "player_max_ammo": 4},
+    {"name": "Phase 6 (bouncing shots)", "scenario_ids": [161, 162, 163], "min_phase_episodes": 3200, "force_phase_episodes": 13000, "required_win_rate": 0.36, "player_max_ammo": 4},
+    # ── Phase 6→7: Bomber introduction ──
+    {"name": "Phase 6.5 (bridge to bombers)", "scenario_ids": [162, 163, 171], "min_phase_episodes": 2800, "force_phase_episodes": 12000, "required_win_rate": 0.35, "player_max_ammo": 5},
+    {"name": "Phase 7 (bombers)", "scenario_ids": [171, 172, 173], "min_phase_episodes": 3200, "force_phase_episodes": 13000, "required_win_rate": 0.35, "player_max_ammo": 5},
+    # ── Phase 7→8: Full mix ──
+    {"name": "Phase 7.5 (bridge to full mix)", "scenario_ids": [172, 173, 181], "min_phase_episodes": 3000, "force_phase_episodes": 13000, "required_win_rate": 0.34, "player_max_ammo": 5},
+    {"name": "Phase 8 (full mix)", "scenario_ids": [181, 182, 183], "min_phase_episodes": 3600, "force_phase_episodes": 14000, "required_win_rate": 0.34, "player_max_ammo": 5},
+    # ── Real game levels ──
+    {"name": "Phase 9 (easy levels)", "scenario_ids": [1, 2, 3, 4], "min_phase_episodes": 2800, "force_phase_episodes": 11000, "required_win_rate": 0.33, "player_max_ammo": 5},
+    {"name": "Phase 10 (mid levels)", "scenario_ids": [1, 2, 3, 4, 5, 6], "min_phase_episodes": 3200, "force_phase_episodes": 12000, "required_win_rate": 0.32, "player_max_ammo": 5},
+    {"name": "Phase 11 (all levels)", "scenario_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9], "min_phase_episodes": None, "required_win_rate": 0.30, "player_max_ammo": 5},
 ]
 
 
@@ -152,7 +193,7 @@ class HybridTrainer:
         num_workers: int = 1,
         stability_mode: bool = True,
         phase_pass_evals_required: int = 3,
-        phase_fail_evals_before_rollback: int = 2,
+        phase_fail_evals_before_rollback: int = 3,
     ) -> None:
         self._explicit_levels = levels is not None
         self.curriculum: List[Dict[str, Any]] = curriculum or DEFAULT_CURRICULUM
@@ -172,6 +213,10 @@ class HybridTrainer:
         self.seed = seed
         self.seed_counter = seed
         self.load_model_path = load_model_path or None
+        self._ret_rms_path = os.path.join(
+            output_dir or os.path.join(os.path.dirname(__file__), "output"),
+            "ret_rms_state.json"
+        )
         self.checkpoint_episode_interval = checkpoint_episode_interval
         self.replay_episode_interval = replay_episode_interval
         self.num_workers = max(1, num_workers)
@@ -193,7 +238,19 @@ class HybridTrainer:
         self.stable_checkpoints: Dict[int, str] = {}
         self.peak_phase_index: int = 0
         self.last_rollback_episode: int = 0
+        self.ret_rms = RunningMeanStd()
+        if load_model_path:
+            rms_path = os.path.join(os.path.dirname(load_model_path), "ret_rms_state.json")
+            if os.path.exists(rms_path):
+                try:
+                    with open(rms_path, "r") as f:
+                        self.ret_rms = RunningMeanStd.from_dict(json.load(f))
+                    print(f"Loaded reward normalizer state from: {rms_path} (var={self.ret_rms.var:.4f}, count={self.ret_rms.count:.0f})")
+                except Exception as exc:
+                    print(f"WARNING: failed to load reward normalizer state ({exc}), starting fresh")
         self._ent_coef_boost: float = 0.0
+        self._stale_eval_count: int = 0
+        self._last_phase_eval_value: Optional[float] = None
 
         self.output_dir = output_dir or os.path.join(os.path.dirname(__file__), "output")
         os.makedirs(self.output_dir, exist_ok=True)
@@ -238,22 +295,24 @@ class HybridTrainer:
         # Create a dummy continuous-action env so SB3 policy/distribution match worker sampling.
         dummy_env = _DummyContinuousActionEnv()
         clip_schedule = linear_schedule_between(clip_range, clip_range_final)
+        lr_schedule = linear_schedule_between(learning_rate, 0.0)
         if load_model_path and os.path.exists(load_model_path):
             print(f"Loading PPO model from: {load_model_path}")
             self.model = cast(Any, PPO.load(  # pyright: ignore[reportUnknownMemberType]
                 load_model_path,
                 env=dummy_env,
                 device="cpu",
-                learning_rate=learning_rate,
+                learning_rate=lr_schedule,
                 n_steps=n_steps,
                 batch_size=batch_size,
                 n_epochs=n_epochs,
                 gamma=gamma,
                 gae_lambda=gae_lambda,
                 clip_range=clip_schedule,
-                clip_range_vf=clip_schedule,
+                clip_range_vf=None,
                 ent_coef=ent_coef,
                 target_kl=target_kl,
+                optimizer_kwargs=dict(eps=1e-5),
             ))
             print(
                 "  Resume settings: "
@@ -265,23 +324,24 @@ class HybridTrainer:
                 f"ent_coef={cast(float, self.model.ent_coef)}"
             )
         else:
-            self.model = PPO(
+            self.model = PPO(  # pyright: ignore[reportCallIssue]
                 "MlpPolicy",
                 dummy_env,
                 verbose=0,
-                learning_rate=learning_rate,
+                learning_rate=lr_schedule,
                 n_steps=n_steps,
                 batch_size=batch_size,
                 n_epochs=n_epochs,
                 gamma=gamma,
                 gae_lambda=gae_lambda,
                 clip_range=clip_schedule,
-                clip_range_vf=clip_schedule,
+                clip_range_vf=None,
                 ent_coef=ent_coef,
                 target_kl=target_kl,
                 device="cpu",
                 policy_kwargs=dict(net_arch=[256, 256]),
                 seed=seed,
+                optimizer_kwargs=dict(eps=1e-5),  # pyright: ignore[reportCallIssue]
             )
         if cast(int, self.model.n_steps) != self.n_steps or cast(int, self.model.rollout_buffer.buffer_size) != self.n_steps:
             raise RuntimeError(
@@ -347,9 +407,18 @@ class HybridTrainer:
 
         return float(wins / max(episodes, 1))
 
+    def _save_ret_rms(self) -> None:
+        """Persist reward normalizer state alongside model checkpoints."""
+        try:
+            with open(self._ret_rms_path, "w") as f:
+                json.dump(self.ret_rms.to_dict(), f)
+        except Exception as exc:
+            print(f"WARNING: failed to save reward normalizer state ({exc})")
+
     def _save_stable_checkpoint(self, phase_index: int, eval_win_rate: float) -> None:
         path = os.path.join(self.output_dir, f"treads_ppo_phase{phase_index}_stable")
         cast(Any, self.model).save(path)
+        self._save_ret_rms()
         self.stable_checkpoints[phase_index] = path + ".zip"
         print(
             f"  Stable checkpoint saved for phase {phase_index + 1} "
@@ -390,19 +459,21 @@ class HybridTrainer:
         self.phase_eval_pass_streak = 0
         self.phase_eval_fail_streak = 0
         self.last_phase_eval_win_rate = 0.0
+        self._stale_eval_count = 0
+        self._last_phase_eval_value = None
         return previous, self._get_curriculum_phase()
 
     def _rollback_curriculum_from_eval(self) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
         if self._explicit_levels or self.current_phase_index <= 0:
             return None
-        # Enforce depth limit: never roll back more than 2 phases below peak
-        rollback_floor = max(0, self.peak_phase_index - 2)
+        # Enforce depth limit with relaxation after sustained failure
+        rollback_floor = self._rollback_floor()
         if self.current_phase_index - 1 < rollback_floor:
             print(f"  Rollback blocked: would go below floor phase {rollback_floor + 1} (peak={self.peak_phase_index + 1})")
             return None
-        # Enforce cooldown: require 1500+ episodes between rollbacks
-        if self.total_episodes - self.last_rollback_episode < 1500:
-            print(f"  Rollback blocked: cooldown ({self.total_episodes - self.last_rollback_episode}/1500 episodes)")
+        # Enforce cooldown: require 2500+ episodes between rollbacks
+        if self.total_episodes - self.last_rollback_episode < 2500:
+            print(f"  Rollback blocked: cooldown ({self.total_episodes - self.last_rollback_episode}/2500 episodes)")
             return None
         previous = self._get_curriculum_phase()
         self.current_phase_index -= 1
@@ -419,6 +490,8 @@ class HybridTrainer:
         self.phase_eval_pass_streak = 0
         self.phase_eval_fail_streak = 0
         self.last_phase_eval_win_rate = 0.0
+        self._stale_eval_count = 0
+        self._last_phase_eval_value = None
         self.last_rollback_episode = self.total_episodes
         self._ent_coef_boost = self.ent_coef_start * 0.5
         return previous, self._get_curriculum_phase()
@@ -804,7 +877,21 @@ class HybridTrainer:
         self.phase_episode_wins = []
         self.phase_episode_rewards = []
         self.phase_start_episode = self.total_episodes
+        self._stale_eval_count = 0
+        self._last_phase_eval_value = None
         return previous, self._get_curriculum_phase(), win_rate
+
+    def _rollback_floor(self) -> int:
+        """Compute rollback floor. Relaxes after sustained failure (5000+ episodes stuck)."""
+        base_floor = max(0, self.peak_phase_index - 2)
+        stuck_episodes = self._phase_episode_count()
+        if stuck_episodes >= 10000 and self._phase_recent_win_rate() < 0.05:
+            # Deeply stuck — allow going back up to 4 phases below peak
+            return max(0, self.peak_phase_index - 4)
+        if stuck_episodes >= 5000 and self._phase_recent_win_rate() < 0.10:
+            # Moderately stuck — allow going back up to 3 phases below peak
+            return max(0, self.peak_phase_index - 3)
+        return base_floor
 
     def _maybe_rollback_curriculum(self) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], float]]:
         """Rollback one phase when sustained collapse is detected in current phase."""
@@ -812,7 +899,7 @@ class HybridTrainer:
             return None
 
         phase_episodes = self._phase_episode_count()
-        if phase_episodes < 700:
+        if phase_episodes < 1200:
             return None
 
         win_rate = self._phase_recent_win_rate()
@@ -820,14 +907,14 @@ class HybridTrainer:
         if win_rate >= 0.25 or reward_trend > 0.0:
             return None
 
-        # Enforce depth limit: never roll back more than 2 phases below peak
-        rollback_floor = max(0, self.peak_phase_index - 2)
+        # Enforce depth limit with relaxation after sustained failure
+        rollback_floor = self._rollback_floor()
         if self.current_phase_index - 1 < rollback_floor:
             print(f"  Rollback blocked: would go below floor phase {rollback_floor + 1} (peak={self.peak_phase_index + 1})")
             return None
-        # Enforce cooldown: require 1500+ episodes between rollbacks
-        if self.total_episodes - self.last_rollback_episode < 1500:
-            print(f"  Rollback blocked: cooldown ({self.total_episodes - self.last_rollback_episode}/1500 episodes)")
+        # Enforce cooldown: require 2500+ episodes between rollbacks
+        if self.total_episodes - self.last_rollback_episode < 2500:
+            print(f"  Rollback blocked: cooldown ({self.total_episodes - self.last_rollback_episode}/2500 episodes)")
             return None
 
         previous = self._get_curriculum_phase()
@@ -847,6 +934,8 @@ class HybridTrainer:
         self.phase_eval_pass_streak = 0
         self.phase_eval_fail_streak = 0
         self.last_phase_eval_win_rate = 0.0
+        self._stale_eval_count = 0
+        self._last_phase_eval_value = None
         return previous, self._get_curriculum_phase(), win_rate
 
     @staticmethod
@@ -906,6 +995,7 @@ class HybridTrainer:
                     difficulty_band=float(req.get("difficultyBand", 0.0)),
                     player_max_ammo=int(req.get("playerMaxAmmo", 0)),
                     global_episode_offset=int(req.get("globalEpisodeOffset", 0)),
+                    gamma=float(req.get("gamma", 0.99)),
                 ),
                 timeout=timeout_sec,
             )
@@ -983,6 +1073,7 @@ class HybridTrainer:
                     "difficultyBand": self.curriculum_difficulty_band,
                     "playerMaxAmmo": self._get_player_max_ammo(),
                     "globalEpisodeOffset": self.total_episodes,
+                    "gamma": self.gamma,
                 })
 
             # Read results from all workers in parallel using threads
@@ -1138,6 +1229,22 @@ class HybridTrainer:
             rewards_arr = np.array(chunk["rewards"], dtype=np.float32)
             starts_arr = np.array(chunk["episode_starts"], dtype=np.float32)
             values_arr = np.array(chunk["values"], dtype=np.float32)
+
+            # Reward normalization: track discounted returns, normalize by running std
+            n = rewards_arr.shape[0]
+            rets = np.zeros(n, dtype=np.float32)
+            ret = 0.0
+            for i in range(n):
+                if starts_arr[i] > 0.5:
+                    ret = 0.0
+                ret = ret * self.gamma + float(rewards_arr[i])
+                rets[i] = ret
+            self.ret_rms.update(rets)
+            rewards_arr = np.clip(
+                rewards_arr / np.sqrt(max(self.ret_rms.var, 1e-8)),
+                -10.0, 10.0,
+            ).astype(np.float32)
+
             advantages_arr, returns_arr = self._compute_chunk_gae(
                 rewards=rewards_arr,
                 episode_starts=starts_arr,
@@ -1427,19 +1534,24 @@ class HybridTrainer:
                         )
                         print("  RewardBreakdown(trigger window): " + " ".join(summary_parts) + "\n")
 
+                # Safety-net: episode-based rollback as fallback in ALL modes
+                # (catches cases where eval dead-zones prevent eval-based rollback)
+                if not self._explicit_levels and self.current_phase_index > 0:
                     phase_rollback = self._maybe_rollback_curriculum()
                     if phase_rollback is not None:
                         previous_phase, rollback_phase, collapse_win_rate = phase_rollback
+                        restored = self._restore_stable_checkpoint()
                         print(
-                            f"\n*** Curriculum rollback at episode {self.total_episodes}: "
+                            f"\n*** Safety-net rollback at episode {self.total_episodes}: "
                             f"{previous_phase['name']} -> {rollback_phase['name']} | "
-                            f"phase_recent_winrate_500={collapse_win_rate:.3f} ***\n"
+                            f"phase_recent_winrate_500={collapse_win_rate:.3f} | restored={restored} ***\n"
                         )
 
                 # 7. Track best training-window model separately from eval best.
                 if len(self.episode_rewards) >= 20 and avg_winrate > self.best_train_win_rate:
                     self.best_train_win_rate = avg_winrate
                     cast(Any, self.model).save(self.best_train_model_path)
+                    self._save_ret_rms()
                     print(f"  ** New best training-window model: {avg_winrate:.3f} **")
 
                 # 7b. Periodic deterministic eval for robust best checkpoint selection.
@@ -1454,6 +1566,7 @@ class HybridTrainer:
                             self.best_eval_win_rate = eval_win_rate
                             self.best_win_rate = eval_win_rate
                             cast(Any, self.model).save(self.best_model_path)
+                            self._save_ret_rms()
                             self._export_policy_onnx(self.best_model_path)
                             print(f"  ** New best eval model! Win rate: {eval_win_rate:.3f} **")
                     except Exception as eval_exc:
@@ -1482,7 +1595,32 @@ class HybridTrainer:
                         promote_threshold = required_wr if phase_eval_source == "deterministic" else max(required_wr, 0.65)
                         collapse_threshold = max(0.15, required_wr * 0.75)
 
-                        if phase_eval >= promote_threshold:
+                        # Detect stale eval: same value repeated means deterministic
+                        # eval is stuck on fixed seeds, not reflecting real performance.
+                        if self._last_phase_eval_value is not None and abs(phase_eval - self._last_phase_eval_value) < 1e-6:
+                            self._stale_eval_count += 1
+                        else:
+                            self._stale_eval_count = 0
+                        self._last_phase_eval_value = phase_eval
+
+                        # Cross-check: if training WR is near zero but eval says
+                        # otherwise, trust training WR — eval is stale/degenerate.
+                        training_wr = self._phase_recent_win_rate()
+                        stale_and_collapsed = (
+                            self._stale_eval_count >= 4
+                            and training_wr < 0.05
+                            and self._phase_episode_count() >= 3000
+                        )
+
+                        if stale_and_collapsed:
+                            # Override: treat stale eval as failure
+                            self.phase_eval_fail_streak += 1
+                            self.phase_eval_pass_streak = 0
+                            print(
+                                f"  ** Stale eval override: eval={phase_eval:.3f} unchanged {self._stale_eval_count}x "
+                                f"but training_wr={training_wr:.3f} — counting as fail (streak={self.phase_eval_fail_streak}) **"
+                            )
+                        elif phase_eval >= promote_threshold:
                             self.phase_eval_pass_streak += 1
                             self.phase_eval_fail_streak = 0
                         elif phase_eval <= collapse_threshold:
@@ -1525,7 +1663,7 @@ class HybridTrainer:
                                     f"phase_eval={phase_eval:.3f} ({phase_eval_source}) ***\n"
                                 )
 
-                        rollback_floor = max(0, self.peak_phase_index - 2)
+                        rollback_floor = self._rollback_floor()
                         can_rollback = (
                             self.current_phase_index > 0
                             and self.current_phase_index - 1 >= rollback_floor
@@ -1552,6 +1690,7 @@ class HybridTrainer:
                         self.output_dir, f"treads_ppo_ep{next_checkpoint_episode}"
                     )
                     cast(Any, self.model).save(ckpt_path)
+                    self._save_ret_rms()
                     next_checkpoint_episode += self.checkpoint_episode_interval
 
         except KeyboardInterrupt:
@@ -1587,6 +1726,7 @@ class HybridTrainer:
             csv_file.close()
             # Save final model
             cast(Any, self.model).save(self.final_model_path)
+            self._save_ret_rms()
             self._export_policy_onnx(self.final_model_path)
             final_breakdowns = self.episode_reward_breakdowns[-50:] if self.episode_reward_breakdowns else []
             final_snapshot = self._build_iteration_snapshot(
@@ -1637,7 +1777,7 @@ def train() -> None:
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--levels", type=str, default="", help="Optional comma-separated level numbers; omit to use curriculum")
-    parser.add_argument("--timesteps", type=int, default=20_000_000)
+    parser.add_argument("--timesteps", type=int, default=0, help="Max timesteps (default: auto-computed from target-episodes × max-ticks)")
     parser.add_argument("--target-episodes", type=int, default=10_000, help="Stop when this many episodes are collected")
     parser.add_argument("--load-model", type=str, default="", help="Optional .zip model path to resume from")
     parser.add_argument("--output-dir", type=str, default="", help="Optional output directory override")
@@ -1722,7 +1862,13 @@ def train() -> None:
         f"TargetKL: {args.target_kl}"
     )
     print(f"Rollout worker: {ROLLOUT_WORKER_PATH}")
-    trainer.train(target_episodes=args.target_episodes, max_timesteps=args.timesteps)
+    max_ts = args.timesteps
+    if max_ts <= 0:
+        # Auto-compute: target_episodes × max_ticks gives a reasonable estimate
+        # of total timesteps, with 1.5× headroom for partial episodes in rollout chunks
+        max_ts = int(args.target_episodes * args.max_ticks * 1.5)
+        print(f"Auto-computed max_timesteps: {max_ts:,} ({args.target_episodes} episodes × {args.max_ticks} ticks × 1.5)")
+    trainer.train(target_episodes=args.target_episodes, max_timesteps=max_ts)
 
 
 if __name__ == "__main__":

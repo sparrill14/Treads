@@ -186,6 +186,47 @@ export const TRAINING_SCENARIOS: Record<number, LevelConfig> = {
 		],
 		rules: { projectileBounces: false },
 	},
+	// ---- Phase 4→5 bridge: gentle multi-enemy introduction ----
+	// 145: Open arena, 2 stationary enemies, one UNARMED (pure multi-target aiming)
+	145: {
+		player: { x: 200, y: 250 },
+		obstacles: [],
+		enemies: [
+			{ type: 'stationary', x: 700, y: 150, ammo: { type: 'basic', count: 1 } },
+			{ type: 'stationary', x: 700, y: 350, ammo: { type: 'basic', count: 0 } },
+		],
+		rules: { projectileBounces: false },
+	},
+	// 146: Open arena, 2 stationary enemies, both armed (multi-target, no obstacles)
+	146: {
+		player: { x: 200, y: 250 },
+		obstacles: [],
+		enemies: [
+			{ type: 'stationary', x: 720, y: 160, ammo: { type: 'basic', count: 1 } },
+			{ type: 'stationary', x: 720, y: 340, ammo: { type: 'basic', count: 1 } },
+		],
+		rules: { projectileBounces: false },
+	},
+	// 147: 1 obstacle, 1 stationary armed + 1 unarmed mobile (track two, only one shoots)
+	147: {
+		player: { x: 150, y: 250 },
+		obstacles: [{ x: 400, y: 180, width: 30, height: 150 }],
+		enemies: [
+			{ type: 'stationary', x: 780, y: 150, ammo: { type: 'basic', count: 1 } },
+			{ type: 'simple-moving', x: 780, y: 350, ammo: { type: 'basic', count: 0 }, navigator: { type: 'simple' } },
+		],
+		rules: { projectileBounces: false },
+	},
+	// 148: Open arena, 1 random-aim armed + 1 mobile armed (full combat, no obstacles)
+	148: {
+		player: { x: 180, y: 250 },
+		obstacles: [],
+		enemies: [
+			{ type: 'stationary-random-aim', x: 740, y: 160, ammo: { type: 'basic', count: 1 } },
+			{ type: 'simple-moving', x: 740, y: 340, ammo: { type: 'basic', count: 1 }, navigator: { type: 'simple' } },
+		],
+		rules: { projectileBounces: false },
+	},
 	// ---- Phase 5: multi-enemy + obstacles ----
 	151: {
 		player: { x: 120, y: 250 },

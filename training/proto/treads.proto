@@ -88,6 +88,7 @@ message CollectRequest {
   double difficulty_band = 12;
   int32 player_max_ammo = 13;
   int32 global_episode_offset = 14;
+  double gamma = 15;
 }
 
 message CollectResponse {
