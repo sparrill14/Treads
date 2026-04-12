@@ -10,7 +10,7 @@ MAX_ENEMIES = 6
 MAX_PROJECTILES = 15
 MAX_OBSTACLES = 5
 MAX_BOMBS = 6
-SELF_DIM = 12
+SELF_DIM = 15
 ENEMY_DIM = 9
 PROJ_DIM = 5
 OBS_DIM = 4
@@ -184,6 +184,11 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
     result[idx + 7] = min(float(obs_raw.get("tick", 0.0)) / tick_norm_ticks, 1.0)
     result[idx + 8] = float(self_data["health"]) / max(float(self_data["maxHealth"]), 1.0)
 
+    # Resource features — ammo, cooldown, bombs
+    result[idx + 9] = float(self_data.get("activeAmmo", 0)) / max(float(self_data.get("maxAmmo", 1)), 1.0)
+    result[idx + 10] = float(self_data.get("shotCooldownTicks", 0)) / max(float(self_data.get("shotCooldownTicksOnFire", 1)), 1.0)
+    result[idx + 11] = float(self_data.get("activeBombs", 0)) / max(float(self_data.get("maxBombs", 1)), 1.0)
+
     if living_enemies:
         nearest = living_enemies[0]
         ex = float(nearest["x"]) + float(nearest["size"]) / 2.0
@@ -195,13 +200,13 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
             math.sin(aim_angle - angle_to_enemy),
             math.cos(aim_angle - angle_to_enemy),
         )
-        result[idx + 9] = angle_to_enemy / (2.0 * math.pi) + 0.5
-        result[idx + 10] = min(dist_to_enemy / ARENA_DIAGONAL, 1.0)
-        result[idx + 11] = (aim_error / math.pi) * 0.5 + 0.5
+        result[idx + 12] = angle_to_enemy / (2.0 * math.pi) + 0.5
+        result[idx + 13] = min(dist_to_enemy / ARENA_DIAGONAL, 1.0)
+        result[idx + 14] = (aim_error / math.pi) * 0.5 + 0.5
     else:
-        result[idx + 9] = 0.5
-        result[idx + 10] = 0.0
-        result[idx + 11] = 0.5
+        result[idx + 12] = 0.5
+        result[idx + 13] = 0.0
+        result[idx + 14] = 0.5
     idx += SELF_DIM
 
     for i in range(MAX_ENEMIES):

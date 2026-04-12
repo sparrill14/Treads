@@ -227,6 +227,27 @@ export const TRAINING_SCENARIOS: Record<number, LevelConfig> = {
 		],
 		rules: { projectileBounces: false },
 	},
+	// ---- Phase 4.5b→4.5c bridge: multi-enemy + light obstacles ----
+	// 149: 2 stationary armed + 1 wall (like 146 but with an obstacle)
+	149: {
+		player: { x: 150, y: 250 },
+		obstacles: [{ x: 420, y: 170, width: 30, height: 160 }],
+		enemies: [
+			{ type: 'stationary', x: 750, y: 150, ammo: { type: 'basic', count: 1 } },
+			{ type: 'stationary', x: 750, y: 350, ammo: { type: 'basic', count: 1 } },
+		],
+		rules: { projectileBounces: false },
+	},
+	// 150: 1 stationary armed + 1 mobile armed + 1 wall (like 148 but with an obstacle)
+	150: {
+		player: { x: 140, y: 250 },
+		obstacles: [{ x: 400, y: 150, width: 30, height: 200 }],
+		enemies: [
+			{ type: 'stationary', x: 770, y: 160, ammo: { type: 'basic', count: 1 } },
+			{ type: 'simple-moving', x: 770, y: 350, ammo: { type: 'basic', count: 1 }, navigator: { type: 'simple' } },
+		],
+		rules: { projectileBounces: false },
+	},
 	// ---- Phase 5: multi-enemy + obstacles ----
 	151: {
 		player: { x: 120, y: 250 },

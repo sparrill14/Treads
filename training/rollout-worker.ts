@@ -96,7 +96,7 @@ const MAX_ENEMIES = 6; // Level 7 has 5 enemies; +1 buffer
 const MAX_PROJECTILES = 15; // Level 8: 3×3=9 super shots; generous buffer
 const MAX_OBSTACLES = 5; // Level 7 has 4 obstacles; +1 buffer
 const MAX_BOMBS = 6; // Level 6: 9 theoretical; cap at 6 live
-const SELF_DIM = 12;
+const SELF_DIM = 15; // pos(2), aim, speed, LOS, blocked, invuln, tick, hp, ammoRatio, shotCD, bombRatio, aimFeatures(3)
 const ENEMY_DIM = 9; // dx, dy (relative), aimAngle, speed, hasBombs, health, aimedAtMe, ammoThreat, isApproaching
 const PROJ_DIM = 5;
 const OBS_DIM = 4;
@@ -247,6 +247,11 @@ function normalizeObs(obs: TankObservation): number[] {
 	result[idx + 7] = Math.min(obs.tick / TICK_NORM_TICKS, 1.0);
 	result[idx + 8] = s.health / Math.max(s.maxHealth, 1);
 
+	// Resource features — ammo, cooldown, bombs
+	result[idx + 9] = s.activeAmmo / Math.max(s.maxAmmo, 1); // ammo ratio (1=full, 0=empty)
+	result[idx + 10] = s.shotCooldownTicks / Math.max(s.shotCooldownTicksOnFire, 1); // shot cooldown (0=ready, 1=just fired)
+	result[idx + 11] = s.activeBombs / Math.max(s.maxBombs, 1); // bomb ratio (0=none/empty)
+
 	// Derived aim features (relative to nearest enemy)
 	if (aliveEnemies.length > 0) {
 		let nearest = aliveEnemies[0];
@@ -266,13 +271,13 @@ function normalizeObs(obs: TankObservation): number[] {
 		const distToEnemy = Math.sqrt(nearestDistSq);
 		const aimAngle = s.aimAngle;
 		const aimError = Math.atan2(Math.sin(aimAngle - angleToEnemy), Math.cos(aimAngle - angleToEnemy));
-		result[idx + 9] = angleToEnemy / (2 * Math.PI) + 0.5;
-		result[idx + 10] = Math.min(distToEnemy / arenaDiag, 1.0);
-		result[idx + 11] = (aimError / Math.PI) * 0.5 + 0.5;
+		result[idx + 12] = angleToEnemy / (2 * Math.PI) + 0.5;
+		result[idx + 13] = Math.min(distToEnemy / arenaDiag, 1.0);
+		result[idx + 14] = (aimError / Math.PI) * 0.5 + 0.5;
 	} else {
-		result[idx + 9] = 0.5;
-		result[idx + 10] = 0.0;
-		result[idx + 11] = 0.5;
+		result[idx + 12] = 0.5;
+		result[idx + 13] = 0.0;
+		result[idx + 14] = 0.5;
 	}
 	idx += SELF_DIM;
 

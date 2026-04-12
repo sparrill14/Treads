@@ -2,9 +2,9 @@
  * Simple MLP forward pass for PPO policy inference in TypeScript.
  * Avoids per-tick IPC by running the neural network in-process.
  *
- * Architecture matches SB3's MlpPolicy with net_arch=[256, 256]:
- *   obs (current normalized runtime vector) → policyNet: Linear(obs_dim→256) → Tanh → Linear(256→256) → Tanh → policy_features
- *   obs (current normalized runtime vector) → valueNet:  Linear(obs_dim→256) → Tanh → Linear(256→256) → Tanh → value_features
+ * Architecture matches SB3's MlpPolicy with net_arch=[512, 256]:
+ *   obs (current normalized runtime vector) → policyNet: Linear(obs_dim→512) → Tanh → Linear(512→256) → Tanh → policy_features
+ *   obs (current normalized runtime vector) → valueNet:  Linear(obs_dim→512) → Tanh → Linear(512→256) → Tanh → value_features
  *   policy_features → action_net Linear(256→5) → action_mean [move_x, move_y, aim, fire, bomb]
  *   value_features  → value_net  Linear(256→1)  → value
  */
@@ -95,14 +95,14 @@ function sampleStandardNormal(rng: () => number): number {
 
 /**
  * Parse weights from SB3 state_dict format into PolicyWeights.
- * Expected keys (for net_arch=[256, 256] with separate pi/vf networks):
- *   mlp_extractor.policy_net.0.weight  [256, 63]
- *   mlp_extractor.policy_net.0.bias    [256]
- *   mlp_extractor.policy_net.2.weight  [256, 256]
+ * Expected keys (for net_arch=[512, 256] with separate pi/vf networks):
+ *   mlp_extractor.policy_net.0.weight  [512, obs_dim]
+ *   mlp_extractor.policy_net.0.bias    [512]
+ *   mlp_extractor.policy_net.2.weight  [256, 512]
  *   mlp_extractor.policy_net.2.bias    [256]
- *   mlp_extractor.value_net.0.weight   [256, 63]
- *   mlp_extractor.value_net.0.bias     [256]
- *   mlp_extractor.value_net.2.weight   [256, 256]
+ *   mlp_extractor.value_net.0.weight   [512, obs_dim]
+ *   mlp_extractor.value_net.0.bias     [512]
+ *   mlp_extractor.value_net.2.weight   [256, 512]
  *   mlp_extractor.value_net.2.bias     [256]
  *   action_net.weight                  [5, 256]
  *   action_net.bias                    [5]

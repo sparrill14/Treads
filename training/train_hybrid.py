@@ -141,11 +141,12 @@ DEFAULT_CURRICULUM: List[Dict[str, Any]] = [
     # ── Phase 3→4: Obstacle introduction (overlap both neighbors) ──
     {"name": "Phase 3.5 (bridge to obstacles)", "scenario_ids": [132, 133, 141], "min_phase_episodes": 1600, "force_phase_episodes": 6400, "required_win_rate": 0.45, "player_max_ammo": 3},
     {"name": "Phase 4 (obstacles)", "scenario_ids": [141, 142, 143], "min_phase_episodes": 2000, "force_phase_episodes": 8000, "required_win_rate": 0.42, "player_max_ammo": 3},
-    # ── Phase 4→5: Multi-enemy ramp (gentle bridge via 145-148, then full) ──
-    {"name": "Phase 4.5a (unarmed 2nd target)", "scenario_ids": [143, 145, 146], "min_phase_episodes": 2400, "force_phase_episodes": 10000, "required_win_rate": 0.42, "player_max_ammo": 4},
-    {"name": "Phase 4.5b (armed multi open)", "scenario_ids": [146, 147, 148], "min_phase_episodes": 2800, "force_phase_episodes": 12000, "required_win_rate": 0.40, "player_max_ammo": 4},
-    {"name": "Phase 4.5c (multi + obstacles)", "scenario_ids": [148, 151, 152], "min_phase_episodes": 3200, "force_phase_episodes": 14000, "required_win_rate": 0.38, "player_max_ammo": 4},
-    {"name": "Phase 5 (multi-enemy full)", "scenario_ids": [151, 152, 153], "min_phase_episodes": 3600, "force_phase_episodes": 15000, "required_win_rate": 0.36, "player_max_ammo": 4},
+    # ── Phase 4→5: Multi-enemy ramp (gentle bridge via 145-150, then full) ──
+    # Every phase includes at least 1 obstacle scenario to prevent forgetting
+    {"name": "Phase 4.5a (unarmed 2nd target)", "scenario_ids": [142, 143, 145, 146], "min_phase_episodes": 3000, "force_phase_episodes": 13000, "required_win_rate": 0.42, "player_max_ammo": 4},
+    {"name": "Phase 4.5b (armed multi open)", "scenario_ids": [143, 146, 147, 148, 149], "min_phase_episodes": 3600, "force_phase_episodes": 16000, "required_win_rate": 0.40, "player_max_ammo": 4},
+    {"name": "Phase 4.5c (multi + obstacles)", "scenario_ids": [148, 149, 150, 151, 152], "min_phase_episodes": 4200, "force_phase_episodes": 18000, "required_win_rate": 0.38, "player_max_ammo": 4},
+    {"name": "Phase 5 (multi-enemy full)", "scenario_ids": [150, 151, 152, 153], "min_phase_episodes": 4500, "force_phase_episodes": 20000, "required_win_rate": 0.36, "player_max_ammo": 4},
     # ── Phase 5→6: Bouncing shots introduction ──
     {"name": "Phase 5.5 (bridge to bouncing)", "scenario_ids": [152, 153, 161], "min_phase_episodes": 2800, "force_phase_episodes": 12000, "required_win_rate": 0.36, "player_max_ammo": 4},
     {"name": "Phase 6 (bouncing shots)", "scenario_ids": [161, 162, 163], "min_phase_episodes": 3200, "force_phase_episodes": 13000, "required_win_rate": 0.36, "player_max_ammo": 4},
@@ -192,7 +193,7 @@ class HybridTrainer:
         seed: int = 42,
         num_workers: int = 1,
         stability_mode: bool = True,
-        phase_pass_evals_required: int = 3,
+        phase_pass_evals_required: int = 5,
         phase_fail_evals_before_rollback: int = 3,
     ) -> None:
         self._explicit_levels = levels is not None
@@ -339,7 +340,7 @@ class HybridTrainer:
                 ent_coef=ent_coef,
                 target_kl=target_kl,
                 device="cpu",
-                policy_kwargs=dict(net_arch=[256, 256], optimizer_kwargs=dict(eps=1e-5)),
+                policy_kwargs=dict(net_arch=[512, 256], optimizer_kwargs=dict(eps=1e-5)),
                 seed=seed,
             )
         if cast(int, self.model.n_steps) != self.n_steps or cast(int, self.model.rollout_buffer.buffer_size) != self.n_steps:
@@ -407,12 +408,8 @@ class HybridTrainer:
         return float(wins / max(episodes, 1))
 
     def _save_ret_rms(self) -> None:
-        """Persist reward normalizer state alongside model checkpoints."""
-        try:
-            with open(self._ret_rms_path, "w") as f:
-                json.dump(self.ret_rms.to_dict(), f)
-        except Exception as exc:
-            print(f"WARNING: failed to save reward normalizer state ({exc})")
+        """No-op — reward normalization removed (truncation bootstrap fix)."""
+        pass
 
     def _save_stable_checkpoint(self, phase_index: int, eval_win_rate: float) -> None:
         path = os.path.join(self.output_dir, f"treads_ppo_phase{phase_index}_stable")
@@ -446,11 +443,9 @@ class HybridTrainer:
         if self._explicit_levels or self.current_phase_index >= len(self.curriculum) - 1:
             return None
         previous = self._get_curriculum_phase()
-        completed_phases = self.curriculum[: self.current_phase_index + 1]
-        recent_phases = completed_phases[-3:] if len(completed_phases) > 3 else completed_phases
-        self.rehearsal_ids = [sid for phase in recent_phases for sid in phase["scenario_ids"]]
         self.current_phase_index += 1
         self.peak_phase_index = max(self.peak_phase_index, self.current_phase_index)
+        self.rehearsal_ids = self._build_rehearsal_ids()
         self.levels = self._build_mixed_levels()
         self.phase_episode_wins = []
         self.phase_episode_rewards = []
@@ -470,15 +465,13 @@ class HybridTrainer:
         if self.current_phase_index - 1 < rollback_floor:
             print(f"  Rollback blocked: would go below floor phase {rollback_floor + 1} (peak={self.peak_phase_index + 1})")
             return None
-        # Enforce cooldown: require 2500+ episodes between rollbacks
-        if self.total_episodes - self.last_rollback_episode < 2500:
-            print(f"  Rollback blocked: cooldown ({self.total_episodes - self.last_rollback_episode}/2500 episodes)")
+        # Enforce cooldown: require 4000+ episodes between rollbacks
+        if self.total_episodes - self.last_rollback_episode < 4000:
+            print(f"  Rollback blocked: cooldown ({self.total_episodes - self.last_rollback_episode}/4000 episodes)")
             return None
         previous = self._get_curriculum_phase()
         self.current_phase_index -= 1
-        completed_phases = self.curriculum[: self.current_phase_index + 1]
-        recent_phases = completed_phases[-3:] if len(completed_phases) > 3 else completed_phases
-        self.rehearsal_ids = [sid for phase in recent_phases for sid in phase["scenario_ids"]]
+        self.rehearsal_ids = self._build_rehearsal_ids()
         self.levels = self._build_mixed_levels()
         # Seed phase history with neutral data instead of wiping
         target_wr = float(self._get_curriculum_phase().get("required_win_rate", 0.40))
@@ -745,13 +738,41 @@ class HybridTrainer:
     def _phase_episode_count(self) -> int:
         return self.total_episodes - self.phase_start_episode
 
+    def _build_rehearsal_ids(self) -> List[int]:
+        """Build rehearsal scenario list from ALL completed phases, not just recent ones.
+
+        Foundational skills (obstacle nav, 1v1 combat) decay when the curriculum
+        moves to multi-enemy open-field phases. This method ensures every mastered
+        skill category stays represented in the rehearsal pool.
+
+        Strategy: pick 1 representative scenario from each completed phase,
+        prioritizing obstacle / combat scenarios that test distinct skills.
+        """
+        completed_phases = self.curriculum[: self.current_phase_index]
+        if not completed_phases:
+            return []
+
+        # One representative per completed phase (last scenario_id = hardest in that phase)
+        foundational: List[int] = []
+        seen: set[int] = set()
+        for phase in completed_phases:
+            sids = phase["scenario_ids"]
+            # Pick the last (hardest) scenario that we haven't already included
+            for sid in reversed(sids):
+                if sid not in seen:
+                    foundational.append(sid)
+                    seen.add(sid)
+                    break
+
+        return foundational
+
     def _target_current_share(self) -> float:
         """Adaptive current-phase share with stronger rehearsal during collapse."""
         if self._explicit_levels:
             return 1.0
         anneal_episodes = 2000.0
         progress = min(1.0, max(0.0, self._phase_episode_count() / anneal_episodes))
-        base = 0.60 + 0.20 * progress
+        base = 0.55 + 0.17 * progress
         phase_wr = self._phase_recent_win_rate()
         # When current phase is unstable, increase rehearsal to prevent forgetting.
         if phase_wr < 0.12:
@@ -865,13 +886,9 @@ class HybridTrainer:
             )
 
         previous = current
-        # Keep only scenario_ids from the most recent 3 completed phases,
-        # including the phase we are transitioning out of right now.
-        completed_phases = self.curriculum[: self.current_phase_index + 1]
-        recent_phases = completed_phases[-3:] if len(completed_phases) > 3 else completed_phases
-        self.rehearsal_ids = [sid for phase in recent_phases for sid in phase["scenario_ids"]]
         self.current_phase_index += 1
         self.peak_phase_index = max(self.peak_phase_index, self.current_phase_index)
+        self.rehearsal_ids = self._build_rehearsal_ids()
         self.levels = self._build_mixed_levels()
         self.phase_episode_wins = []
         self.phase_episode_rewards = []
@@ -911,16 +928,14 @@ class HybridTrainer:
         if self.current_phase_index - 1 < rollback_floor:
             print(f"  Rollback blocked: would go below floor phase {rollback_floor + 1} (peak={self.peak_phase_index + 1})")
             return None
-        # Enforce cooldown: require 2500+ episodes between rollbacks
-        if self.total_episodes - self.last_rollback_episode < 2500:
-            print(f"  Rollback blocked: cooldown ({self.total_episodes - self.last_rollback_episode}/2500 episodes)")
+        # Enforce cooldown: require 4000+ episodes between rollbacks
+        if self.total_episodes - self.last_rollback_episode < 4000:
+            print(f"  Rollback blocked: cooldown ({self.total_episodes - self.last_rollback_episode}/4000 episodes)")
             return None
 
         previous = self._get_curriculum_phase()
         self.current_phase_index -= 1
-        completed_phases = self.curriculum[: self.current_phase_index + 1]
-        recent_phases = completed_phases[-3:] if len(completed_phases) > 3 else completed_phases
-        self.rehearsal_ids = [sid for phase in recent_phases for sid in phase["scenario_ids"]]
+        self.rehearsal_ids = self._build_rehearsal_ids()
         self.levels = self._build_mixed_levels()
         # Seed phase history with neutral data instead of wiping
         target_wr = float(self._get_curriculum_phase().get("required_win_rate", 0.40))
@@ -1229,20 +1244,10 @@ class HybridTrainer:
             starts_arr = np.array(chunk["episode_starts"], dtype=np.float32)
             values_arr = np.array(chunk["values"], dtype=np.float32)
 
-            # Reward normalization: track discounted returns, normalize by running std
-            n = rewards_arr.shape[0]
-            rets = np.zeros(n, dtype=np.float32)
-            ret = 0.0
-            for i in range(n):
-                if starts_arr[i] > 0.5:
-                    ret = 0.0
-                ret = ret * self.gamma + float(rewards_arr[i])
-                rets[i] = ret
-            self.ret_rms.update(rets)
-            rewards_arr = np.clip(
-                rewards_arr / np.sqrt(max(self.ret_rms.var, 1e-8)),
-                -10.0, 10.0,
-            ).astype(np.float32)
+            # NOTE: Reward normalization removed — it double-normalizes the
+            # truncation bootstrap value (gamma*V is already in the value-fn
+            # scale; dividing by sqrt(var) again corrupts it).  Our reward
+            # magnitudes are bounded and known, so normalization is unnecessary.
 
             advantages_arr, returns_arr = self._compute_chunk_gae(
                 rewards=rewards_arr,
@@ -1666,9 +1671,9 @@ class HybridTrainer:
                         can_rollback = (
                             self.current_phase_index > 0
                             and self.current_phase_index - 1 >= rollback_floor
-                            and phase_episodes >= 700
+                            and phase_episodes >= 1500
                             and self.phase_eval_fail_streak >= self.phase_fail_evals_before_rollback
-                            and self.total_episodes - self.last_rollback_episode >= 1500
+                            and self.total_episodes - self.last_rollback_episode >= 3000
                         )
                         if can_rollback:
                             rollback = self._rollback_curriculum_from_eval()

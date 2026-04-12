@@ -7,7 +7,7 @@ const MAX_ENEMIES = 6;
 const MAX_PROJECTILES = 15;
 const MAX_OBSTACLES = 5;
 const MAX_BOMBS = 6;
-const SELF_DIM = 12;
+const SELF_DIM = 15; // pos(2), aim, speed, LOS, blocked, invuln, tick, hp, ammoRatio, shotCD, bombRatio, aimFeatures(3)
 const ENEMY_DIM = 9; // [relX, relY, aimAngle, speed, hasBomb, health, aimed_at_me, ammoThreat, isApproaching]
 const PROJ_DIM = 5;
 const OBS_DIM = 4;
@@ -28,7 +28,7 @@ const OBS_SIZE =
 const ACTION_DIM = 5;
 const FIRE_THRESHOLD = 0.0;
 const BOMB_THRESHOLD = 0.5;
-const AIM_OFFSET_LIMIT = Math.PI;
+const AIM_OFFSET_LIMIT = Math.PI / 18; // ±10° — must match training (rollout-worker.ts)
 const ARENA_DIAGONAL = Math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * ARENA_HEIGHT);
 const MOVE_DEAD_ZONE = 0.33;
 
@@ -284,6 +284,11 @@ export class NeuralNetController implements TankController {
 		result[idx + 7] = Math.min(obs.tick / 1080, 1);
 		result[idx + 8] = obs.self.health / Math.max(obs.self.maxHealth, 1);
 
+		// Resource features — ammo, cooldown, bombs
+		result[idx + 9] = obs.self.activeAmmo / Math.max(obs.self.maxAmmo, 1); // ammo ratio (1=full, 0=empty)
+		result[idx + 10] = obs.self.shotCooldownTicks / Math.max(obs.self.shotCooldownTicksOnFire, 1); // shot cooldown (0=ready, 1=just fired)
+		result[idx + 11] = obs.self.activeBombs / Math.max(obs.self.maxBombs, 1); // bomb ratio (0=none/empty)
+
 		// Derived aim features (relative to nearest enemy)
 		if (livingEnemies.length > 0) {
 			const nearest = livingEnemies[0];
@@ -293,13 +298,13 @@ export class NeuralNetController implements TankController {
 			const distToEnemy = Math.sqrt((ex - sx) ** 2 + (ey - sy) ** 2);
 			const aimAngle = obs.self.aimAngle;
 			const aimError = Math.atan2(Math.sin(aimAngle - angleToEnemy), Math.cos(aimAngle - angleToEnemy));
-			result[idx + 9] = angleToEnemy / (2 * Math.PI) + 0.5;
-			result[idx + 10] = Math.min(distToEnemy / arenaDiag, 1.0);
-			result[idx + 11] = (aimError / Math.PI) * 0.5 + 0.5;
+			result[idx + 12] = angleToEnemy / (2 * Math.PI) + 0.5;
+			result[idx + 13] = Math.min(distToEnemy / arenaDiag, 1.0);
+			result[idx + 14] = (aimError / Math.PI) * 0.5 + 0.5;
 		} else {
-			result[idx + 9] = 0.5;
-			result[idx + 10] = 0.0;
-			result[idx + 11] = 0.5;
+			result[idx + 12] = 0.5;
+			result[idx + 13] = 0.0;
+			result[idx + 14] = 0.5;
 		}
 		idx += SELF_DIM;
 
