@@ -218,7 +218,7 @@ function normalizeObs(obs: TankObservation): number[] {
 	const arenaDiag = ARENA_DIAGONAL;
 	const aliveEnemies = obs.enemies.filter((e) => !e.destroyed);
 
-	// ── Self features (SELF_DIM = 12) ──
+	// ── Self features (SELF_DIM = 15) ──
 	result[idx] = s.x / ARENA_WIDTH;
 	result[idx + 1] = s.y / ARENA_HEIGHT;
 	result[idx + 2] = s.aimAngle / (2 * Math.PI) + 0.5; // Fix 1: map [-π,π] → [0,1]

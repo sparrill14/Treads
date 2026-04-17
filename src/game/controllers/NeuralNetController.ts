@@ -266,7 +266,7 @@ export class NeuralNetController implements TankController {
 				return da - db;
 			});
 
-		// ── Self features (SELF_DIM = 12) ──
+		// ── Self features (SELF_DIM = 15) ──
 		result[idx] = obs.self.x / ARENA_WIDTH;
 		result[idx + 1] = obs.self.y / ARENA_HEIGHT;
 		result[idx + 2] = obs.self.aimAngle / (2 * Math.PI) + 0.5; // Fix 1: map [-π,π] → [0,1]
