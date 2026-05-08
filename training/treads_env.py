@@ -83,8 +83,10 @@ DEATH_REWARD = -2.0
 TERMINAL_WIN_REWARD = 5.0
 TERMINAL_LOSS_REWARD = -3.0
 TIMEOUT_REWARD = -1.0
-APPROACH_SCALE = 0.5
-DODGE_SCALE = 0.15
+# 5x bump from prior (0.5/0.15) so per-step shaping is meaningful vs the
+# per-step penalty after ARENA_DIAGONAL (~1118) normalization.
+APPROACH_SCALE = 2.5
+DODGE_SCALE = 0.75
 
 
 class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):

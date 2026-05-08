@@ -20,7 +20,7 @@ from stable_baselines3 import PPO
 sys.path.insert(0, os.path.dirname(__file__))
 
 from sb3_compat import ensure_pickle_compat  # noqa: E402
-from runtime_codec import OBS_SIZE, decode_continuous_action  # noqa: E402
+from runtime_codec import OBS_SIZE, decode_multi_discrete_action  # noqa: E402
 from treads_env import TreadsEnv  # noqa: E402
 
 ensure_pickle_compat()
@@ -149,7 +149,7 @@ def validate(
         raise ValueError(
             "Checkpoint observation shape does not match the current runtime contract: "
             f"model={model_obs_shape}, expected={(OBS_SIZE,)}. "
-            "Export or validate a checkpoint trained with the current 197-feature observation layout."
+            f"Export or validate a checkpoint trained with the current {OBS_SIZE}-feature observation layout."
         )
     print(f"Loaded checkpoint: {model_path}")
     print(
@@ -179,7 +179,7 @@ def validate(
                 while not done:
                     action, _ = model.predict(obs, deterministic=deterministic)
                     obs_raw = cast(Optional[ObsDict], getattr(env, "_last_obs_raw", None))
-                    decoded = decode_continuous_action(action, obs_raw)
+                    decoded = decode_multi_discrete_action(action, obs_raw)
 
                     fires += int(decoded["fire"])
                     bombs += int(decoded["plant_bomb"])

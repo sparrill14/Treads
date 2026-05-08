@@ -34,7 +34,7 @@ from sb3_compat import ensure_pickle_compat
 from export_onnx import export_to_onnx
 from stable_baselines3 import PPO
 from stable_baselines3.common.logger import configure
-from runtime_codec import decode_continuous_action
+from runtime_codec import decode_multi_discrete_action
 from treads_env import OBS_SIZE, TreadsEnv
 
 ensure_pickle_compat()
@@ -173,7 +173,7 @@ class HybridTrainer:
         n_steps: int = 4096,
         batch_size: int = 512,
         n_epochs: int = 10,
-        gamma: float = 0.99,
+        gamma: float = 0.997,
         gae_lambda: float = 0.95,
         learning_rate: float = 1e-4,
         clip_range: float = 0.15,
@@ -181,6 +181,8 @@ class HybridTrainer:
         ent_coef: float = 0.015,
         ent_coef_final: float = 0.003,
         target_kl: float = 0.02,
+        vf_coef: float = 0.5,
+        max_grad_norm: float = 0.5,
         max_episode_steps: int = 720,
         output_dir: Optional[str] = None,
         load_model_path: Optional[str] = None,
@@ -191,7 +193,7 @@ class HybridTrainer:
         eval_levels: Optional[List[int]] = None,
         eval_seed_start: int = 25000,
         seed: int = 42,
-        num_workers: int = 1,
+        num_workers: int = 4,
         stability_mode: bool = True,
         phase_pass_evals_required: int = 5,
         phase_fail_evals_before_rollback: int = 3,
@@ -271,14 +273,14 @@ class HybridTrainer:
         self.run_started_at = datetime.now(timezone.utc)
         self.run_finished_at: Optional[datetime] = None
 
-        class _DummyContinuousActionEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
+        class _DummyMultiDiscreteEnv(gym.Env[NDArray[np.float32], NDArray[np.integer[Any]]]):
             metadata = {"render_modes": []}
 
             def __init__(self) -> None:
                 super().__init__()
                 self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(OBS_SIZE,), dtype=np.float32)
-                # [move_x, move_y, aim_signal, fire_signal, bomb_signal] in [-1, 1]
-                self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32)
+                # MultiDiscrete([move(9), aim_bin(16), fire(2), bomb(2)])
+                self.action_space = spaces.MultiDiscrete([9, 16, 2, 2])
 
             def reset(
                 self,
@@ -289,12 +291,12 @@ class HybridTrainer:
                 super().reset(seed=seed)
                 return np.zeros((OBS_SIZE,), dtype=np.float32), {}
 
-            def step(self, action: NDArray[np.float32]) -> Tuple[NDArray[np.float32], float, bool, bool, Dict[str, Any]]:
+            def step(self, action: NDArray[np.integer[Any]]) -> Tuple[NDArray[np.float32], float, bool, bool, Dict[str, Any]]:
                 _ = action
                 return np.zeros((OBS_SIZE,), dtype=np.float32), 0.0, True, False, {}
 
-        # Create a dummy continuous-action env so SB3 policy/distribution match worker sampling.
-        dummy_env = _DummyContinuousActionEnv()
+        # Create a dummy MultiDiscrete env so SB3 policy/distribution match worker sampling.
+        dummy_env = _DummyMultiDiscreteEnv()
         clip_schedule = linear_schedule_between(clip_range, clip_range_final)
         lr_schedule = linear_schedule_between(learning_rate, 0.0)
         if load_model_path and os.path.exists(load_model_path):
@@ -310,7 +312,9 @@ class HybridTrainer:
                 gamma=gamma,
                 gae_lambda=gae_lambda,
                 clip_range=clip_schedule,
-                clip_range_vf=None,
+                clip_range_vf=clip_schedule,
+                vf_coef=vf_coef,
+                max_grad_norm=max_grad_norm,
                 ent_coef=ent_coef,
                 target_kl=target_kl,
                 policy_kwargs=dict(optimizer_kwargs=dict(eps=1e-5)),
@@ -336,7 +340,9 @@ class HybridTrainer:
                 gamma=gamma,
                 gae_lambda=gae_lambda,
                 clip_range=clip_schedule,
-                clip_range_vf=None,
+                clip_range_vf=clip_schedule,
+                vf_coef=vf_coef,
+                max_grad_norm=max_grad_norm,
                 ent_coef=ent_coef,
                 target_kl=target_kl,
                 device="cpu",
@@ -395,7 +401,7 @@ class HybridTrainer:
                     while not done:
                         action, _ = cast(Any, self.model).predict(obs, deterministic=True)
                         obs_raw = cast(Optional[Dict[str, Any]], getattr(env, "_last_obs_raw", None))
-                        decoded = decode_continuous_action(action, obs_raw)
+                        decoded = decode_multi_discrete_action(action, obs_raw)
                         obs, _reward, terminated, truncated, info = env.step(decoded)
                         done = terminated or truncated
                     result = cast(Dict[str, Any], info.get("result", {}))
@@ -408,8 +414,12 @@ class HybridTrainer:
         return float(wins / max(episodes, 1))
 
     def _save_ret_rms(self) -> None:
-        """No-op — reward normalization removed (truncation bootstrap fix)."""
-        pass
+        """Persist running-mean-std reward normalizer state next to the model."""
+        try:
+            with open(self._ret_rms_path, "w") as f:
+                json.dump(self.ret_rms.to_dict(), f)
+        except Exception as exc:
+            print(f"  WARNING: failed to persist ret_rms state to {self._ret_rms_path}: {exc}")
 
     def _save_stable_checkpoint(self, phase_index: int, eval_win_rate: float) -> None:
         path = os.path.join(self.output_dir, f"treads_ppo_phase{phase_index}_stable")
@@ -473,11 +483,10 @@ class HybridTrainer:
         self.current_phase_index -= 1
         self.rehearsal_ids = self._build_rehearsal_ids()
         self.levels = self._build_mixed_levels()
-        # Seed phase history with neutral data instead of wiping
-        target_wr = float(self._get_curriculum_phase().get("required_win_rate", 0.40))
-        seed_count = 100
-        self.phase_episode_wins = [1 if i < int(seed_count * target_wr) else 0 for i in range(seed_count)]
-        self.phase_episode_rewards = [0.0] * seed_count
+        # Reset phase history (no biased seeding); _phase_is_stable() requires
+        # min_phase_episodes of real data before allowing the next promotion.
+        self.phase_episode_wins = []
+        self.phase_episode_rewards = []
         self.phase_start_episode = self.total_episodes
         self.phase_eval_pass_streak = 0
         self.phase_eval_fail_streak = 0
@@ -937,11 +946,10 @@ class HybridTrainer:
         self.current_phase_index -= 1
         self.rehearsal_ids = self._build_rehearsal_ids()
         self.levels = self._build_mixed_levels()
-        # Seed phase history with neutral data instead of wiping
-        target_wr = float(self._get_curriculum_phase().get("required_win_rate", 0.40))
-        seed_count = 100
-        self.phase_episode_wins = [1 if i < int(seed_count * target_wr) else 0 for i in range(seed_count)]
-        self.phase_episode_rewards = [0.0] * seed_count
+        # Reset phase history (no biased seeding); _phase_is_stable() requires
+        # min_phase_episodes of real data before allowing the next promotion.
+        self.phase_episode_wins = []
+        self.phase_episode_rewards = []
         self.phase_start_episode = self.total_episodes
         self.last_rollback_episode = self.total_episodes
         self._ent_coef_boost = self.ent_coef_start * 0.5
@@ -1159,6 +1167,7 @@ class HybridTrainer:
                     "episode_starts": r["episode_starts"],
                     "values": r["values"],
                     "log_probs": r["log_probs"],
+                    "truncation_values": r.get("truncation_values", [0.0] * len(r["rewards"])),
                     "last_done": r["last_done"],
                     "last_value": r["last_value"],
                 })
@@ -1199,6 +1208,36 @@ class HybridTrainer:
 
         returns = advantages + values
         return advantages, returns
+
+    def _log_per_head_entropy(self) -> None:
+        """Print per-head entropy of the current policy on the buffered observations.
+        Helps detect collapse of one head (most often `aim` collapsing to one bin).
+        """
+        try:
+            import torch
+            buf = self.model.rollout_buffer
+            obs_t = torch.as_tensor(buf.observations[:, 0, :], dtype=torch.float32)
+            policy = cast(Any, self.model).policy
+            with torch.no_grad():
+                dist = policy.get_distribution(obs_t)
+                # MultiCategoricalDistribution stores per-head torch.distributions.Categorical
+                # in `distribution` (a list).
+                inner = getattr(dist, "distribution", None)
+                if inner is None or not isinstance(inner, list):
+                    return
+                inner_list = cast(List[Any], inner)
+                head_entropies = [
+                    float(d.entropy().mean().item()) for d in inner_list
+                ]
+            head_names = ["move", "aim", "fire", "bomb"]
+            head_max_ent = [float(np.log(s)) for s in [9, 16, 2, 2]]
+            parts = [
+                f"{name}={ent:.3f}/{maxent:.3f}"
+                for name, ent, maxent in zip(head_names, head_entropies, head_max_ent)
+            ]
+            print(f"  PPO head-ent: {' '.join(parts)}")
+        except Exception as exc:  # pragma: no cover - logging only
+            print(f"  (per-head entropy unavailable: {exc})")
 
     @staticmethod
     def _reward_source_percentages(breakdowns: List[Dict[str, Any]]) -> Tuple[float, float, float]:
@@ -1243,11 +1282,36 @@ class HybridTrainer:
             rewards_arr = np.array(chunk["rewards"], dtype=np.float32)
             starts_arr = np.array(chunk["episode_starts"], dtype=np.float32)
             values_arr = np.array(chunk["values"], dtype=np.float32)
+            # Truncation bootstrap (per-step gamma * V(s_post) at timeout indices,
+            # 0 elsewhere). Applied AFTER reward normalization below so the
+            # bootstrap shares the value head's (normalized) scale.
+            trunc_values_arr = np.array(
+                chunk.get("truncation_values", [0.0] * len(rewards_arr)),
+                dtype=np.float32,
+            )
 
-            # NOTE: Reward normalization removed — it double-normalizes the
-            # truncation bootstrap value (gamma*V is already in the value-fn
-            # scale; dividing by sqrt(var) again corrupts it).  Our reward
-            # magnitudes are bounded and known, so normalization is unnecessary.
+            # SB3 VecNormalize-style reward normalization: divide rewards by
+            # sqrt(var of discounted returns).  We compute returns once on raw
+            # rewards (no bootstrap) to update the running stats, then re-run
+            # GAE on (normalized rewards + gamma * V_post bootstrap) so the
+            # buffer's advantages/returns are on the same scale the value head
+            # is regressing toward.
+            _, raw_returns = self._compute_chunk_gae(
+                rewards=rewards_arr,
+                episode_starts=starts_arr,
+                values=values_arr,
+                last_value=float(chunk["last_value"]),
+                last_done=bool(chunk["last_done"]),
+            )
+            self.ret_rms.update(raw_returns)
+            ret_std = float(np.sqrt(self.ret_rms.var + 1e-8))
+            if ret_std > 1e-6:
+                rewards_arr = rewards_arr / ret_std
+            # Add the unnormalized bootstrap AFTER scaling raw rewards. The
+            # value head is regressed against normalized returns, so V(s_post)
+            # is already on the normalized scale.
+            if np.any(trunc_values_arr != 0.0):
+                rewards_arr = rewards_arr + self.gamma * trunc_values_arr
 
             advantages_arr, returns_arr = self._compute_chunk_gae(
                 rewards=rewards_arr,
@@ -1308,6 +1372,13 @@ class HybridTrainer:
         if not self._explicit_levels:
             self.phase_episode_wins.extend(ep_wins)
             self.phase_episode_rewards.extend([float(r) for r in ep_rewards])
+            # Cap phase history to avoid unbounded memory growth in long runs.
+            # 5000 entries comfortably exceeds min_phase_episodes window sizes.
+            _MAX_PHASE_HISTORY = 5000
+            if len(self.phase_episode_wins) > _MAX_PHASE_HISTORY:
+                self.phase_episode_wins = self.phase_episode_wins[-_MAX_PHASE_HISTORY:]
+            if len(self.phase_episode_rewards) > _MAX_PHASE_HISTORY:
+                self.phase_episode_rewards = self.phase_episode_rewards[-_MAX_PHASE_HISTORY:]
 
         for offset, ep_reward in enumerate(ep_rewards):
             absolute_episode = self.total_episodes + offset + 1
@@ -1443,11 +1514,14 @@ class HybridTrainer:
                         f"  PPO: pg_loss={pg:.4f} val_loss={vl:.4f} ent={ent:.4f} "
                         f"clip_frac={clip_frac:.3f} kl={approx_kl:.4f} expl_var={expl_var:.3f}"
                     )
+                    self._log_per_head_entropy()
                     if not np.isfinite(float(vl)):
                         raise RuntimeError("PPO value_loss became non-finite; aborting to prevent corrupted checkpoints.")
                     if self.target_kl > 0 and float(approx_kl) > self.target_kl * 4.0:
-                        raise RuntimeError(
-                            f"PPO approx_kl spike ({float(approx_kl):.4f}) exceeded 4x target_kl ({self.target_kl:.4f})."
+                        print(
+                            f"  WARNING: PPO approx_kl spike ({float(approx_kl):.4f}) exceeded "
+                            f"4x target_kl ({self.target_kl:.4f}). SB3's early-stop should have "
+                            f"halted further epochs; continuing to next iteration."
                         )
                     if float(clip_frac) > 0.8:
                         print("  WARNING: clip_fraction > 0.8; updates may be too aggressive.")
@@ -1787,7 +1861,7 @@ def train() -> None:
     parser.add_argument("--output-dir", type=str, default="", help="Optional output directory override")
     parser.add_argument("--checkpoint-interval", type=int, default=500, help="Checkpoint interval in episodes")
     parser.add_argument("--replay-interval", type=int, default=250, help="Replay save interval in episodes")
-    parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor (default: 0.99)")
+    parser.add_argument("--gamma", type=float, default=0.997, help="Discount factor (default: 0.997)")
     parser.add_argument("--ent-coef", type=float, default=0.015, help="Entropy coefficient (default: 0.015)")
     parser.add_argument("--ent-coef-final", type=float, default=0.003, help="Final entropy coefficient at end of training (default: 0.003)")
     parser.add_argument("--max-ticks", type=int, default=720, help="Max ticks per episode (default: 720)")

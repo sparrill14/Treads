@@ -1,9 +1,11 @@
 """
 Export the trained SB3 PPO model to ONNX format for use in the browser.
-Handles continuous control action space: outputs action means for
-[move_x, move_y, aim_signal, fire_signal, bomb_signal] in [-1, 1].
+Action space: MultiDiscrete([9, 16, 2, 2]).  The exported network outputs raw
+logits of length 29 = 9 + 16 + 2 + 2.  Browser-side code argmax-decodes each
+contiguous slice into [move_idx, aim_bin, fire, bomb].
 """
 
+import math
 import os
 import sys
 from typing import Any, cast
@@ -19,6 +21,12 @@ from stable_baselines3 import PPO
 from treads_env import OBS_SIZE
 
 ensure_pickle_compat()
+
+ACTION_HEAD_SIZES = (9, 16, 2, 2)
+ACTION_LOGITS_DIM = sum(ACTION_HEAD_SIZES)
+NUM_AIM_BINS = ACTION_HEAD_SIZES[1]
+AIM_BIN_RADIANS = (2.0 * math.pi) / NUM_AIM_BINS
+MOVE_INTENTS = ["none", "n", "s", "e", "w", "ne", "nw", "se", "sw"]
 
 
 def export_to_onnx(model_path: str, onnx_path: str) -> None:
@@ -36,9 +44,9 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
         def forward(self, obs: torch.Tensor) -> torch.Tensor:
             features = self.policy.extract_features(obs, self.policy.features_extractor)
             latent_pi, _ = self.policy.mlp_extractor(features)
-            action_mean = self.policy.action_net(latent_pi)
-            assert isinstance(action_mean, torch.Tensor)
-            return action_mean
+            logits = self.policy.action_net(latent_pi)
+            assert isinstance(logits, torch.Tensor)
+            return logits
 
     wrapper = PolicyWrapper(policy)
     wrapper.eval()
@@ -55,10 +63,10 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
         opset_version=17,
         do_constant_folding=True,
         input_names=["observation"],
-        output_names=["action_mean"],
+        output_names=["logits"],
         dynamic_axes={
             "observation": {0: "batch_size"},
-            "action_mean": {0: "batch_size"},
+            "logits": {0: "batch_size"},
         },
         dynamo=False,
     )
@@ -71,43 +79,27 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
     test_obs = np.zeros((1, OBS_SIZE), dtype=np.float32)
     result = cast(Any, session).run(None, {"observation": test_obs})
     output_arr = np.asarray(result[0])
-    action_mean: NDArray[np.float32] = output_arr[0].astype(np.float32)
-    print(f"ONNX verification - output shape: {output_arr.shape}, action dims: {len(action_mean)}")
+    logits: NDArray[np.float32] = output_arr[0].astype(np.float32)
+    print(f"ONNX verification - output shape: {output_arr.shape}, logits dim: {len(logits)}")
+    if len(logits) != ACTION_LOGITS_DIM:
+        raise RuntimeError(
+            f"Expected {ACTION_LOGITS_DIM} logits, got {len(logits)}"
+        )
 
-    MOVE_DEAD_ZONE = 0.33
-    mx = float(np.clip(action_mean[0], -1.0, 1.0))
-    my = float(np.clip(action_mean[1], -1.0, 1.0))
-    aim_signal = float(np.clip(action_mean[2], -1.0, 1.0))
-    fire_signal = float(np.clip(action_mean[3], -1.0, 1.0))
-    bomb_signal = float(np.clip(action_mean[4], -1.0, 1.0))
-
-    go_e = mx > MOVE_DEAD_ZONE
-    go_w = mx < -MOVE_DEAD_ZONE
-    go_s = my > MOVE_DEAD_ZONE
-    go_n = my < -MOVE_DEAD_ZONE
-    if go_n and go_e:
-        move_dir = "ne"
-    elif go_n and go_w:
-        move_dir = "nw"
-    elif go_s and go_e:
-        move_dir = "se"
-    elif go_s and go_w:
-        move_dir = "sw"
-    elif go_n:
-        move_dir = "n"
-    elif go_s:
-        move_dir = "s"
-    elif go_e:
-        move_dir = "e"
-    elif go_w:
-        move_dir = "w"
-    else:
-        move_dir = "none"
-
-    # aim_signal is enemy-relative offset: 0 = nearest enemy, ±1 = full π offset
-    fire = fire_signal > 0.0
-    bomb = bomb_signal > 0.5
-    print(f"  decoded move={move_dir} aim_signal={aim_signal:.3f} fire={fire} bomb={bomb}")
+    # Argmax-decode each head
+    offset = 0
+    decoded: list[int] = []
+    for size in ACTION_HEAD_SIZES:
+        slice_ = logits[offset:offset + size]
+        decoded.append(int(np.argmax(slice_)))
+        offset += size
+    move_idx, aim_bin, fire, bomb = decoded
+    move_dir = MOVE_INTENTS[move_idx]
+    aim_angle = aim_bin * AIM_BIN_RADIANS
+    print(
+        f"  decoded move={move_dir} aim_bin={aim_bin} (angle={aim_angle:.3f} rad) "
+        f"fire={bool(fire)} bomb={bool(bomb)}"
+    )
 
 
 if __name__ == "__main__":

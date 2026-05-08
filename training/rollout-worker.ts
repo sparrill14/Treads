@@ -30,8 +30,12 @@ import type {
 } from '../src/game/core/types';
 import { type LevelConfig } from '../src/game/LevelConfig';
 import { NavigationPlanner } from '../src/game/navigation/NavigationPlanner';
-import { PolicyMLP, parseWeightsFromStateDict } from './mlp-inference';
+import { ACTION_DIM, ACTION_HEAD_SIZES, PolicyMLP, parseWeightsFromStateDict } from './mlp-inference';
 import { resolveScenarioConfig } from './training-scenarios';
+
+const MOVE_INTENTS_BY_INDEX: MoveIntent[] = ['none', 'n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+const NUM_AIM_BINS = ACTION_HEAD_SIZES[1];
+const AIM_BIN_RADIANS = (2 * Math.PI) / NUM_AIM_BINS;
 
 type HealthRequest = Record<string, never>;
 interface HealthResponse {
@@ -110,9 +114,6 @@ const OBS_SIZE =
 	MAX_BOMBS * BOMB_DIM +
 	SUMMARY_DIM;
 const PLAYER_TANK_ID = 'player-0';
-const FIRE_THRESHOLD = 0.0; // Fire only when signal > 0.
-const BOMB_THRESHOLD = 0.5;
-const AIM_OFFSET_LIMIT = Math.PI / 18; // Keep exploration near target bearing (~10deg).
 const STEP_PENALTY = -0.001;
 const HIT_REWARD = 0.3;
 const TOOK_DAMAGE_PENALTY = -0.3;
@@ -121,8 +122,15 @@ const DEATH_REWARD = -2.0;
 const TERMINAL_WIN_REWARD = 5.0;
 const TERMINAL_LOSS_REWARD = -3.0;
 const TIMEOUT_REWARD = -1.0;
-let GAMMA = 0.99; // Updated from CollectRequest; must match train_hybrid.py gamma
-const DODGE_SCALE = 0.15; // potential-based: reward for staying away from enemy projectiles
+// GAMMA is no longer needed in the worker (truncation bootstrap is now applied
+// in Python AFTER reward normalization), but the request still carries it for
+// forward-compat / debugging.
+// Potential-based shaping scales. Increased 5x (0.15->0.75, 0.5->2.5) so the
+// per-step shaping signal is meaningful relative to STEP_PENALTY and survives
+// reward normalization (was effectively ~4e-4/step, now ~2e-3/step before
+// normalization which is on the same order as sparse-event rewards).
+const DODGE_SCALE = 0.75; // potential-based: reward for staying away from enemy projectiles
+const APPROACH_SCALE = 2.5; // potential-based: reward for closing distance to nearest enemy
 const ARENA_DIAGONAL = Math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * ARENA_HEIGHT);
 const MAX_FUSE_TICKS = 360.0; // Max fuse ticks for any bomb type
 const MAX_BLAST_RADIUS = 100.0; // Normalize blast radius by this value
@@ -442,6 +450,8 @@ interface RewardTracker {
 	prevEnemyHealthTotal: number;
 	prevSelfHealth: number;
 	prevEnemyProjDist: number;
+	prevEnemyDist: number;
+	approachTargetId: string;
 }
 
 interface RewardBreakdown {
@@ -486,75 +496,46 @@ function mergeRewardBreakdown(target: RewardBreakdown, add: RewardBreakdown): vo
 }
 
 /**
- * Decodes NN action signals into a TankAction.
- * Action layout: [move_x, move_y, aim_signal, fire_signal, bomb_signal]
- *
- * Movement: 2D continuous (move_x, move_y) mapped to 9 discrete intents.
- *   Geometrically meaningful: nearby values → nearby directions.
- *   Center (0,0) → 'none'; thresholds at ±0.33 for cardinal/diagonal.
- *
- * Aim: aim_signal ∈ [-1, 1] is an offset from angle-to-nearest-enemy.
- *   aim_signal = 0  → aimed directly at enemy
- *   aim_signal = ±1 → aimed opposite the nearest-enemy angle (±pi)
+ * Decode a MultiDiscrete([9, 16, 2, 2]) action vector into a TankAction.
+ *   action[0] ∈ [0, 9)  → MoveIntent index
+ *   action[1] ∈ [0, 16) → absolute aim bin (each = 22.5°)
+ *   action[2] ∈ {0, 1}  → fire
+ *   action[3] ∈ {0, 1}  → plant bomb
  */
-function decodeActionSignal(signal: number[], rawObs: TankObservation): { decoded: TankAction; clamped: number[] } {
-	const clamped = signal.map((v) => Math.max(-1, Math.min(1, v)));
-
-	// 2D movement decode: (move_x, move_y) → MoveIntent
-	const mx = clamped[0];
-	const my = clamped[1];
-	const MOVE_DEAD_ZONE = 0.33;
-	const goE = mx > MOVE_DEAD_ZONE;
-	const goW = mx < -MOVE_DEAD_ZONE;
-	const goS = my > MOVE_DEAD_ZONE;
-	const goN = my < -MOVE_DEAD_ZONE;
-	let moveIntent: MoveIntent;
-	if (goN && goE) moveIntent = 'ne';
-	else if (goN && goW) moveIntent = 'nw';
-	else if (goS && goE) moveIntent = 'se';
-	else if (goS && goW) moveIntent = 'sw';
-	else if (goN) moveIntent = 'n';
-	else if (goS) moveIntent = 's';
-	else if (goE) moveIntent = 'e';
-	else if (goW) moveIntent = 'w';
-	else moveIntent = 'none';
-
-	// Enemy-relative aim encoding
-	const s = rawObs.self;
-	const sx = s.x + s.size / 2;
-	const sy = s.y + s.size / 2;
-	const aliveEnemies = rawObs.enemies.filter((e) => !e.destroyed);
-	let aimAngle: number;
-	if (aliveEnemies.length > 0) {
-		let nearest = aliveEnemies[0];
-		let nearestDistSq = Infinity;
-		for (const e of aliveEnemies) {
-			const dx = e.x + e.size / 2 - sx;
-			const dy = e.y + e.size / 2 - sy;
-			const dSq = dx * dx + dy * dy;
-			if (dSq < nearestDistSq) {
-				nearestDistSq = dSq;
-				nearest = e;
-			}
-		}
-		const ex = nearest.x + nearest.size / 2;
-		const ey = nearest.y + nearest.size / 2;
-		const angleToEnemy = Math.atan2(ey - sy, ex - sx);
-		aimAngle = angleToEnemy + clamped[2] * AIM_OFFSET_LIMIT;
-	} else {
-		// No living enemy: hold current aim
-		aimAngle = s.aimAngle;
+function decodeMultiDiscreteAction(action: number[], rawObs: TankObservation): TankAction {
+	if (action.length !== ACTION_DIM) {
+		throw new Error(`Expected ${ACTION_DIM} action heads, got ${action.length}`);
 	}
-
+	const moveIdx = Math.max(0, Math.min(MOVE_INTENTS_BY_INDEX.length - 1, action[0] | 0));
+	const aimBin = (((action[1] | 0) % NUM_AIM_BINS) + NUM_AIM_BINS) % NUM_AIM_BINS;
+	const fire = (action[2] | 0) !== 0;
+	const plantBomb = (action[3] | 0) !== 0;
+	const aimAngle = aimBin * AIM_BIN_RADIANS;
+	// rawObs is unused here but kept in signature for parity with prior decoder.
+	void rawObs;
 	return {
-		clamped,
-		decoded: {
-			move: moveIntent,
-			aimAngle,
-			fire: clamped[3] > FIRE_THRESHOLD,
-			plantBomb: clamped[4] > BOMB_THRESHOLD,
-		},
+		move: MOVE_INTENTS_BY_INDEX[moveIdx],
+		aimAngle,
+		fire,
+		plantBomb,
 	};
+}
+
+function nearestEnemyDistance(obs: TankObservation, sx: number, sy: number): { dist: number; id: string } {
+	const alive = obs.enemies.filter((e) => !e.destroyed);
+	if (alive.length === 0) return { dist: 0, id: '' };
+	let best = alive[0];
+	let bestSq = Infinity;
+	for (const e of alive) {
+		const dx = e.x + e.size / 2 - sx;
+		const dy = e.y + e.size / 2 - sy;
+		const dSq = dx * dx + dy * dy;
+		if (dSq < bestSq) {
+			bestSq = dSq;
+			best = e;
+		}
+	}
+	return { dist: Math.sqrt(bestSq), id: String(best.id ?? '') };
 }
 
 function initRewardTracker(obs: TankObservation, _navPlanner: NavigationPlanner | null): RewardTracker {
@@ -576,11 +557,15 @@ function initRewardTracker(obs: TankObservation, _navPlanner: NavigationPlanner 
 		initialProjDist = Math.sqrt(closestProjDistSq);
 	}
 
+	const { dist: initialEnemyDist, id: initialEnemyId } = nearestEnemyDistance(obs, sx, sy);
+
 	return {
 		prevEnemyAliveCount: alive.length,
 		prevEnemyHealthTotal: alive.reduce((total, enemy) => total + enemy.health, 0),
 		prevSelfHealth: obs.self.health,
 		prevEnemyProjDist: initialProjDist,
+		prevEnemyDist: initialEnemyDist,
+		approachTargetId: initialEnemyId,
 	};
 }
 
@@ -623,20 +608,49 @@ function computeSteppingReward(
 		const value = KILL_REWARD * enemiesKilled;
 		reward += value;
 		breakdown.kill += value;
+		// Reset approach baseline so next-tick distance change isn't a huge jump
+		tracker.prevEnemyDist = -1.0;
+		tracker.approachTargetId = '';
 	}
 	tracker.prevEnemyAliveCount = aliveEnemies.length;
+
+	// ── Shaping: approach reward — potential-based on Euclidean distance to nearest enemy ──
+	// Φ(s) = -dist/ARENA_DIAGONAL, reward = γΦ(s') - Φ(s); approximated via
+	//   APPROACH_SCALE * (prevDist - currDist) / ARENA_DIAGONAL
+	// Only credited when the same enemy stays nearest across ticks (avoids reward jumps
+	// when the nearest target changes due to kills or movement).
+	const px = player.x + player.size / 2;
+	const py = player.y + player.size / 2;
+	const playerObs: TankObservation = {
+		tick: 0,
+		self: player as TankObservation['self'],
+		allies: [],
+		enemies: aliveEnemies as unknown as TankObservation['enemies'],
+		projectiles: [],
+		bombs: [],
+		obstacles: [],
+		arena: state.arena,
+	};
+	const { dist: currEnemyDist, id: currTargetId } = nearestEnemyDistance(playerObs, px, py);
+	if (tracker.prevEnemyDist >= 0.0 && currTargetId !== '' && currTargetId === tracker.approachTargetId) {
+		const approachReward = (APPROACH_SCALE * (tracker.prevEnemyDist - currEnemyDist) * shapingScale) / ARENA_DIAGONAL;
+		if (Math.abs(approachReward) > 1e-8) {
+			reward += approachReward;
+			breakdown.approach += approachReward;
+		}
+	}
+	tracker.prevEnemyDist = currEnemyDist;
+	tracker.approachTargetId = currTargetId;
 
 	// ── Shaping: dodge reward — potential-based on distance to nearest enemy projectile ──
 	// Φ(s) = dist/ARENA_DIAGONAL, reward = Φ(s') - Φ(s) — moving away from incoming fire is positive
 	const enemyProjectiles = state.projectiles.filter((p) => p.team === 'enemy');
 	let currProjDist = ARENA_DIAGONAL;
 	if (enemyProjectiles.length > 0) {
-		const px = player.x + player.size / 2;
-		const py2 = player.y + player.size / 2;
 		let closestProjDistSq = Infinity;
 		for (const p of enemyProjectiles) {
 			const dx = p.x - px;
-			const dy = p.y - py2;
+			const dy = p.y - py;
 			const dSq = dx * dx + dy * dy;
 			if (dSq < closestProjDistSq) closestProjDistSq = dSq;
 		}
@@ -655,17 +669,17 @@ function computeSteppingReward(
 // ---- RL Controller: captures obs/action/value/logprob during act() ----
 class RLController implements TankController {
 	private mlp: PolicyMLP;
+	private rng: () => number;
 	public lastNormalizedObs: number[] = [];
-	public lastAction: number[] = [];
+	public lastAction: number[] = []; // MultiDiscrete: [moveIdx, aimBin, fire, bomb] (ints)
 	public lastDecodedAction: TankAction = { move: 'none', aimAngle: 0, fire: false, plantBomb: false };
 	public lastValue = 0;
 	public lastLogProb = 0;
 	public lastRawObs: TankObservation | null = null;
-	// Fix 1: pendingDecodedAction removed — act() now executes the sampled action immediately,
-	// so the obs/action/logprob stored in the rollout buffer are always aligned.
 
-	constructor(mlp: PolicyMLP) {
+	constructor(mlp: PolicyMLP, rng: () => number = Math.random) {
 		this.mlp = mlp;
+		this.rng = rng;
 	}
 
 	reset(_initial: MatchInit): void {
@@ -677,16 +691,14 @@ class RLController implements TankController {
 		const normalized = normalizeObs(obs);
 		this.lastNormalizedObs = normalized;
 
-		const { actionMean, value } = this.mlp.forward(normalized);
-		const { action, logProb } = this.mlp.sampleGaussianAction(actionMean);
+		const { logits, value } = this.mlp.forward(normalized);
+		const { action, logProb } = this.mlp.sampleMultiCategorical(logits, this.rng);
 
 		this.lastAction = action;
 		this.lastValue = value;
 		this.lastLogProb = logProb;
 
-		// Fix 1: decode and execute the SAME action that gets stored in the rollout buffer.
-		// Previously a one-tick pending mechanism caused obs→action mislabeling.
-		const { decoded } = decodeActionSignal(action, obs);
+		const decoded = decodeMultiDiscreteAction(action, obs);
 		this.lastDecodedAction = decoded;
 		return decoded;
 	}
@@ -706,6 +718,12 @@ interface RolloutData {
 	episode_starts: number[];
 	values: number[];
 	log_probs: number[];
+	// Per-step continuation-value contribution at truncated (timeout) steps.
+	// Equals V(s_post) at the timeout step, 0 elsewhere. Python multiplies
+	// by gamma and adds AFTER reward normalization so the bootstrap stays on
+	// the same scale as the value head (which regresses against normalized
+	// returns). See train_hybrid.py::_populate_buffer.
+	truncation_values: number[];
 	last_obs: number[];
 	last_done: boolean;
 	last_value: number;
@@ -861,6 +879,28 @@ function applyProceduralDifficulty(config: LevelConfig, seed: number, difficulty
 	return varied;
 }
 
+/**
+ * Build a TankObservation from the current simulation state for the player tank.
+ * Used to compute V(s_{T+1}) for truncation bootstrapping and end-of-rollout
+ * value bootstrap.
+ */
+function buildPlayerObservation(state: DeepReadonly<GameState>): TankObservation | null {
+	const playerTank = state.tanks.find((t) => t.id === PLAYER_TANK_ID);
+	if (!playerTank) return null;
+	return {
+		tick: state.tick,
+		self: JSON.parse(JSON.stringify(playerTank)),
+		allies: state.tanks
+			.filter((t) => t.team === playerTank.team && t.id !== playerTank.id)
+			.map((t) => JSON.parse(JSON.stringify(t))),
+		enemies: state.tanks.filter((t) => t.team !== playerTank.team).map((t) => JSON.parse(JSON.stringify(t))),
+		projectiles: state.projectiles.map((p) => JSON.parse(JSON.stringify(p))),
+		bombs: state.bombs.map((b) => JSON.parse(JSON.stringify(b))),
+		obstacles: state.obstacles.map((o) => JSON.parse(JSON.stringify(o))),
+		arena: { ...state.arena },
+	};
+}
+
 function collectRollout(
 	mlp: PolicyMLP,
 	nSteps: number,
@@ -874,7 +914,8 @@ function collectRollout(
 	startEpisode: number,
 	proceduralLevels: boolean,
 	difficultyBand: number,
-	playerMaxAmmo: number
+	playerMaxAmmo: number,
+	actionRng: () => number
 ): RolloutData {
 	const obs: number[][] = [];
 	const actions: number[][] = [];
@@ -882,13 +923,14 @@ function collectRollout(
 	const episodeStarts: number[] = [];
 	const values: number[] = [];
 	const logProbs: number[] = [];
+	const truncationValues: number[] = [];
 	const episodeRewards: number[] = [];
 	const episodeLengths: number[] = [];
 	const episodeWins: (0 | 1)[] = [];
 	const episodeLevels: number[] = [];
 	const episodeRewardBreakdowns: RewardBreakdown[] = [];
 
-	const rlController = new RLController(mlp);
+	const rlController = new RLController(mlp, actionRng);
 	const levelRng = new SeededRandom(seedStart * 31337 + 7);
 	let seed = seedStart;
 	let tracker: RewardTracker | null = null;
@@ -962,6 +1004,7 @@ function collectRollout(
 
 		let done = false;
 		let stepReward: number;
+		let stepTruncValue = 0;
 
 		if (state.status === 'player_win') {
 			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner);
@@ -978,12 +1021,13 @@ function collectRollout(
 			done = true;
 		} else if (episodeTick >= maxTicks) {
 			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner);
-			// Truncation bootstrap: add gamma * V(s_T) to the reward so GAE
-			// correctly accounts for the continuation value at timeout boundaries.
-			// Without this, timeouts are treated as terminal (V=0), biasing the
-			// value function downward near the horizon.
-			const { value: truncValue } = mlp.forward(rlController.lastNormalizedObs);
-			stepReward = stepping.reward + TIMEOUT_REWARD + GAMMA * truncValue;
+			// Truncation: emit raw reward only and report V(s_post) separately so
+			// Python can apply the gamma * V_post bootstrap AFTER reward
+			// normalization (the value head is trained against normalized returns,
+			// so the bootstrap must not be divided by ret_std).
+			const postObs = buildPlayerObservation(state);
+			stepTruncValue = postObs ? mlp.forward(normalizeObs(postObs)).value : 0;
+			stepReward = stepping.reward + TIMEOUT_REWARD;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 			episodeBreakdown.timeout += TIMEOUT_REWARD;
 			done = true;
@@ -994,6 +1038,7 @@ function collectRollout(
 		}
 
 		rewards.push(stepReward);
+		truncationValues.push(stepTruncValue);
 		episodeReward += stepReward;
 
 		if (done) {
@@ -1027,20 +1072,8 @@ function collectRollout(
 		lastValue = 0;
 		// Get obs from the new episode for last_obs
 		const state = sim.getState();
-		const playerTank = state.tanks.find((t) => t.id === PLAYER_TANK_ID);
-		if (!playerTank) throw new Error('Player tank not found in reset state');
-		const dummyObs: TankObservation = {
-			tick: state.tick,
-			self: JSON.parse(JSON.stringify(playerTank)),
-			allies: state.tanks
-				.filter((t) => t.team === playerTank.team && t.id !== playerTank.id)
-				.map((t) => JSON.parse(JSON.stringify(t))),
-			enemies: state.tanks.filter((t) => t.team !== playerTank.team).map((t) => JSON.parse(JSON.stringify(t))),
-			projectiles: state.projectiles.map((p) => JSON.parse(JSON.stringify(p))),
-			bombs: state.bombs.map((b) => JSON.parse(JSON.stringify(b))),
-			obstacles: state.obstacles.map((o) => JSON.parse(JSON.stringify(o))),
-			arena: { ...state.arena },
-		};
+		const dummyObs = buildPlayerObservation(state);
+		if (!dummyObs) throw new Error('Player tank not found in reset state');
 		lastObs = normalizeObs(dummyObs);
 	} else {
 		// Mid-episode: use the last controller obs and value
@@ -1058,6 +1091,7 @@ function collectRollout(
 		episode_starts: episodeStarts,
 		values,
 		log_probs: logProbs,
+		truncation_values: truncationValues,
 		last_obs: lastObs,
 		last_done: lastDone,
 		last_value: lastValue,
@@ -1133,7 +1167,14 @@ function collect(
 		const playerMaxAmmo = Number(req.playerMaxAmmo ?? 0);
 		const globalEpisodeOffset = Number(req.globalEpisodeOffset ?? 0);
 		const gamma = Number(req.gamma ?? 0);
-		if (gamma > 0) GAMMA = gamma;
+		void gamma; // accepted for protocol back-compat; bootstrap is now Python-side
+
+		// Deterministic action-sampling RNG keyed on (seedStart, workerId, episodeOffset)
+		// so that, given identical weights and seeds, rollouts are reproducible.
+		const actionRngState = new SeededRandom(
+			(seedStart || 1) * 0x9e3779b1 + workerId * 0x85ebca77 + (globalEpisodeOffset + 1)
+		);
+		const actionRng: () => number = () => actionRngState.nextFloat();
 
 		const rollout = collectRollout(
 			mlp,
@@ -1148,7 +1189,8 @@ function collect(
 			globalEpisodeOffset || workerTotalEpisodes,
 			proceduralLevels,
 			difficultyBand,
-			playerMaxAmmo
+			playerMaxAmmo,
+			actionRng
 		);
 		workerTotalEpisodes += (rollout.episode_rewards as number[]).length;
 		callback(null, { rolloutJson: JSON.stringify(rollout) });

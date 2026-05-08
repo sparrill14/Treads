@@ -24,13 +24,14 @@ const OBS_SIZE =
 	MAX_BOMBS * BOMB_DIM +
 	SUMMARY_DIM;
 
-// Continuous action means: [move_x, move_y, aim_signal, fire_signal, bomb_signal] in [-1, 1]
-const ACTION_DIM = 5;
-const FIRE_THRESHOLD = 0.0;
-const BOMB_THRESHOLD = 0.5;
-const AIM_OFFSET_LIMIT = Math.PI / 18; // ±10° — must match training (rollout-worker.ts)
+// MultiDiscrete([9, 16, 2, 2]) action head: 29 raw logits, 4 indices.
+const ACTION_HEAD_SIZES = [9, 16, 2, 2] as const;
+const ACTION_DIM = ACTION_HEAD_SIZES.length;
+const ACTION_LOGITS_DIM = ACTION_HEAD_SIZES.reduce((a, b) => a + b, 0); // 29
+const NUM_AIM_BINS = ACTION_HEAD_SIZES[1];
+const AIM_BIN_RADIANS = (2 * Math.PI) / NUM_AIM_BINS;
+const MOVE_INTENTS_BY_INDEX: MoveIntent[] = ['none', 'n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
 const ARENA_DIAGONAL = Math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * ARENA_HEIGHT);
-const MOVE_DEAD_ZONE = 0.33;
 
 // ---- MoveIntent → unit direction vector mapping ----
 const SQRT2_2 = Math.SQRT2 / 2;
@@ -174,7 +175,7 @@ export class NeuralNetController implements TankController {
 			const tensor = new ort.Tensor('float32', input, [1, OBS_SIZE]);
 			const feeds = { observation: tensor };
 			const results = await this.session.run(feeds);
-			const output = results['action_mean'] ?? results['logits'];
+			const output = results['logits'] ?? results['action_mean'];
 			const data = output.data as Float32Array;
 			if (generation === this.generation) {
 				this.pendingAction = this.decodeAction(Array.from(data), obs);
@@ -192,7 +193,7 @@ export class NeuralNetController implements TankController {
 	}
 
 	private decodeAction(logits: number[], obs: TankObservation): TankAction {
-		if (logits.length < ACTION_DIM) {
+		if (logits.length < ACTION_LOGITS_DIM) {
 			return {
 				move: 'none',
 				aimAngle: obs.self.aimAngle,
@@ -201,53 +202,34 @@ export class NeuralNetController implements TankController {
 			};
 		}
 
-		const mx = Math.max(-1, Math.min(1, logits[0]));
-		const my = Math.max(-1, Math.min(1, logits[1]));
-		const aimSignal = Math.max(-1, Math.min(1, logits[2]));
-		const fireSignal = Math.max(-1, Math.min(1, logits[3]));
-		const bombSignal = Math.max(-1, Math.min(1, logits[4]));
-
-		// 2D movement decode: (move_x, move_y) → MoveIntent
-		const goE = mx > MOVE_DEAD_ZONE;
-		const goW = mx < -MOVE_DEAD_ZONE;
-		const goS = my > MOVE_DEAD_ZONE;
-		const goN = my < -MOVE_DEAD_ZONE;
-		let moveIntent: MoveIntent;
-		if (goN && goE) moveIntent = 'ne';
-		else if (goN && goW) moveIntent = 'nw';
-		else if (goS && goE) moveIntent = 'se';
-		else if (goS && goW) moveIntent = 'sw';
-		else if (goN) moveIntent = 'n';
-		else if (goS) moveIntent = 's';
-		else if (goE) moveIntent = 'e';
-		else if (goW) moveIntent = 'w';
-		else moveIntent = 'none';
-
-		// Enemy-relative aim encoding: aim_signal=0 points at nearest enemy.
-		const s = obs.self;
-		const sx = s.x + s.size / 2;
-		const sy = s.y + s.size / 2;
-		const aliveEnemies = obs.enemies.filter((e) => !e.destroyed);
-		let aimAngle: number;
-		if (aliveEnemies.length > 0) {
-			const nearest = aliveEnemies.reduce((best, e) => {
-				const dx = e.x + e.size / 2 - sx;
-				const dy = e.y + e.size / 2 - sy;
-				const bdx = best.x + best.size / 2 - sx;
-				const bdy = best.y + best.size / 2 - sy;
-				return dx * dx + dy * dy < bdx * bdx + bdy * bdy ? e : best;
-			});
-			const angleToEnemy = Math.atan2(nearest.y + nearest.size / 2 - sy, nearest.x + nearest.size / 2 - sx);
-			aimAngle = angleToEnemy + aimSignal * AIM_OFFSET_LIMIT;
-		} else {
-			aimAngle = s.aimAngle;
+		// Argmax-decode each per-head slice.
+		const indices = new Array<number>(ACTION_DIM);
+		let offset = 0;
+		for (let h = 0; h < ACTION_DIM; h++) {
+			const size = ACTION_HEAD_SIZES[h];
+			let bestIdx = 0;
+			let bestVal = -Infinity;
+			for (let i = 0; i < size; i++) {
+				const v = logits[offset + i];
+				if (v > bestVal) {
+					bestVal = v;
+					bestIdx = i;
+				}
+			}
+			indices[h] = bestIdx;
+			offset += size;
 		}
 
+		const moveIdx = indices[0];
+		const aimBin = indices[1] % NUM_AIM_BINS;
+		const fire = indices[2] !== 0;
+		const plantBomb = indices[3] !== 0;
+
 		return {
-			move: moveIntent,
-			aimAngle,
-			fire: fireSignal > FIRE_THRESHOLD,
-			plantBomb: bombSignal > BOMB_THRESHOLD,
+			move: MOVE_INTENTS_BY_INDEX[moveIdx] ?? 'none',
+			aimAngle: aimBin * AIM_BIN_RADIANS,
+			fire,
+			plantBomb,
 		};
 	}
 

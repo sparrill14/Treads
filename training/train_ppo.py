@@ -167,11 +167,11 @@ def train() -> None:
         n_steps=4096,
         batch_size=512,
         n_epochs=10,
-        gamma=0.995,
+        gamma=0.997,
         gae_lambda=0.95,
         clip_range=linear_schedule_between(0.15, 0.08),
         ent_coef=0.02,
-        target_kl=0.02,
+        target_kl=0.03,
         device=device,
         policy_kwargs=dict(
             net_arch=[256, 256],

@@ -29,10 +29,17 @@ MAX_FUSE_TICKS = 360.0
 MAX_BLAST_RADIUS = 100.0
 PROJECTILE_SPEED_NORM = 300.0
 MOVE_INTENTS = ["none", "n", "s", "e", "w", "ne", "nw", "se", "sw"]
+# Legacy continuous-action thresholds — retained only for backward compatibility
+# with stale callers; the live training pipeline uses MultiDiscrete actions.
 FIRE_THRESHOLD = 0.0
 BOMB_THRESHOLD = 0.5
 MOVE_DEAD_ZONE = 0.33
 AIM_OFFSET_LIMIT = math.pi / 18.0
+# MultiDiscrete action-space constants
+NUM_AIM_BINS = 16
+AIM_BIN_RADIANS = (2.0 * math.pi) / NUM_AIM_BINS
+ACTION_HEAD_SIZES = (9, NUM_AIM_BINS, 2, 2)
+APPROACH_SCALE = 0.5
 ARENA_DIAGONAL = math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * ARENA_HEIGHT)
 tick_norm_ticks = 720.0
 
@@ -382,4 +389,39 @@ def decode_continuous_action(continuous_action: Any, obs_raw: Optional[ObsDict])
         "aim_angle": np.array([aim_angle], dtype=np.float32),
         "fire": int(fire_signal > FIRE_THRESHOLD),
         "plant_bomb": int(bomb_signal > BOMB_THRESHOLD),
+    }
+
+
+def decode_multi_discrete_action(
+    action: Any, obs_raw: Optional[ObsDict]
+) -> DecodedAction:
+    """Decode a MultiDiscrete([9, 16, 2, 2]) action vector into the runtime
+    action dict consumed by the simulation.
+
+        action[0] in [0, 9)  -> MoveIntent index (matches MOVE_INTENTS order)
+        action[1] in [0, 16) -> absolute aim bin (each = 22.5 deg)
+        action[2] in {0, 1}  -> fire
+        action[3] in {0, 1}  -> plant bomb
+    """
+    arr = np.asarray(action, dtype=np.int64).reshape(-1)
+    if arr.shape[0] < 4:
+        aim = float(obs_raw["self"]["aimAngle"]) if obs_raw is not None else 0.0
+        return {
+            "move": 0,
+            "aim_angle": np.array([aim], dtype=np.float32),
+            "fire": 0,
+            "plant_bomb": 0,
+        }
+    move_idx = int(np.clip(arr[0], 0, len(MOVE_INTENTS) - 1))
+    aim_bin = int(arr[1]) % NUM_AIM_BINS
+    if aim_bin < 0:
+        aim_bin += NUM_AIM_BINS
+    fire = 1 if int(arr[2]) != 0 else 0
+    plant = 1 if int(arr[3]) != 0 else 0
+    aim_angle = float(aim_bin) * AIM_BIN_RADIANS
+    return {
+        "move": move_idx,
+        "aim_angle": np.array([aim_angle], dtype=np.float32),
+        "fire": fire,
+        "plant_bomb": plant,
     }
