@@ -2,6 +2,31 @@ const HtmlWebpackPlugin = require('html-webpack-plugin');
 const MiniCssExtractPlugin = require("mini-css-extract-plugin");
 const CopyPlugin = require("copy-webpack-plugin");
 const path = require('path');
+const fs = require('fs');
+
+const neuralModelContract = require('./src/game/controllers/neural-model-contract.json');
+
+function contractMatchesRuntime(contractPath) {
+    try {
+        const candidate = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+        return candidate.contractVersion === neuralModelContract.contractVersion
+            && candidate.observationVersion === neuralModelContract.observationVersion
+            && candidate.actionVersion === neuralModelContract.actionVersion
+            && JSON.stringify(candidate.observation) === JSON.stringify(neuralModelContract.observation)
+            && JSON.stringify(candidate.action) === JSON.stringify(neuralModelContract.action);
+    } catch {
+        return false;
+    }
+}
+
+function isCompatibleOnnx(resourcePath) {
+    return contractMatchesRuntime(resourcePath.replace(/\.onnx$/i, '.contract.json'));
+}
+
+function isCompatibleContract(resourcePath) {
+    return contractMatchesRuntime(resourcePath)
+        && fs.existsSync(resourcePath.replace(/\.contract\.json$/i, '.onnx'));
+}
 
 module.exports = {
     entry: './src/index.ts',
@@ -23,7 +48,18 @@ module.exports = {
         new CopyPlugin({
             patterns: [
                 { from: 'node_modules/onnxruntime-web/dist/*.wasm', to: '[name][ext]' },
-                { from: 'training/output/*.onnx', to: 'models/[name][ext]', noErrorOnMissing: true },
+                {
+                    from: 'training/output/*.onnx',
+                    to: 'models/[name][ext]',
+                    noErrorOnMissing: true,
+                    filter: isCompatibleOnnx,
+                },
+                {
+                    from: 'training/output/*.contract.json',
+                    to: 'models/[name][ext]',
+                    noErrorOnMissing: true,
+                    filter: isCompatibleContract,
+                },
             ],
         }),
     ],

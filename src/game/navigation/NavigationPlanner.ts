@@ -392,22 +392,45 @@ export class NavigationPlanner {
 	 * obstacle or no walkable path exists.
 	 */
 	public getPathDistance(fromX: number, fromY: number, toX: number, toY: number): number {
+		return this.getPathGuidance(fromX, fromY, toX, toY).distance;
+	}
+
+	/**
+	 * Return the first collision-free A* step and total path distance between two points.
+	 * The next point is expressed in world coordinates so policy observations can expose
+	 * an immediately actionable navigation bearing without coupling the policy to grid size.
+	 */
+	public getPathGuidance(
+		fromX: number,
+		fromY: number,
+		toX: number,
+		toY: number
+	): { nextX: number; nextY: number; distance: number; reachable: boolean } {
 		const startNode = this.getNodeFromPoint(fromX, fromY);
 		const endNode = this.getNodeFromPoint(toX, toY);
-		if (startNode === endNode) return 0;
+		if (startNode === endNode) {
+			const dx = toX - fromX;
+			const dy = toY - fromY;
+			return { nextX: toX, nextY: toY, distance: Math.sqrt(dx * dx + dy * dy), reachable: true };
+		}
 		if (!startNode.walkable || !endNode.walkable) {
 			const dx = toX - fromX;
 			const dy = toY - fromY;
-			return Math.sqrt(dx * dx + dy * dy);
+			return { nextX: toX, nextY: toY, distance: Math.sqrt(dx * dx + dy * dy), reachable: false };
 		}
 		this.reset();
 		const path = this.aStar(startNode, endNode);
 		if (!path) {
 			const dx = toX - fromX;
 			const dy = toY - fromY;
-			return Math.sqrt(dx * dx + dy * dy);
+			return { nextX: toX, nextY: toY, distance: Math.sqrt(dx * dx + dy * dy), reachable: false };
 		}
-		// g of the final node is the optimal cost in grid-cell units
-		return path[path.length - 1].g * this.gridCellWidth;
+		const nextNode = path[Math.min(1, path.length - 1)];
+		return {
+			nextX: (nextNode.x + 0.5) * this.gridCellWidth,
+			nextY: (nextNode.y + 0.5) * this.gridCellWidth,
+			distance: path[path.length - 1].g * this.gridCellWidth,
+			reachable: true,
+		};
 	}
 }

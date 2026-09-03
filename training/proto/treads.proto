@@ -34,6 +34,11 @@ message ResetRequest {
   int32 seed = 3;
   int32 max_ticks = 4;
   bool save_replay = 5;
+  bool spawn_jitter = 6;
+  bool procedural_levels = 7;
+  double difficulty_band = 8;
+  int32 player_max_ammo = 9;
+  int32 player_max_bombs = 10;
 }
 
 message ResetResponse {
@@ -89,6 +94,7 @@ message CollectRequest {
   int32 player_max_ammo = 13;
   int32 global_episode_offset = 14;
   double gamma = 15;
+  int32 player_max_bombs = 16;
 }
 
 message CollectResponse {

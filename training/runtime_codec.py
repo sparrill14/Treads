@@ -1,8 +1,20 @@
+import heapq
 import math
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 from numpy.typing import NDArray
+
+from model_contract import (
+    ACTION_HEAD_SIZES,
+    AIM_RESIDUAL_MAX,
+    AIM_RESIDUAL_MIN,
+    ENEMY_DIM,
+    NUM_AIM_BINS,
+    OBS_SIZE,
+    SELF_DIM,
+)
 
 ARENA_WIDTH = 1000.0
 ARENA_HEIGHT = 500.0
@@ -10,20 +22,10 @@ MAX_ENEMIES = 6
 MAX_PROJECTILES = 15
 MAX_OBSTACLES = 5
 MAX_BOMBS = 6
-SELF_DIM = 15
-ENEMY_DIM = 9
 PROJ_DIM = 5
 OBS_DIM = 4
 BOMB_DIM = 5
 SUMMARY_DIM = 6
-OBS_SIZE = (
-    SELF_DIM
-    + MAX_ENEMIES * ENEMY_DIM
-    + MAX_PROJECTILES * PROJ_DIM
-    + MAX_OBSTACLES * OBS_DIM
-    + MAX_BOMBS * BOMB_DIM
-    + SUMMARY_DIM
-)
 
 MAX_FUSE_TICKS = 360.0
 MAX_BLAST_RADIUS = 100.0
@@ -35,11 +37,6 @@ FIRE_THRESHOLD = 0.0
 BOMB_THRESHOLD = 0.5
 MOVE_DEAD_ZONE = 0.33
 AIM_OFFSET_LIMIT = math.pi / 18.0
-# MultiDiscrete action-space constants
-NUM_AIM_BINS = 16
-AIM_BIN_RADIANS = (2.0 * math.pi) / NUM_AIM_BINS
-ACTION_HEAD_SIZES = (9, NUM_AIM_BINS, 2, 2)
-APPROACH_SCALE = 0.5
 ARENA_DIAGONAL = math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * ARENA_HEIGHT)
 tick_norm_ticks = 720.0
 
@@ -149,6 +146,125 @@ def set_tick_norm_ticks(ticks: int) -> None:
     tick_norm_ticks = max(1.0, float(ticks))
 
 
+def _unit_angle_features(angle: float) -> Tuple[float, float]:
+    return ((math.sin(angle) + 1.0) * 0.5, (math.cos(angle) + 1.0) * 0.5)
+
+
+@lru_cache(maxsize=128)
+def _navigation_grid(
+    arena_width: float,
+    arena_height: float,
+    tank_size: float,
+    obstacles_key: Tuple[Tuple[float, float, float, float], ...],
+) -> Tuple[Tuple[bool, ...], ...]:
+    cell_size = 15.0
+    grid_width = max(1, int(arena_width // cell_size))
+    grid_height = max(1, int(arena_height // cell_size))
+    padding = tank_size / 2.0
+    columns: List[Tuple[bool, ...]] = []
+    for grid_x in range(grid_width):
+        cells: List[bool] = []
+        for grid_y in range(grid_height):
+            left = grid_x * cell_size
+            top = grid_y * cell_size
+            right = left + cell_size
+            bottom = top + cell_size
+            walkable = not any(
+                right > ox - padding
+                and left < ox + width + padding
+                and bottom > oy - padding
+                and top < oy + height + padding
+                for ox, oy, width, height in obstacles_key
+            )
+            cells.append(walkable)
+        columns.append(tuple(cells))
+    return tuple(columns)
+
+
+def navigation_guidance(
+    obs_raw: ObsDict,
+    sx: float,
+    sy: float,
+    tx: float,
+    ty: float,
+    tank_size: float,
+) -> Tuple[float, float, bool]:
+    """Return next-step bearing, A* distance, and reachability for policy input."""
+    arena = cast(ObsDict, obs_raw.get("arena", {}))
+    arena_width = float(arena.get("width", ARENA_WIDTH))
+    arena_height = float(arena.get("height", ARENA_HEIGHT))
+    obstacles = cast(List[ObsDict], obs_raw.get("obstacles", []))
+    obstacles_key = tuple(
+        (float(o["x"]), float(o["y"]), float(o["width"]), float(o["height"]))
+        for o in obstacles
+    )
+    grid = _navigation_grid(arena_width, arena_height, tank_size, obstacles_key)
+    grid_width = len(grid)
+    grid_height = len(grid[0])
+    cell_size = 15.0
+
+    def point_node(x: float, y: float) -> Tuple[int, int]:
+        return (
+            max(0, min(int(x // cell_size), grid_width - 1)),
+            max(0, min(int(y // cell_size), grid_height - 1)),
+        )
+
+    start = point_node(sx, sy)
+    target = point_node(tx, ty)
+    direct_dx = tx - sx
+    direct_dy = ty - sy
+    direct_distance = math.sqrt(direct_dx * direct_dx + direct_dy * direct_dy)
+    direct_angle = math.atan2(direct_dy, direct_dx)
+    if start == target:
+        return direct_angle, direct_distance, True
+    if not grid[start[0]][start[1]] or not grid[target[0]][target[1]]:
+        return direct_angle, direct_distance, False
+
+    frontier: List[Tuple[float, int, Tuple[int, int]]] = []
+    insertion_order = 0
+    heapq.heappush(frontier, (0.0, insertion_order, start))
+    costs: Dict[Tuple[int, int], float] = {start: 0.0}
+    parents: Dict[Tuple[int, int], Tuple[int, int]] = {}
+    found = False
+    while frontier:
+        _priority, _order, current = heapq.heappop(frontier)
+        if current == target:
+            found = True
+            break
+        current_cost = costs[current]
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                nx = current[0] + dx
+                ny = current[1] + dy
+                if nx < 0 or nx >= grid_width or ny < 0 or ny >= grid_height or not grid[nx][ny]:
+                    continue
+                if dx != 0 and dy != 0 and (
+                    not grid[current[0] + dx][current[1]]
+                    or not grid[current[0]][current[1] + dy]
+                ):
+                    continue
+                candidate = (nx, ny)
+                candidate_cost = current_cost + (math.sqrt(2.0) if dx != 0 and dy != 0 else 1.0)
+                if candidate_cost >= costs.get(candidate, math.inf):
+                    continue
+                costs[candidate] = candidate_cost
+                parents[candidate] = current
+                heuristic = math.sqrt((nx - target[0]) ** 2 + (ny - target[1]) ** 2)
+                insertion_order += 1
+                heapq.heappush(frontier, (candidate_cost + heuristic, insertion_order, candidate))
+
+    if not found:
+        return direct_angle, direct_distance, False
+    cursor = target
+    while parents.get(cursor) is not None and parents[cursor] != start:
+        cursor = parents[cursor]
+    next_x = (cursor[0] + 0.5) * cell_size
+    next_y = (cursor[1] + 0.5) * cell_size
+    return math.atan2(next_y - sy, next_x - sx), costs[target] * cell_size, True
+
+
 def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
     result = np.zeros(OBS_SIZE, dtype=np.float32)
     idx = 0
@@ -168,8 +284,10 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
 
     result[idx] = float(self_data["x"]) / ARENA_WIDTH
     result[idx + 1] = float(self_data["y"]) / ARENA_HEIGHT
-    result[idx + 2] = float(self_data["aimAngle"]) / (2.0 * math.pi) + 0.5
-    result[idx + 3] = float(self_data["speed"]) / 100.0
+    self_aim_sin, self_aim_cos = _unit_angle_features(float(self_data["aimAngle"]))
+    result[idx + 2] = self_aim_sin
+    result[idx + 3] = self_aim_cos
+    result[idx + 4] = float(self_data["speed"]) / 100.0
 
     has_los = 0.0
     if living_enemies:
@@ -185,16 +303,16 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
             )
             else 0.0
         )
-    result[idx + 4] = has_los
-    result[idx + 5] = 1.0 if bool(self_data.get("wasLastMoveBlocked", False)) else 0.0
-    result[idx + 6] = min(float(self_data.get("invulnerabilityTicksRemaining", 0.0)) / 8.0, 1.0)
-    result[idx + 7] = min(float(obs_raw.get("tick", 0.0)) / tick_norm_ticks, 1.0)
-    result[idx + 8] = float(self_data["health"]) / max(float(self_data["maxHealth"]), 1.0)
+    result[idx + 5] = has_los
+    result[idx + 6] = 1.0 if bool(self_data.get("wasLastMoveBlocked", False)) else 0.0
+    result[idx + 7] = min(float(self_data.get("invulnerabilityTicksRemaining", 0.0)) / 8.0, 1.0)
+    result[idx + 8] = min(float(obs_raw.get("tick", 0.0)) / tick_norm_ticks, 1.0)
+    result[idx + 9] = float(self_data["health"]) / max(float(self_data["maxHealth"]), 1.0)
 
     # Resource features — ammo, cooldown, bombs
-    result[idx + 9] = float(self_data.get("activeAmmo", 0)) / max(float(self_data.get("maxAmmo", 1)), 1.0)
-    result[idx + 10] = float(self_data.get("shotCooldownTicks", 0)) / max(float(self_data.get("shotCooldownTicksOnFire", 1)), 1.0)
-    result[idx + 11] = float(self_data.get("activeBombs", 0)) / max(float(self_data.get("maxBombs", 1)), 1.0)
+    result[idx + 10] = float(self_data.get("activeAmmo", 0)) / max(float(self_data.get("maxAmmo", 1)), 1.0)
+    result[idx + 11] = float(self_data.get("shotCooldownTicks", 0)) / max(float(self_data.get("shotCooldownTicksOnFire", 1)), 1.0)
+    result[idx + 12] = float(self_data.get("activeBombs", 0)) / max(float(self_data.get("maxBombs", 1)), 1.0)
 
     if living_enemies:
         nearest = living_enemies[0]
@@ -207,13 +325,36 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
             math.sin(aim_angle - angle_to_enemy),
             math.cos(aim_angle - angle_to_enemy),
         )
-        result[idx + 12] = angle_to_enemy / (2.0 * math.pi) + 0.5
-        result[idx + 13] = min(dist_to_enemy / ARENA_DIAGONAL, 1.0)
-        result[idx + 14] = (aim_error / math.pi) * 0.5 + 0.5
+        target_sin, target_cos = _unit_angle_features(angle_to_enemy)
+        error_sin, error_cos = _unit_angle_features(aim_error)
+        result[idx + 13] = target_sin
+        result[idx + 14] = target_cos
+        result[idx + 15] = min(dist_to_enemy / ARENA_DIAGONAL, 1.0)
+        result[idx + 16] = error_sin
+        result[idx + 17] = error_cos
+        navigation_angle, path_distance, path_reachable = navigation_guidance(
+            obs_raw,
+            sx,
+            sy,
+            ex,
+            ey,
+            float(self_data["size"]),
+        )
+        navigation_sin, navigation_cos = _unit_angle_features(navigation_angle)
+        result[idx + 18] = navigation_sin
+        result[idx + 19] = navigation_cos
+        result[idx + 20] = min(path_distance / ARENA_DIAGONAL, 1.0)
+        result[idx + 21] = 1.0 if path_reachable else 0.0
     else:
-        result[idx + 12] = 0.5
-        result[idx + 13] = 0.0
-        result[idx + 14] = 0.5
+        result[idx + 13] = 0.5
+        result[idx + 14] = 1.0
+        result[idx + 15] = 0.0
+        result[idx + 16] = 0.5
+        result[idx + 17] = 1.0
+        result[idx + 18] = 0.5
+        result[idx + 19] = 1.0
+        result[idx + 20] = 0.0
+        result[idx + 21] = 0.0
     idx += SELF_DIM
 
     for i in range(MAX_ENEMIES):
@@ -223,19 +364,21 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
             ecy = float(enemy["y"]) + float(enemy["size"]) / 2.0
             result[idx] = ((ecx - sx) / ARENA_DIAGONAL) * 0.5 + 0.5
             result[idx + 1] = ((ecy - sy) / ARENA_DIAGONAL) * 0.5 + 0.5
-            result[idx + 2] = float(enemy["aimAngle"]) / (2.0 * math.pi) + 0.5
-            result[idx + 3] = float(enemy["speed"]) / 100.0
-            result[idx + 4] = 1.0 if enemy.get("bombType") else 0.0
-            result[idx + 5] = float(enemy["health"]) / max(float(enemy["maxHealth"]), 1.0)
+            enemy_aim_sin, enemy_aim_cos = _unit_angle_features(float(enemy["aimAngle"]))
+            result[idx + 2] = enemy_aim_sin
+            result[idx + 3] = enemy_aim_cos
+            result[idx + 4] = float(enemy["speed"]) / 100.0
+            result[idx + 5] = 1.0 if enemy.get("bombType") else 0.0
+            result[idx + 6] = float(enemy["health"]) / max(float(enemy["maxHealth"]), 1.0)
 
             angle_from_enemy_to_player = math.atan2(sy - ecy, sx - ecx)
             enemy_aim_error = math.atan2(
                 math.sin(float(enemy["aimAngle"]) - angle_from_enemy_to_player),
                 math.cos(float(enemy["aimAngle"]) - angle_from_enemy_to_player),
             )
-            result[idx + 6] = 1.0 - abs(enemy_aim_error) / math.pi
+            result[idx + 7] = 1.0 - abs(enemy_aim_error) / math.pi
             has_ammo = float(enemy.get("maxAmmo", 0.0)) > 0.0
-            result[idx + 7] = (
+            result[idx + 8] = (
                 1.0 if enemy.get("ammoType") == "super" else 0.5
             ) if has_ammo else 0.0
 
@@ -246,11 +389,11 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
                 to_player_dist = math.sqrt(to_player_dx * to_player_dx + to_player_dy * to_player_dy)
                 if to_player_dist > 1e-6:
                     dot = (move_dir[0] * to_player_dx + move_dir[1] * to_player_dy) / to_player_dist
-                    result[idx + 8] = dot * 0.5 + 0.5
+                    result[idx + 9] = dot * 0.5 + 0.5
                 else:
-                    result[idx + 8] = 0.5
+                    result[idx + 9] = 0.5
             else:
-                result[idx + 8] = 0.5
+                result[idx + 9] = 0.5
         idx += ENEMY_DIM
 
     projectiles = cast(List[ObsDict], obs_raw.get("projectiles", []))
@@ -395,11 +538,11 @@ def decode_continuous_action(continuous_action: Any, obs_raw: Optional[ObsDict])
 def decode_multi_discrete_action(
     action: Any, obs_raw: Optional[ObsDict]
 ) -> DecodedAction:
-    """Decode a MultiDiscrete([9, 16, 2, 2]) action vector into the runtime
+    """Decode the contract MultiDiscrete action into the runtime
     action dict consumed by the simulation.
 
         action[0] in [0, 9)  -> MoveIntent index (matches MOVE_INTENTS order)
-        action[1] in [0, 16) -> absolute aim bin (each = 22.5 deg)
+        action[1] -> nearest-enemy-relative aim residual bin
         action[2] in {0, 1}  -> fire
         action[3] in {0, 1}  -> plant bomb
     """
@@ -413,12 +556,34 @@ def decode_multi_discrete_action(
             "plant_bomb": 0,
         }
     move_idx = int(np.clip(arr[0], 0, len(MOVE_INTENTS) - 1))
-    aim_bin = int(arr[1]) % NUM_AIM_BINS
-    if aim_bin < 0:
-        aim_bin += NUM_AIM_BINS
+    aim_bin = int(np.clip(arr[1], 0, NUM_AIM_BINS - 1))
     fire = 1 if int(arr[2]) != 0 else 0
-    plant = 1 if int(arr[3]) != 0 else 0
-    aim_angle = float(aim_bin) * AIM_BIN_RADIANS
+    raw_obs = obs_raw or {}
+    self_data = cast(ObsDict, raw_obs.get("self", {}))
+    alive_enemies = [
+        enemy
+        for enemy in cast(List[ObsDict], raw_obs.get("enemies", []))
+        if not bool(enemy.get("destroyed", False))
+    ]
+    if alive_enemies and self_data:
+        sx = float(self_data["x"]) + float(self_data["size"]) / 2.0
+        sy = float(self_data["y"]) + float(self_data["size"]) / 2.0
+        nearest = min(
+            alive_enemies,
+            key=lambda enemy: (float(enemy["x"]) + float(enemy["size"]) / 2.0 - sx) ** 2
+            + (float(enemy["y"]) + float(enemy["size"]) / 2.0 - sy) ** 2,
+        )
+        base_angle = math.atan2(
+            float(nearest["y"]) + float(nearest["size"]) / 2.0 - sy,
+            float(nearest["x"]) + float(nearest["size"]) / 2.0 - sx,
+        )
+    else:
+        base_angle = float(self_data.get("aimAngle", 0.0))
+    residual = AIM_RESIDUAL_MIN + (aim_bin / (NUM_AIM_BINS - 1)) * (
+        AIM_RESIDUAL_MAX - AIM_RESIDUAL_MIN
+    )
+    aim_angle = base_angle + residual
+    plant = 1 if int(arr[3]) != 0 and int(self_data.get("maxBombs", 0)) > 0 else 0
     return {
         "move": move_idx,
         "aim_angle": np.array([aim_angle], dtype=np.float32),

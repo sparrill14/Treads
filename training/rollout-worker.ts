@@ -28,14 +28,21 @@ import type {
 	TankController,
 	TankObservation,
 } from '../src/game/core/types';
-import { type LevelConfig } from '../src/game/LevelConfig';
 import { NavigationPlanner } from '../src/game/navigation/NavigationPlanner';
-import { ACTION_DIM, ACTION_HEAD_SIZES, PolicyMLP, parseWeightsFromStateDict } from './mlp-inference';
+import { PolicyMLP, parseWeightsFromStateDict } from './mlp-inference';
+import {
+	decodePolicyAction,
+	NEURAL_MODEL_CONTRACT,
+	OBS_SIZE,
+	unitAngleFeature,
+} from '../src/game/controllers/NeuralModelContract';
 import { resolveScenarioConfig } from './training-scenarios';
-
-const MOVE_INTENTS_BY_INDEX: MoveIntent[] = ['none', 'n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
-const NUM_AIM_BINS = ACTION_HEAD_SIZES[1];
-const AIM_BIN_RADIANS = (2 * Math.PI) / NUM_AIM_BINS;
+import {
+	applyProceduralDifficulty as varyDifficulty,
+	applySpawnJitter as varySpawn,
+	configurePlayerResources,
+} from './scenario-variation';
+import { potentialBasedApproachReward } from './reward-shaping';
 
 type HealthRequest = Record<string, never>;
 interface HealthResponse {
@@ -65,6 +72,7 @@ interface CollectRequest {
 	proceduralLevels?: boolean;
 	difficultyBand?: number;
 	playerMaxAmmo?: number;
+	playerMaxBombs?: number;
 	globalEpisodeOffset?: number;
 	gamma?: number;
 }
@@ -96,23 +104,15 @@ const rolloutServiceDef = rolloutPkg.RolloutWorkerService as grpc.ServiceClientC
 const ARENA_WIDTH = 1000.0;
 const ARENA_HEIGHT = 500.0;
 // Fix 3: caps raised to cover all 9 levels (max 5 enemies/4 obstacles in Level 7)
-const MAX_ENEMIES = 6; // Level 7 has 5 enemies; +1 buffer
-const MAX_PROJECTILES = 15; // Level 8: 3×3=9 super shots; generous buffer
-const MAX_OBSTACLES = 5; // Level 7 has 4 obstacles; +1 buffer
-const MAX_BOMBS = 6; // Level 6: 9 theoretical; cap at 6 live
-const SELF_DIM = 15; // pos(2), aim, speed, LOS, blocked, invuln, tick, hp, ammoRatio, shotCD, bombRatio, aimFeatures(3)
-const ENEMY_DIM = 9; // dx, dy (relative), aimAngle, speed, hasBombs, health, aimedAtMe, ammoThreat, isApproaching
+const MAX_ENEMIES = NEURAL_MODEL_CONTRACT.observation.maxEnemies;
+const MAX_PROJECTILES = NEURAL_MODEL_CONTRACT.observation.maxProjectiles;
+const MAX_OBSTACLES = NEURAL_MODEL_CONTRACT.observation.maxObstacles;
+const MAX_BOMBS = NEURAL_MODEL_CONTRACT.observation.maxBombs;
+const SELF_DIM = NEURAL_MODEL_CONTRACT.observation.selfDim;
+const ENEMY_DIM = NEURAL_MODEL_CONTRACT.observation.enemyDim;
 const PROJ_DIM = 5;
 const OBS_DIM = 4;
 const BOMB_DIM = 5; // x, y, fuse_norm, blast_norm, team_is_enemy  (Fix 2)
-const SUMMARY_DIM = 6; // entity count + farthest-dist summaries        (Fix 3)
-const OBS_SIZE =
-	SELF_DIM +
-	MAX_ENEMIES * ENEMY_DIM +
-	MAX_PROJECTILES * PROJ_DIM +
-	MAX_OBSTACLES * OBS_DIM +
-	MAX_BOMBS * BOMB_DIM +
-	SUMMARY_DIM;
 const PLAYER_TANK_ID = 'player-0';
 const STEP_PENALTY = -0.001;
 const HIT_REWARD = 0.3;
@@ -122,6 +122,7 @@ const DEATH_REWARD = -2.0;
 const TERMINAL_WIN_REWARD = 5.0;
 const TERMINAL_LOSS_REWARD = -3.0;
 const TIMEOUT_REWARD = -1.0;
+const BOMB_PLANT_PENALTY = -0.03;
 // GAMMA is no longer needed in the worker (truncation bootstrap is now applied
 // in Python AFTER reward normalization), but the request still carries it for
 // forward-compat / debugging.
@@ -129,7 +130,6 @@ const TIMEOUT_REWARD = -1.0;
 // per-step shaping signal is meaningful relative to STEP_PENALTY and survives
 // reward normalization (was effectively ~4e-4/step, now ~2e-3/step before
 // normalization which is on the same order as sparse-event rewards).
-const DODGE_SCALE = 0.75; // potential-based: reward for staying away from enemy projectiles
 const APPROACH_SCALE = 2.5; // potential-based: reward for closing distance to nearest enemy
 const ARENA_DIAGONAL = Math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * ARENA_HEIGHT);
 const MAX_FUSE_TICKS = 360.0; // Max fuse ticks for any bomb type
@@ -216,7 +216,10 @@ function hasLineOfSight(
 }
 
 // ---- Observation normalization (port of treads_env.py _normalize_obs) ----
-function normalizeObs(obs: TankObservation): number[] {
+export function normalizeWorkerObservation(
+	obs: TankObservation,
+	navigationPlanner?: NavigationPlanner | null
+): number[] {
 	const result = new Array<number>(OBS_SIZE).fill(0);
 	let idx = 0;
 
@@ -226,11 +229,11 @@ function normalizeObs(obs: TankObservation): number[] {
 	const arenaDiag = ARENA_DIAGONAL;
 	const aliveEnemies = obs.enemies.filter((e) => !e.destroyed);
 
-	// ── Self features (SELF_DIM = 15) ──
+	// Self features use sine/cosine pairs for every angle to avoid wraparound aliasing.
 	result[idx] = s.x / ARENA_WIDTH;
 	result[idx + 1] = s.y / ARENA_HEIGHT;
-	result[idx + 2] = s.aimAngle / (2 * Math.PI) + 0.5; // Fix 1: map [-π,π] → [0,1]
-	result[idx + 3] = s.speed / 100.0;
+	[result[idx + 2], result[idx + 3]] = unitAngleFeature(s.aimAngle);
+	result[idx + 4] = s.speed / 100.0;
 	// LOS to nearest alive enemy (1.0 = clear shot, 0.0 = blocked by obstacle)
 	let hasLOS = 0.0;
 	if (aliveEnemies.length > 0) {
@@ -249,16 +252,16 @@ function normalizeObs(obs: TankObservation): number[] {
 			? 1.0
 			: 0.0;
 	}
-	result[idx + 4] = hasLOS;
-	result[idx + 5] = s.wasLastMoveBlocked ? 1.0 : 0.0;
-	result[idx + 6] = Math.min(s.invulnerabilityTicksRemaining / 8.0, 1.0);
-	result[idx + 7] = Math.min(obs.tick / TICK_NORM_TICKS, 1.0);
-	result[idx + 8] = s.health / Math.max(s.maxHealth, 1);
+	result[idx + 5] = hasLOS;
+	result[idx + 6] = s.wasLastMoveBlocked ? 1.0 : 0.0;
+	result[idx + 7] = Math.min(s.invulnerabilityTicksRemaining / 8.0, 1.0);
+	result[idx + 8] = Math.min(obs.tick / TICK_NORM_TICKS, 1.0);
+	result[idx + 9] = s.health / Math.max(s.maxHealth, 1);
 
 	// Resource features — ammo, cooldown, bombs
-	result[idx + 9] = s.activeAmmo / Math.max(s.maxAmmo, 1); // ammo ratio (1=full, 0=empty)
-	result[idx + 10] = s.shotCooldownTicks / Math.max(s.shotCooldownTicksOnFire, 1); // shot cooldown (0=ready, 1=just fired)
-	result[idx + 11] = s.activeBombs / Math.max(s.maxBombs, 1); // bomb ratio (0=none/empty)
+	result[idx + 10] = s.activeAmmo / Math.max(s.maxAmmo, 1);
+	result[idx + 11] = s.shotCooldownTicks / Math.max(s.shotCooldownTicksOnFire, 1);
+	result[idx + 12] = s.activeBombs / Math.max(s.maxBombs, 1);
 
 	// Derived aim features (relative to nearest enemy)
 	if (aliveEnemies.length > 0) {
@@ -279,17 +282,29 @@ function normalizeObs(obs: TankObservation): number[] {
 		const distToEnemy = Math.sqrt(nearestDistSq);
 		const aimAngle = s.aimAngle;
 		const aimError = Math.atan2(Math.sin(aimAngle - angleToEnemy), Math.cos(aimAngle - angleToEnemy));
-		result[idx + 12] = angleToEnemy / (2 * Math.PI) + 0.5;
-		result[idx + 13] = Math.min(distToEnemy / arenaDiag, 1.0);
-		result[idx + 14] = (aimError / Math.PI) * 0.5 + 0.5;
+		[result[idx + 13], result[idx + 14]] = unitAngleFeature(angleToEnemy);
+		result[idx + 15] = Math.min(distToEnemy / arenaDiag, 1.0);
+		[result[idx + 16], result[idx + 17]] = unitAngleFeature(aimError);
+		const planner = navigationPlanner ?? new NavigationPlanner(obs.arena, obs.obstacles, s.size);
+		const guidance = planner.getPathGuidance(sx, sy, ex, ey);
+		const navigationAngle = Math.atan2(guidance.nextY - sy, guidance.nextX - sx);
+		[result[idx + 18], result[idx + 19]] = unitAngleFeature(navigationAngle);
+		result[idx + 20] = Math.min(guidance.distance / arenaDiag, 1.0);
+		result[idx + 21] = guidance.reachable ? 1.0 : 0.0;
 	} else {
-		result[idx + 12] = 0.5;
-		result[idx + 13] = 0.0;
-		result[idx + 14] = 0.5;
+		result[idx + 13] = 0.5;
+		result[idx + 14] = 1.0;
+		result[idx + 15] = 0.0;
+		result[idx + 16] = 0.5;
+		result[idx + 17] = 1.0;
+		result[idx + 18] = 0.5;
+		result[idx + 19] = 1.0;
+		result[idx + 20] = 0.0;
+		result[idx + 21] = 0.0;
 	}
 	idx += SELF_DIM;
 
-	// ── Enemies (ENEMY_DIM = 9, player-relative positions) ──
+	// Enemy angles also use sine/cosine pairs.
 	const enemies = aliveEnemies.slice().sort((a, b) => {
 		const dxA = a.x + a.size / 2 - sx;
 		const dyA = a.y + a.size / 2 - sy;
@@ -304,19 +319,19 @@ function normalizeObs(obs: TankObservation): number[] {
 			const ecy = e.y + e.size / 2;
 			result[idx] = ((ecx - sx) / arenaDiag) * 0.5 + 0.5; // player-relative dx
 			result[idx + 1] = ((ecy - sy) / arenaDiag) * 0.5 + 0.5; // player-relative dy
-			result[idx + 2] = e.aimAngle / (2 * Math.PI) + 0.5; // angle normalization
-			result[idx + 3] = e.speed / 100.0;
-			result[idx + 4] = e.bombType ? 1.0 : 0.0;
-			result[idx + 5] = e.health / Math.max(e.maxHealth, 1);
+			[result[idx + 2], result[idx + 3]] = unitAngleFeature(e.aimAngle);
+			result[idx + 4] = e.speed / 100.0;
+			result[idx + 5] = e.bombType ? 1.0 : 0.0;
+			result[idx + 6] = e.health / Math.max(e.maxHealth, 1);
 			// aimed_at_me — how much enemy turret points toward player (1=direct, 0=away)
 			const angleFromEnemyToPlayer = Math.atan2(sy - ecy, sx - ecx);
 			const enemyAimError = Math.atan2(
 				Math.sin(e.aimAngle - angleFromEnemyToPlayer),
 				Math.cos(e.aimAngle - angleFromEnemyToPlayer)
 			);
-			result[idx + 6] = 1.0 - Math.abs(enemyAimError) / Math.PI;
+			result[idx + 7] = 1.0 - Math.abs(enemyAimError) / Math.PI;
 			// ammoThreat — 0=none, 0.5=basic, 1.0=super
-			result[idx + 7] = e.maxAmmo > 0 ? (e.ammoType === 'super' ? 1.0 : 0.5) : 0.0;
+			result[idx + 8] = e.maxAmmo > 0 ? (e.ammoType === 'super' ? 1.0 : 0.5) : 0.0;
 			// isApproaching — dot(moveDir, enemyToPlayer) mapped to [0,1]
 			const moveDir = moveIntentToDir(e.lastMoveIntent);
 			if (moveDir[0] !== 0 || moveDir[1] !== 0) {
@@ -325,12 +340,12 @@ function normalizeObs(obs: TankObservation): number[] {
 				const toPlayerDist = Math.sqrt(toPlayerDx * toPlayerDx + toPlayerDy * toPlayerDy);
 				if (toPlayerDist > 1e-6) {
 					const dot = (moveDir[0] * toPlayerDx + moveDir[1] * toPlayerDy) / toPlayerDist;
-					result[idx + 8] = dot * 0.5 + 0.5; // [-1,1] → [0,1]
+					result[idx + 9] = dot * 0.5 + 0.5;
 				} else {
-					result[idx + 8] = 0.5;
+					result[idx + 9] = 0.5;
 				}
 			} else {
-				result[idx + 8] = 0.5; // stationary → neutral
+				result[idx + 9] = 0.5;
 			}
 		}
 		idx += ENEMY_DIM;
@@ -449,9 +464,9 @@ interface RewardTracker {
 	prevEnemyAliveCount: number;
 	prevEnemyHealthTotal: number;
 	prevSelfHealth: number;
-	prevEnemyProjDist: number;
 	prevEnemyDist: number;
 	approachTargetId: string;
+	prevOwnBombCount: number;
 }
 
 interface RewardBreakdown {
@@ -465,6 +480,7 @@ interface RewardBreakdown {
 	timeout: number;
 	approach: number;
 	dodge: number;
+	bombCost: number;
 }
 
 function createRewardBreakdown(): RewardBreakdown {
@@ -479,6 +495,7 @@ function createRewardBreakdown(): RewardBreakdown {
 		timeout: 0,
 		approach: 0,
 		dodge: 0,
+		bombCost: 0,
 	};
 }
 
@@ -493,35 +510,26 @@ function mergeRewardBreakdown(target: RewardBreakdown, add: RewardBreakdown): vo
 	target.timeout += add.timeout;
 	target.approach += add.approach;
 	target.dodge += add.dodge;
+	target.bombCost += add.bombCost;
 }
 
 /**
- * Decode a MultiDiscrete([9, 16, 2, 2]) action vector into a TankAction.
+ * Decode the versioned policy action into a TankAction.
  *   action[0] ∈ [0, 9)  → MoveIntent index
- *   action[1] ∈ [0, 16) → absolute aim bin (each = 22.5°)
+ *   action[1] selects a nearest-enemy-relative full-circle residual
  *   action[2] ∈ {0, 1}  → fire
  *   action[3] ∈ {0, 1}  → plant bomb
  */
 function decodeMultiDiscreteAction(action: number[], rawObs: TankObservation): TankAction {
-	if (action.length !== ACTION_DIM) {
-		throw new Error(`Expected ${ACTION_DIM} action heads, got ${action.length}`);
-	}
-	const moveIdx = Math.max(0, Math.min(MOVE_INTENTS_BY_INDEX.length - 1, action[0] | 0));
-	const aimBin = (((action[1] | 0) % NUM_AIM_BINS) + NUM_AIM_BINS) % NUM_AIM_BINS;
-	const fire = (action[2] | 0) !== 0;
-	const plantBomb = (action[3] | 0) !== 0;
-	const aimAngle = aimBin * AIM_BIN_RADIANS;
-	// rawObs is unused here but kept in signature for parity with prior decoder.
-	void rawObs;
-	return {
-		move: MOVE_INTENTS_BY_INDEX[moveIdx],
-		aimAngle,
-		fire,
-		plantBomb,
-	};
+	return decodePolicyAction(action, rawObs);
 }
 
-function nearestEnemyDistance(obs: TankObservation, sx: number, sy: number): { dist: number; id: string } {
+function nearestEnemyDistance(
+	obs: TankObservation,
+	sx: number,
+	sy: number,
+	navPlanner: NavigationPlanner | null = null
+): { dist: number; id: string } {
 	const alive = obs.enemies.filter((e) => !e.destroyed);
 	if (alive.length === 0) return { dist: 0, id: '' };
 	let best = alive[0];
@@ -529,43 +537,57 @@ function nearestEnemyDistance(obs: TankObservation, sx: number, sy: number): { d
 	for (const e of alive) {
 		const dx = e.x + e.size / 2 - sx;
 		const dy = e.y + e.size / 2 - sy;
-		const dSq = dx * dx + dy * dy;
-		if (dSq < bestSq) {
-			bestSq = dSq;
+		const distance = navPlanner
+			? navPlanner.getPathDistance(sx, sy, e.x + e.size / 2, e.y + e.size / 2)
+			: Math.sqrt(dx * dx + dy * dy);
+		const score = distance * distance;
+		if (score < bestSq) {
+			bestSq = score;
 			best = e;
 		}
 	}
 	return { dist: Math.sqrt(bestSq), id: String(best.id ?? '') };
 }
 
-function initRewardTracker(obs: TankObservation, _navPlanner: NavigationPlanner | null): RewardTracker {
+function nearestEnemyPathDistance(
+	state: DeepReadonly<GameState>,
+	navPlanner: NavigationPlanner | null
+): { dist: number; id: string } {
+	const player = state.tanks.find((tank) => tank.id === PLAYER_TANK_ID);
+	if (!player) return { dist: 0, id: '' };
+	const px = player.x + player.size / 2;
+	const py = player.y + player.size / 2;
+	let bestDist = Number.POSITIVE_INFINITY;
+	let bestId = '';
+	for (const enemy of state.tanks) {
+		if (enemy.team !== 'enemy' || enemy.destroyed) continue;
+		const ex = enemy.x + enemy.size / 2;
+		const ey = enemy.y + enemy.size / 2;
+		const dx = ex - px;
+		const dy = ey - py;
+		const distance = navPlanner ? navPlanner.getPathDistance(px, py, ex, ey) : Math.sqrt(dx * dx + dy * dy);
+		if (distance < bestDist) {
+			bestDist = distance;
+			bestId = enemy.id;
+		}
+	}
+	return { dist: Number.isFinite(bestDist) ? bestDist : 0, id: bestId };
+}
+
+function initRewardTracker(obs: TankObservation, navPlanner: NavigationPlanner | null): RewardTracker {
 	const alive = obs.enemies.filter((e) => !e.destroyed);
 	const sx = obs.self.x + obs.self.size / 2;
 	const sy = obs.self.y + obs.self.size / 2;
 
-	// Initial closest enemy projectile distance for dodge shaping
-	const enemyProjs = obs.projectiles.filter((p) => p.team === 'enemy');
-	let initialProjDist = ARENA_DIAGONAL;
-	if (enemyProjs.length > 0) {
-		let closestProjDistSq = Infinity;
-		for (const p of enemyProjs) {
-			const dx = p.x - sx;
-			const dy = p.y - sy;
-			const dSq = dx * dx + dy * dy;
-			if (dSq < closestProjDistSq) closestProjDistSq = dSq;
-		}
-		initialProjDist = Math.sqrt(closestProjDistSq);
-	}
-
-	const { dist: initialEnemyDist, id: initialEnemyId } = nearestEnemyDistance(obs, sx, sy);
+	const { dist: initialEnemyDist, id: initialEnemyId } = nearestEnemyDistance(obs, sx, sy, navPlanner);
 
 	return {
 		prevEnemyAliveCount: alive.length,
 		prevEnemyHealthTotal: alive.reduce((total, enemy) => total + enemy.health, 0),
 		prevSelfHealth: obs.self.health,
-		prevEnemyProjDist: initialProjDist,
 		prevEnemyDist: initialEnemyDist,
 		approachTargetId: initialEnemyId,
+		prevOwnBombCount: obs.bombs.filter((bomb) => bomb.ownerTankId === PLAYER_TANK_ID).length,
 	};
 }
 
@@ -575,7 +597,8 @@ function computeSteppingReward(
 	decodedAction: TankAction,
 	_rawObs: TankObservation,
 	shapingScale: number,
-	_navPlanner: NavigationPlanner | null
+	navPlanner: NavigationPlanner | null,
+	gamma: number
 ): { reward: number; breakdown: RewardBreakdown } {
 	let reward = STEP_PENALTY;
 	const breakdown = createRewardBreakdown();
@@ -602,66 +625,67 @@ function computeSteppingReward(
 	}
 	tracker.prevSelfHealth = player.health;
 
+	const ownBombCount = state.bombs.filter((bomb) => bomb.ownerTankId === PLAYER_TANK_ID).length;
+	if (ownBombCount > tracker.prevOwnBombCount) {
+		const value = BOMB_PLANT_PENALTY * (ownBombCount - tracker.prevOwnBombCount);
+		reward += value;
+		breakdown.bombCost += value;
+	}
+	tracker.prevOwnBombCount = ownBombCount;
+
 	// Kill event
 	const enemiesKilled = tracker.prevEnemyAliveCount - aliveEnemies.length;
 	if (enemiesKilled > 0) {
 		const value = KILL_REWARD * enemiesKilled;
 		reward += value;
 		breakdown.kill += value;
-		// Reset approach baseline so next-tick distance change isn't a huge jump
-		tracker.prevEnemyDist = -1.0;
-		tracker.approachTargetId = '';
 	}
 	tracker.prevEnemyAliveCount = aliveEnemies.length;
 
-	// ── Shaping: approach reward — potential-based on Euclidean distance to nearest enemy ──
-	// Φ(s) = -dist/ARENA_DIAGONAL, reward = γΦ(s') - Φ(s); approximated via
-	//   APPROACH_SCALE * (prevDist - currDist) / ARENA_DIAGONAL
-	// Only credited when the same enemy stays nearest across ticks (avoids reward jumps
-	// when the nearest target changes due to kills or movement).
-	const px = player.x + player.size / 2;
-	const py = player.y + player.size / 2;
-	const playerObs: TankObservation = {
-		tick: 0,
-		self: player as TankObservation['self'],
-		allies: [],
-		enemies: aliveEnemies as unknown as TankObservation['enemies'],
-		projectiles: [],
-		bombs: [],
-		obstacles: [],
-		arena: state.arena,
-	};
-	const { dist: currEnemyDist, id: currTargetId } = nearestEnemyDistance(playerObs, px, py);
-	if (tracker.prevEnemyDist >= 0.0 && currTargetId !== '' && currTargetId === tracker.approachTargetId) {
-		const approachReward = (APPROACH_SCALE * (tracker.prevEnemyDist - currEnemyDist) * shapingScale) / ARENA_DIAGONAL;
+	// Potential-based progress along the shortest collision-free path. Keep the
+	// target stable until it is destroyed so nearest-target switches cannot create
+	// discontinuous shaping. A positive potential also makes standing still cost
+	// reward instead of paying the policy for waiting at an obstacle.
+	const trackedEnemy = aliveEnemies.find((enemy) => enemy.id === tracker.approachTargetId);
+	const episodeTerminal = state.status !== 'running';
+	if (tracker.prevEnemyDist >= 0 && tracker.approachTargetId !== '') {
+		let currentDistance = 0;
+		let closePotential = episodeTerminal || !trackedEnemy;
+		if (trackedEnemy && !episodeTerminal) {
+			const px = player.x + player.size / 2;
+			const py = player.y + player.size / 2;
+			const ex = trackedEnemy.x + trackedEnemy.size / 2;
+			const ey = trackedEnemy.y + trackedEnemy.size / 2;
+			currentDistance = navPlanner
+				? navPlanner.getPathDistance(px, py, ex, ey)
+				: Math.sqrt((ex - px) ** 2 + (ey - py) ** 2);
+			closePotential = false;
+		}
+		const approachReward = potentialBasedApproachReward(
+			tracker.prevEnemyDist,
+			currentDistance,
+			ARENA_DIAGONAL,
+			gamma,
+			APPROACH_SCALE * shapingScale,
+			closePotential
+		);
 		if (Math.abs(approachReward) > 1e-8) {
 			reward += approachReward;
 			breakdown.approach += approachReward;
 		}
+		tracker.prevEnemyDist = closePotential ? -1 : currentDistance;
+		if (closePotential) tracker.approachTargetId = '';
 	}
-	tracker.prevEnemyDist = currEnemyDist;
-	tracker.approachTargetId = currTargetId;
 
-	// ── Shaping: dodge reward — potential-based on distance to nearest enemy projectile ──
-	// Φ(s) = dist/ARENA_DIAGONAL, reward = Φ(s') - Φ(s) — moving away from incoming fire is positive
-	const enemyProjectiles = state.projectiles.filter((p) => p.team === 'enemy');
-	let currProjDist = ARENA_DIAGONAL;
-	if (enemyProjectiles.length > 0) {
-		let closestProjDistSq = Infinity;
-		for (const p of enemyProjectiles) {
-			const dx = p.x - px;
-			const dy = p.y - py;
-			const dSq = dx * dx + dy * dy;
-			if (dSq < closestProjDistSq) closestProjDistSq = dSq;
-		}
-		currProjDist = Math.sqrt(closestProjDistSq);
+	if (!episodeTerminal && tracker.approachTargetId === '' && aliveEnemies.length > 0) {
+		const nextTarget = nearestEnemyPathDistance(state, navPlanner);
+		tracker.prevEnemyDist = nextTarget.dist;
+		tracker.approachTargetId = nextTarget.id;
 	}
-	const dodgeReward = (DODGE_SCALE * (currProjDist - tracker.prevEnemyProjDist) * shapingScale) / ARENA_DIAGONAL;
-	if (Math.abs(dodgeReward) > 1e-8) {
-		reward += dodgeReward;
-		breakdown.dodge += dodgeReward;
-	}
-	tracker.prevEnemyProjDist = currProjDist;
+
+	// Projectile-nearest shaping was removed because entity appearance and
+	// disappearance made its potential discontinuous. Damage avoidance remains
+	// directly represented by the hurt and death penalties.
 
 	return { reward, breakdown };
 }
@@ -670,6 +694,7 @@ function computeSteppingReward(
 class RLController implements TankController {
 	private mlp: PolicyMLP;
 	private rng: () => number;
+	private navigationPlanner: NavigationPlanner | null = null;
 	public lastNormalizedObs: number[] = [];
 	public lastAction: number[] = []; // MultiDiscrete: [moveIdx, aimBin, fire, bomb] (ints)
 	public lastDecodedAction: TankAction = { move: 'none', aimAngle: 0, fire: false, plantBomb: false };
@@ -682,13 +707,15 @@ class RLController implements TankController {
 		this.rng = rng;
 	}
 
-	reset(_initial: MatchInit): void {
+	reset(initial: MatchInit): void {
 		this.lastDecodedAction = { move: 'none', aimAngle: 0, fire: false, plantBomb: false };
+		const self = initial.tanks.find((tank) => tank.id === initial.selfId);
+		this.navigationPlanner = new NavigationPlanner(initial.arena, initial.obstacles, self?.size ?? 30);
 	}
 
 	act(obs: TankObservation): TankAction {
 		this.lastRawObs = obs;
-		const normalized = normalizeObs(obs);
+		const normalized = normalizeWorkerObservation(obs, this.navigationPlanner);
 		this.lastNormalizedObs = normalized;
 
 		const { logits, value } = this.mlp.forward(normalized);
@@ -734,149 +761,8 @@ interface RolloutData {
 	episode_reward_breakdowns: RewardBreakdown[];
 }
 
-function applySpawnJitter(config: LevelConfig, seed: number): LevelConfig {
-	const JITTER = 40;
-	const TANK_SIZE = 30;
-	const rng = new SeededRandom(seed * 7919 + 13);
-	const jitter = () => rng.nextRange(-JITTER, JITTER);
-	const clampX = (x: number) => Math.max(0, Math.min(ARENA_WIDTH - TANK_SIZE, x));
-	const clampY = (y: number) => Math.max(0, Math.min(ARENA_HEIGHT - TANK_SIZE, y));
-	const jittered: LevelConfig = {
-		...config,
-	};
-
-	if (config.player) {
-		jittered.player = {
-			...config.player,
-			x: clampX(config.player.x + jitter()),
-			y: clampY(config.player.y + jitter()),
-		};
-	}
-
-	if (config.enemies) {
-		jittered.enemies = config.enemies.map((enemy) => ({
-			...enemy,
-			x: clampX(enemy.x + jitter()),
-			y: clampY(enemy.y + jitter()),
-		}));
-	}
-
-	if (config.tanks) {
-		jittered.tanks = config.tanks.map((tank) => ({
-			...tank,
-			x: clampX(tank.x + jitter()),
-			y: clampY(tank.y + jitter()),
-		}));
-	}
-
-	return jittered;
-}
-
 function clamp(value: number, minValue: number, maxValue: number): number {
 	return Math.max(minValue, Math.min(maxValue, value));
-}
-
-function deepCloneLevel(config: LevelConfig): LevelConfig {
-	return JSON.parse(JSON.stringify(config)) as LevelConfig;
-}
-
-function applyProceduralDifficulty(config: LevelConfig, seed: number, difficultyBand: number): LevelConfig {
-	const d = clamp(difficultyBand, 0, 1);
-	if (d <= 0) {
-		return config;
-	}
-
-	const rng = new SeededRandom(seed * 3571 + 97);
-	const varied = deepCloneLevel(config);
-	const tankSize = 30;
-	const clampX = (x: number) => clamp(x, 0, ARENA_WIDTH - tankSize);
-	const clampY = (y: number) => clamp(y, 0, ARENA_HEIGHT - tankSize);
-
-	if (varied.player) {
-		const playerJitter = 8 + 24 * d;
-		varied.player.x = clampX(varied.player.x + rng.nextRange(-playerJitter, playerJitter));
-		varied.player.y = clampY(varied.player.y + rng.nextRange(-playerJitter, playerJitter));
-	}
-
-	if (varied.enemies) {
-		const enemyJitter = 12 + 36 * d;
-		varied.enemies = varied.enemies.map((enemy) => {
-			const nextEnemy = { ...enemy };
-			nextEnemy.x = clampX(nextEnemy.x + rng.nextRange(-enemyJitter, enemyJitter));
-			nextEnemy.y = clampY(nextEnemy.y + rng.nextRange(-enemyJitter, enemyJitter));
-
-			if (nextEnemy.type === 'stationary' && rng.nextFloat() < 0.2 * d) {
-				nextEnemy.type = 'stationary-random-aim';
-			}
-			if (nextEnemy.type === 'stationary-random-aim' && rng.nextFloat() < 0.15 * Math.max(0, d - 0.3)) {
-				nextEnemy.type = 'simple-moving';
-				nextEnemy.navigator = nextEnemy.navigator ?? { type: 'simple' };
-			}
-			if (nextEnemy.type === 'simple-moving' && rng.nextFloat() < 0.12 * Math.max(0, d - 0.55)) {
-				nextEnemy.type = 'bomber';
-				nextEnemy.navigator = { type: 'astar' };
-				nextEnemy.bombs = nextEnemy.bombs ?? { type: 'basic', count: 1 };
-			}
-
-			if (rng.nextFloat() < 0.45 * d) {
-				const ammoType = nextEnemy.ammo?.type ?? 'basic';
-				const ammoCount = Math.min(3, (nextEnemy.ammo?.count ?? 1) + 1);
-				nextEnemy.ammo = { type: ammoType, count: ammoCount };
-			}
-
-			if ((nextEnemy.type === 'bomber' || nextEnemy.type === 'super-bomber') && !nextEnemy.bombs) {
-				nextEnemy.bombs = { type: 'basic', count: 1 };
-			}
-
-			return nextEnemy;
-		});
-
-		if (d > 0.45 && varied.enemies.length < 4 && rng.nextFloat() < 0.35 * (d - 0.45)) {
-			const template = varied.enemies[rng.nextInt(0, varied.enemies.length - 1)] ?? varied.enemies[0];
-			if (template) {
-				const clone = deepCloneLevel({ enemies: [template], obstacles: [] }).enemies?.[0];
-				if (clone) {
-					clone.x = clampX(rng.nextRange(560, 900));
-					clone.y = clampY(rng.nextRange(80, 420));
-					varied.enemies.push(clone);
-				}
-			}
-		}
-	}
-
-	if (varied.obstacles) {
-		const obsJitter = 6 + 18 * d;
-		varied.obstacles = varied.obstacles.map((obs) => {
-			const widthScale = 1 + rng.nextRange(-0.1 * d, 0.14 * d);
-			const heightScale = 1 + rng.nextRange(-0.1 * d, 0.14 * d);
-			const width = clamp(obs.width * widthScale, 18, 260);
-			const height = clamp(obs.height * heightScale, 18, 280);
-			const x = clamp(obs.x + rng.nextRange(-obsJitter, obsJitter), 0, ARENA_WIDTH - width);
-			const y = clamp(obs.y + rng.nextRange(-obsJitter, obsJitter), 0, ARENA_HEIGHT - height);
-			return { x, y, width, height };
-		});
-
-		if (d > 0.55 && varied.obstacles.length < 5 && rng.nextFloat() < 0.22 * (d - 0.55) * 2.0) {
-			const width = rng.nextRange(24, 80);
-			const height = rng.nextRange(24, 140);
-			varied.obstacles.push({
-				x: clamp(rng.nextRange(240, 820), 0, ARENA_WIDTH - width),
-				y: clamp(rng.nextRange(60, 420), 0, ARENA_HEIGHT - height),
-				width,
-				height,
-			});
-		}
-	}
-
-	const rules = { ...(varied.rules ?? {}) };
-	const baseTurret = rules.turretSpeedMultiplier ?? 1.0;
-	rules.turretSpeedMultiplier = clamp(baseTurret * (1 + 0.35 * d + rng.nextRange(-0.08, 0.08)), 0.8, 3.5);
-	if (d > 0.7 && rng.nextFloat() < (d - 0.7) * 1.8) {
-		rules.projectileBounces = true;
-	}
-	varied.rules = rules;
-
-	return varied;
 }
 
 /**
@@ -915,6 +801,8 @@ function collectRollout(
 	proceduralLevels: boolean,
 	difficultyBand: number,
 	playerMaxAmmo: number,
+	playerMaxBombs: number,
+	gamma: number,
 	actionRng: () => number
 ): RolloutData {
 	const obs: number[][] = [];
@@ -947,12 +835,10 @@ function collectRollout(
 		// Pick scenario uniformly at random from the active curriculum pool
 		currentLevel = levels[levelRng.nextInt(0, levels.length - 1)];
 		const baseConfig = resolveScenarioConfig(currentLevel);
-		const levelConfig = proceduralLevels
-			? applyProceduralDifficulty(applySpawnJitter(baseConfig, seed), seed, difficultyBand)
-			: applySpawnJitter(baseConfig, seed);
-		if (playerMaxAmmo > 0 && levelConfig.player) {
-			levelConfig.player.ammo = { type: levelConfig.player.ammo?.type ?? 'basic', count: playerMaxAmmo };
-		}
+		const variedConfig = proceduralLevels
+			? varyDifficulty(varySpawn(baseConfig, seed), seed, difficultyBand)
+			: varySpawn(baseConfig, seed);
+		const levelConfig = configurePlayerResources(variedConfig, playerMaxAmmo, playerMaxBombs);
 		const initialState = createInitialGameState(levelConfig, seed);
 		const controllers = createDefaultControllers(levelConfig);
 		controllers[PLAYER_TANK_ID] = rlController;
@@ -1007,32 +893,32 @@ function collectRollout(
 		let stepTruncValue = 0;
 
 		if (state.status === 'player_win') {
-			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner, gamma);
 			stepReward = stepping.reward + TERMINAL_WIN_REWARD;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 			episodeBreakdown.terminalWin += TERMINAL_WIN_REWARD;
 			done = true;
 		} else if (state.status === 'enemy_win' || player?.destroyed) {
-			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner, gamma);
 			stepReward = stepping.reward + DEATH_REWARD + TERMINAL_LOSS_REWARD;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 			episodeBreakdown.death += DEATH_REWARD;
 			episodeBreakdown.terminalLoss += TERMINAL_LOSS_REWARD;
 			done = true;
 		} else if (episodeTick >= maxTicks) {
-			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner, gamma);
 			// Truncation: emit raw reward only and report V(s_post) separately so
 			// Python can apply the gamma * V_post bootstrap AFTER reward
 			// normalization (the value head is trained against normalized returns,
 			// so the bootstrap must not be divided by ret_std).
 			const postObs = buildPlayerObservation(state);
-			stepTruncValue = postObs ? mlp.forward(normalizeObs(postObs)).value : 0;
+			stepTruncValue = postObs ? mlp.forward(normalizeWorkerObservation(postObs, navPlanner)).value : 0;
 			stepReward = stepping.reward + TIMEOUT_REWARD;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 			episodeBreakdown.timeout += TIMEOUT_REWARD;
 			done = true;
 		} else {
-			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner);
+			const stepping = computeSteppingReward(state, tracker, lastDecodedAction, lastRawObs, shapingScale, navPlanner, gamma);
 			stepReward = stepping.reward;
 			mergeRewardBreakdown(episodeBreakdown, stepping.breakdown);
 		}
@@ -1074,10 +960,13 @@ function collectRollout(
 		const state = sim.getState();
 		const dummyObs = buildPlayerObservation(state);
 		if (!dummyObs) throw new Error('Player tank not found in reset state');
-		lastObs = normalizeObs(dummyObs);
+		lastObs = normalizeWorkerObservation(dummyObs, navPlanner);
 	} else {
-		// Mid-episode: use the last controller obs and value
-		lastObs = rlController.lastNormalizedObs;
+		// Mid-episode: bootstrap from the post-step state s_(T+1), not the
+		// controller's pre-step observation s_T.
+		const postObs = buildPlayerObservation(sim.getState());
+		if (!postObs) throw new Error('Player tank not found at rollout boundary');
+		lastObs = normalizeWorkerObservation(postObs, navPlanner);
 		const { value } = mlp.forward(lastObs);
 		lastValue = value;
 	}
@@ -1114,6 +1003,29 @@ function getPortArg(): number {
 		}
 	}
 	return 50061;
+}
+
+function getParentPidArg(): number | null {
+	const args = process.argv.slice(2);
+	for (let i = 0; i < args.length; i += 1) {
+		if (args[i] === '--parent-pid' && args[i + 1]) {
+			const parentPid = Number(args[i + 1]);
+			return Number.isSafeInteger(parentPid) && parentPid > 0 ? parentPid : null;
+		}
+	}
+	return null;
+}
+
+function watchParentProcess(parentPid: number | null): void {
+	if (parentPid === null) return;
+	const timer = setInterval(() => {
+		try {
+			process.kill(parentPid, 0);
+		} catch {
+			clearInterval(timer);
+			process.exit(0);
+		}
+	}, 1000);
 }
 
 function health(
@@ -1165,9 +1077,9 @@ function collect(
 		const proceduralLevels = Boolean(req.proceduralLevels ?? true);
 		const difficultyBand = clamp(Number(req.difficultyBand ?? 0), 0, 1);
 		const playerMaxAmmo = Number(req.playerMaxAmmo ?? 0);
+		const playerMaxBombs = Number(req.playerMaxBombs ?? 0);
 		const globalEpisodeOffset = Number(req.globalEpisodeOffset ?? 0);
-		const gamma = Number(req.gamma ?? 0);
-		void gamma; // accepted for protocol back-compat; bootstrap is now Python-side
+		const gamma = Math.max(0, Math.min(1, Number(req.gamma ?? 0.997)));
 
 		// Deterministic action-sampling RNG keyed on (seedStart, workerId, episodeOffset)
 		// so that, given identical weights and seeds, rollouts are reproducible.
@@ -1190,6 +1102,8 @@ function collect(
 			proceduralLevels,
 			difficultyBand,
 			playerMaxAmmo,
+			playerMaxBombs,
+			gamma,
 			actionRng
 		);
 		workerTotalEpisodes += (rollout.episode_rewards as number[]).length;
@@ -1208,6 +1122,7 @@ function close(
 }
 
 function main(): void {
+	watchParentProcess(getParentPidArg());
 	const server = new grpc.Server();
 	server.addService(rolloutServiceDef.service, {
 		Health: health,
@@ -1226,4 +1141,6 @@ function main(): void {
 	});
 }
 
-main();
+if (require.main === module) {
+	main();
+}

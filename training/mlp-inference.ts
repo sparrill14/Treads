@@ -1,22 +1,22 @@
 /**
  * MLP forward pass for PPO policy inference in TypeScript.
- * Matches SB3's MlpPolicy with MultiDiscrete([9, 16, 2, 2]) action space and
+ * Matches SB3's MlpPolicy with the versioned MultiDiscrete action contract and
  * net_arch=[512, 256]:
  *   obs → policyNet: Linear(obs_dim→512) → Tanh → Linear(512→256) → Tanh
  *   obs → valueNet:  Linear(obs_dim→512) → Tanh → Linear(512→256) → Tanh
- *   policy_features → action_net Linear(256→29) → logits split into 4 heads
+ *   policy_features → action_net → logits split into 4 heads
  *   value_features  → value_net  Linear(256→1)  → value
  *
- * Action heads (sum = 29):
+ * Action heads:
  *   move:    9 logits → MoveIntent index
- *   aimBin: 16 logits → absolute aim angle bin (each 22.5°)
+ *   aimBin: relative residual from the nearest enemy bearing
  *   fire:    2 logits → 0/1
  *   bomb:    2 logits → 0/1
  */
 
-export const ACTION_HEAD_SIZES = [9, 16, 2, 2] as const;
-export const ACTION_DIM = ACTION_HEAD_SIZES.length;
-export const ACTION_LOGITS_DIM = ACTION_HEAD_SIZES.reduce((a, b) => a + b, 0);
+import { ACTION_DIM, ACTION_HEAD_SIZES, ACTION_LOGITS_DIM } from '../src/game/controllers/NeuralModelContract';
+
+export { ACTION_DIM, ACTION_HEAD_SIZES, ACTION_LOGITS_DIM };
 
 export interface LayerWeights {
 	weight: number[][]; // [out_features][in_features]

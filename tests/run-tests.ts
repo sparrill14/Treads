@@ -1,10 +1,12 @@
 import { runBehaviorTests } from './behavior.test';
 import { runSimulationTests } from './simulation.test';
+import { runNeuralModelContractTests } from './neural-model-contract.test';
 
 try {
 	runSimulationTests();
 	runBehaviorTests();
-	console.log('Simulation and behavior tests passed.');
+	runNeuralModelContractTests();
+	console.log('Simulation, behavior, and neural model contract tests passed.');
 } catch (error) {
 	console.error('Simulation tests failed.');
 	console.error(error);

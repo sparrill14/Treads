@@ -29,6 +29,8 @@
     "lint:py": "python -m compileall training",
     "build:training": "npx tsc -p training/tsconfig.training.json",
     "verify:training": "npm run build:training && npm run lint:py",
+    "test:training": ".venv\\Scripts\\python.exe training/test_pipeline_contract.py && .venv\\Scripts\\python.exe training/test_dashboard_model_gate.py && .venv\\Scripts\\python.exe training/test_aiming_e2e.py && .venv\\Scripts\\python.exe training/test_navigation_e2e.py && .venv\\Scripts\\python.exe training/test_env_session.py && .venv\\Scripts\\python.exe training/test_observation_parity.py && .venv\\Scripts\\python.exe training/test_sampler_parity.py && .venv\\Scripts\\python.exe training/test_checkpoint_resume.py && .venv\\Scripts\\python.exe training/smoke_test.py",
+    "train:supervised": ".venv\\Scripts\\python.exe training/supervise_training.py",
     "dashboard": "npm run build:training && node ./.training-dist/training/dashboard-server.js"
   },
   "repository": {
@@ -37,6 +39,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
     "copy-webpack-plugin": "^14.0.0",
     "css-loader": "^7.1.4",
     "css-minimizer-webpack-plugin": "^8.0.0",
@@ -45,6 +48,7 @@
     "html-webpack-plugin": "^5.6.8",
     "mini-css-extract-plugin": "^2.10.2",
     "style-loader": "^4.0.0",
+    "terser-webpack-plugin": "^5.6.1",
     "ts-loader": "^9.6.2",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.65.0",

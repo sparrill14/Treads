@@ -1,11 +1,10 @@
 """
 Export the trained SB3 PPO model to ONNX format for use in the browser.
-Action space: MultiDiscrete([9, 16, 2, 2]).  The exported network outputs raw
-logits of length 29 = 9 + 16 + 2 + 2.  Browser-side code argmax-decodes each
+The exported network outputs raw logits matching the versioned action contract.
+Browser-side code argmax-decodes each
 contiguous slice into [move_idx, aim_bin, fire, bomb].
 """
 
-import math
 import os
 import sys
 from typing import Any, cast
@@ -19,13 +18,17 @@ sys.path.insert(0, os.path.dirname(__file__))
 from sb3_compat import ensure_pickle_compat
 from stable_baselines3 import PPO
 from treads_env import OBS_SIZE
+from model_contract import (
+    ACTION_HEAD_SIZES,
+    ACTION_VERSION,
+    NEUTRAL_AIM_BIN,
+    assert_contract_compatible,
+    write_contract_for_model,
+)
 
 ensure_pickle_compat()
 
-ACTION_HEAD_SIZES = (9, 16, 2, 2)
 ACTION_LOGITS_DIM = sum(ACTION_HEAD_SIZES)
-NUM_AIM_BINS = ACTION_HEAD_SIZES[1]
-AIM_BIN_RADIANS = (2.0 * math.pi) / NUM_AIM_BINS
 MOVE_INTENTS = ["none", "n", "s", "e", "w", "ne", "nw", "se", "sw"]
 
 
@@ -33,6 +36,7 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
     """Export an SB3 PPO model to ONNX."""
     print(f"Loading model from {model_path}...")
     model = cast(Any, PPO.load(model_path, device="cpu"))  # pyright: ignore[reportUnknownMemberType]
+    assert_contract_compatible(model_path, model.action_space)
 
     policy = model.policy
 
@@ -71,6 +75,7 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
         dynamo=False,
     )
     print(f"ONNX model saved to {onnx_path}")
+    write_contract_for_model(onnx_path)
 
     # Verify with onnxruntime
     import onnxruntime as ort  # pyright: ignore[reportMissingTypeStubs]
@@ -95,9 +100,9 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
         offset += size
     move_idx, aim_bin, fire, bomb = decoded
     move_dir = MOVE_INTENTS[move_idx]
-    aim_angle = aim_bin * AIM_BIN_RADIANS
     print(
-        f"  decoded move={move_dir} aim_bin={aim_bin} (angle={aim_angle:.3f} rad) "
+        f"  decoded move={move_dir} aim_bin={aim_bin} "
+        f"(neutral={NEUTRAL_AIM_BIN}, mode={ACTION_VERSION}) "
         f"fire={bool(fire)} bomb={bool(bomb)}"
     )
 

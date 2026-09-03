@@ -1,0 +1,25 @@
+{
+  "contractVersion": 3,
+  "observationVersion": "angles-sincos-navigation-v3",
+  "actionVersion": "target-relative-residual-v2",
+  "observation": {
+    "selfDim": 22,
+    "enemyDim": 10,
+    "maxEnemies": 6,
+    "projectileDim": 5,
+    "maxProjectiles": 15,
+    "obstacleDim": 4,
+    "maxObstacles": 5,
+    "bombDim": 5,
+    "maxBombs": 6,
+    "summaryDim": 6,
+    "size": 213
+  },
+  "action": {
+    "headSizes": [9, 65, 2, 2],
+    "aimMode": "nearest-enemy-relative-residual",
+    "aimResidualMinRadians": -3.141592653589793,
+    "aimResidualMaxRadians": 3.141592653589793,
+    "neutralAimBin": 32
+  }
+}

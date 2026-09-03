@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from sb3_compat import ensure_pickle_compat  # noqa: E402
 from runtime_codec import OBS_SIZE, decode_multi_discrete_action  # noqa: E402
+from model_contract import assert_contract_compatible  # noqa: E402
 from treads_env import TreadsEnv  # noqa: E402
 
 ensure_pickle_compat()
@@ -144,6 +145,7 @@ def validate(
     deterministic: bool,
 ) -> None:
     model = cast(Any, PPO.load(model_path, device="cpu"))  # pyright: ignore[reportUnknownMemberType]
+    assert_contract_compatible(model_path, model.action_space)
     model_obs_shape = tuple(model.observation_space.shape or ())
     if model_obs_shape != (OBS_SIZE,):
         raise ValueError(

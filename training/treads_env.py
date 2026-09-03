@@ -5,7 +5,6 @@ Wraps the Node.js CLI runner as an OpenAI Gymnasium environment.
 
 import os
 import json
-import math
 import socket
 import subprocess
 import sys
@@ -19,9 +18,12 @@ import gymnasium as gym
 from gymnasium import spaces
 
 from runtime_codec import (
+    ACTION_HEAD_SIZES,
     ARENA_DIAGONAL,
     MOVE_INTENTS,
     OBS_SIZE,
+    decode_multi_discrete_action,
+    navigation_guidance,
     normalize_observation,
     set_tick_norm_ticks,
 )
@@ -40,7 +42,11 @@ def _ensure_proto_stubs() -> Tuple[Any, Any]:
 
     pb2_path = os.path.join(GENERATED_DIR, "treads_pb2.py")
     pb2_grpc_path = os.path.join(GENERATED_DIR, "treads_pb2_grpc.py")
-    if not (os.path.exists(pb2_path) and os.path.exists(pb2_grpc_path)):
+    proto_mtime = os.path.getmtime(PROTO_PATH)
+    stubs_stale = not (os.path.exists(pb2_path) and os.path.exists(pb2_grpc_path)) or any(
+        os.path.getmtime(path) < proto_mtime for path in (pb2_path, pb2_grpc_path) if os.path.exists(path)
+    )
+    if stubs_stale:
         result = subprocess.run(
             [
                 sys.executable,
@@ -86,7 +92,7 @@ TIMEOUT_REWARD = -1.0
 # 5x bump from prior (0.5/0.15) so per-step shaping is meaningful vs the
 # per-step penalty after ARENA_DIAGONAL (~1118) normalization.
 APPROACH_SCALE = 2.5
-DODGE_SCALE = 0.75
+REWARD_GAMMA = 0.997
 
 
 class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
@@ -94,11 +100,26 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
 
     metadata = {"render_modes": []}
 
-    def __init__(self, level: int = 1, seed_start: int = 0, max_episode_steps: int = 720) -> None:
+    def __init__(
+        self,
+        level: int = 1,
+        seed_start: int = 0,
+        max_episode_steps: int = 720,
+        spawn_jitter: bool = False,
+        procedural_levels: bool = False,
+        difficulty_band: float = 0.0,
+        player_max_ammo: int = -1,
+        player_max_bombs: int = -1,
+    ) -> None:
         super().__init__()
         self.level = level
         self.seed_counter = seed_start
         self.max_episode_steps = max_episode_steps
+        self.spawn_jitter = bool(spawn_jitter)
+        self.procedural_levels = bool(procedural_levels)
+        self.difficulty_band = float(np.clip(difficulty_band, 0.0, 1.0))
+        self.player_max_ammo = int(player_max_ammo)
+        self.player_max_bombs = int(player_max_bombs)
         set_tick_norm_ticks(max_episode_steps)
         self.process: Optional[subprocess.Popen[str]] = None
         self._grpc_port: Optional[int] = None
@@ -111,7 +132,6 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         self._prev_enemy_health_total = 0
         self._prev_self_health = 0
         self._prev_enemy_dist = 0.0
-        self._prev_enemy_proj_dist = ARENA_DIAGONAL
         self._approach_target_id = ""
         self._step_count = 0
         self._save_replay = False
@@ -151,7 +171,14 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
 
         port = _find_free_port()
         self._grpc_port = port
-        cmd = ["node", GRPC_SERVER_PATH, "--port", str(port)]
+        cmd = [
+            "node",
+            GRPC_SERVER_PATH,
+            "--port",
+            str(port),
+            "--parent-pid",
+            str(os.getpid()),
+        ]
         self.process = subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
@@ -161,7 +188,13 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         )
 
         endpoint = f"127.0.0.1:{port}"
-        self._grpc_channel = grpc.insecure_channel(endpoint)
+        self._grpc_channel = grpc.insecure_channel(
+            endpoint,
+            options=[
+                ("grpc.max_receive_message_length", 64 * 1024 * 1024),
+                ("grpc.max_send_message_length", 64 * 1024 * 1024),
+            ],
+        )
         self._grpc_stub = TREADS_PB2_GRPC.TreadsEnvServiceStub(self._grpc_channel)
 
         # Wait for server readiness.
@@ -213,6 +246,11 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
             seed=int(game_seed),
             max_ticks=int(self.max_episode_steps),
             save_replay=bool(self._save_replay),
+            spawn_jitter=self.spawn_jitter,
+            procedural_levels=self.procedural_levels,
+            difficulty_band=self.difficulty_band,
+            player_max_ammo=self.player_max_ammo,
+            player_max_bombs=self.player_max_bombs,
         )
         response = self._grpc_stub.Reset(request, timeout=self._rpc_timeout_sec)
         self._session_id = str(response.session_id)
@@ -245,43 +283,28 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         return normalize_observation(obs_raw)
 
     @staticmethod
-    def _nearest_enemy_distance(obs_raw: Dict[str, Any]) -> Tuple[float, str]:
+    def _enemy_path_distance(obs_raw: Dict[str, Any], enemy: Dict[str, Any]) -> float:
         self_data = cast(Dict[str, Any], obs_raw["self"])
         sx = float(self_data["x"]) + float(self_data["size"]) / 2.0
         sy = float(self_data["y"]) + float(self_data["size"]) / 2.0
+        ex = float(enemy["x"]) + float(enemy["size"]) / 2.0
+        ey = float(enemy["y"]) + float(enemy["size"]) / 2.0
+        _angle, distance, _reachable = navigation_guidance(
+            obs_raw, sx, sy, ex, ey, float(self_data["size"])
+        )
+        return distance
+
+    @classmethod
+    def _nearest_enemy_distance(cls, obs_raw: Dict[str, Any]) -> Tuple[float, str]:
         alive_enemies = [
             e for e in cast(List[Dict[str, Any]], obs_raw["enemies"]) if not bool(e["destroyed"])
         ]
         if not alive_enemies:
             return 0.0, ""
 
-        nearest = min(
-            alive_enemies,
-            key=lambda enemy: (float(enemy["x"]) + float(enemy["size"]) / 2.0 - sx) ** 2
-            + (float(enemy["y"]) + float(enemy["size"]) / 2.0 - sy) ** 2,
-        )
-        dx = float(nearest["x"]) + float(nearest["size"]) / 2.0 - sx
-        dy = float(nearest["y"]) + float(nearest["size"]) / 2.0 - sy
-        return math.sqrt(dx * dx + dy * dy), str(nearest["id"])
-
-    @staticmethod
-    def _nearest_enemy_projectile_distance(obs_raw: Dict[str, Any]) -> float:
-        self_data = cast(Dict[str, Any], obs_raw["self"])
-        sx = float(self_data["x"]) + float(self_data["size"]) / 2.0
-        sy = float(self_data["y"]) + float(self_data["size"]) / 2.0
-        enemy_projectiles = [
-            projectile
-            for projectile in cast(List[Dict[str, Any]], obs_raw.get("projectiles", []))
-            if projectile.get("team") == "enemy"
-        ]
-        if not enemy_projectiles:
-            return ARENA_DIAGONAL
-        return min(
-            math.sqrt(
-                (float(projectile["x"]) - sx) ** 2 + (float(projectile["y"]) - sy) ** 2
-            )
-            for projectile in enemy_projectiles
-        )
+        distances = [(cls._enemy_path_distance(obs_raw, enemy), enemy) for enemy in alive_enemies]
+        distance, nearest = min(distances, key=lambda item: item[0])
+        return distance, str(nearest["id"])
 
     def _reset_reward_trackers(self, obs_raw: Dict[str, Any]) -> None:
         enemies = [e for e in cast(List[Dict[str, Any]], obs_raw["enemies"]) if not bool(e["destroyed"])]
@@ -289,7 +312,6 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         self._prev_enemy_health_total = sum(float(enemy["health"]) for enemy in enemies)
         self._prev_self_health = float(obs_raw["self"]["health"])
         self._prev_enemy_dist, self._approach_target_id = self._nearest_enemy_distance(obs_raw)
-        self._prev_enemy_proj_dist = self._nearest_enemy_projectile_distance(obs_raw)
 
     def _compute_reward(
         self,
@@ -314,18 +336,34 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         enemies_killed = self._prev_enemy_alive_count - len(alive_enemies)
         if enemies_killed > 0:
             reward += KILL_REWARD * enemies_killed
-            self._prev_enemy_dist = -1.0
-            self._approach_target_id = ""
 
-        current_enemy_dist, current_target_id = self._nearest_enemy_distance(obs_raw)
-        if self._prev_enemy_dist >= 0.0 and current_target_id and current_target_id == self._approach_target_id:
-            reward += (APPROACH_SCALE * (self._prev_enemy_dist - current_enemy_dist)) / ARENA_DIAGONAL
-        self._prev_enemy_dist = current_enemy_dist
-        self._approach_target_id = current_target_id
+        terminal = bool(done_msg and (done_msg.get("win") or done_msg.get("loss")))
+        tracked_enemy = next(
+            (enemy for enemy in alive_enemies if str(enemy["id"]) == self._approach_target_id),
+            None,
+        )
+        if self._prev_enemy_dist >= 0.0 and self._approach_target_id:
+            close_potential = terminal or tracked_enemy is None
+            current_enemy_dist = (
+                0.0
+                if close_potential
+                else self._enemy_path_distance(obs_raw, cast(Dict[str, Any], tracked_enemy))
+            )
+            previous_potential = 1.0 - min(max(self._prev_enemy_dist / ARENA_DIAGONAL, 0.0), 1.0)
+            current_potential = (
+                0.0
+                if close_potential
+                else 1.0 - min(max(current_enemy_dist / ARENA_DIAGONAL, 0.0), 1.0)
+            )
+            reward += APPROACH_SCALE * (
+                REWARD_GAMMA * current_potential - previous_potential
+            )
+            self._prev_enemy_dist = -1.0 if close_potential else current_enemy_dist
+            if close_potential:
+                self._approach_target_id = ""
 
-        current_projectile_dist = self._nearest_enemy_projectile_distance(obs_raw)
-        reward += (DODGE_SCALE * (current_projectile_dist - self._prev_enemy_proj_dist)) / ARENA_DIAGONAL
-        self._prev_enemy_proj_dist = current_projectile_dist
+        if not terminal and not self._approach_target_id and alive_enemies:
+            self._prev_enemy_dist, self._approach_target_id = self._nearest_enemy_distance(obs_raw)
 
         self._prev_enemy_alive_count = len(alive_enemies)
         self._prev_enemy_health_total = enemy_health_total
@@ -422,18 +460,9 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         self._kill_process()
 
 
-# Number of discrete aim bins (evenly spaced across 0–2π)
-NUM_AIM_BINS = 16
-
-
 class TreadsEnvDiscrete(gym.Env[NDArray[np.float32], Any]):
     """
-    MultiDiscrete action space wrapper for TreadsEnv to work with SB3.
-    Action: MultiDiscrete([9, NUM_AIM_BINS, 2, 2])
-      - move: 0-8 (9 directions)
-      - aim:  0-(NUM_AIM_BINS-1), mapped to [0, 2π)
-      - fire: 0/1
-      - bomb: 0/1
+    MultiDiscrete action wrapper using the versioned neural model contract.
     """
 
     metadata = {"render_modes": []}
@@ -444,25 +473,12 @@ class TreadsEnvDiscrete(gym.Env[NDArray[np.float32], Any]):
             level=level, seed_start=seed_start, max_episode_steps=max_episode_steps
         )
 
-        self.action_space = spaces.MultiDiscrete([9, NUM_AIM_BINS, 2, 2])
+        self.action_space = spaces.MultiDiscrete(ACTION_HEAD_SIZES)
         self.observation_space = self._env.observation_space
 
     def _convert_action(self, action: NDArray[np.int64]) -> Dict[str, Any]:
         """Convert MultiDiscrete action to dict action."""
-        move_idx = int(action[0])
-        aim_bin = int(action[1])
-        fire = bool(action[2])
-        plant_bomb = bool(action[3])
-
-        # Convert aim bin to radians: bin i → i * (2π / NUM_AIM_BINS)
-        aim_angle = aim_bin * (2 * math.pi / NUM_AIM_BINS)
-
-        return {
-            "move": move_idx,
-            "aim_angle": np.array([aim_angle], dtype=np.float32),
-            "fire": int(fire),
-            "plant_bomb": int(plant_bomb),
-        }
+        return decode_multi_discrete_action(action, self._env._last_obs_raw)
 
     def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[NDArray[np.float32], Dict[str, Any]]:  # pyright: ignore[reportIncompatibleMethodOverride]
         return self._env.reset(seed=seed, options=options)

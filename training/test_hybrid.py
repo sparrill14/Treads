@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from train_hybrid import HybridTrainer
 
-trainer = HybridTrainer(levels=[1, 2, 3, 4], n_steps=2048, max_episode_steps=720)
+trainer = HybridTrainer(levels=[1, 2, 3, 4], n_steps=4096, max_episode_steps=720)
 print("Trainer created. Testing pipeline with curriculum [1,2,3,4]...")
 
 t0 = time.perf_counter()
@@ -42,13 +42,13 @@ t3 = time.perf_counter()
 print(f"Buffer populated in {t3-t2:.3f}s")
 
 cast(Any, trainer.model)._current_progress_remaining = 1.0
-cast(Any, trainer.model).num_timesteps = 2048
+cast(Any, trainer.model).num_timesteps = 4096
 cast(Any, trainer.model).train()
 t4 = time.perf_counter()
 print(f"PPO train in {t4-t3:.3f}s")
 
-rollout_sps = 2048 / (t2 - t1)
-total_sps = 2048 / (t4 - t0)
+rollout_sps = 4096 / (t2 - t1)
+total_sps = 4096 / (t4 - t0)
 print(f"\nRollout throughput: {rollout_sps:.0f} steps/s")
 print(f"Total throughput: {total_sps:.0f} steps/s")
 

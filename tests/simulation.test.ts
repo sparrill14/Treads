@@ -14,6 +14,11 @@ const TEST_LEVEL = LEVEL_CONFIGS[8];
 const TEST_TICKS = 300;
 const TEST_SEED = 20260329;
 
+function defined<T>(value: T | undefined, message: string): T {
+	assert.ok(value, message);
+	return value;
+}
+
 function createRun() {
 	return runHeadlessMatch({
 		levelConfig: TEST_LEVEL,
@@ -56,10 +61,10 @@ export function runSimulationTests(): void {
 	assert.deepEqual(firstRun.replay, secondRun.replay);
 	assert.deepEqual(firstRun.dataset, secondRun.dataset);
 
-	assert.ok(firstRun.replay);
-	const replayedSimulation = runReplay(firstRun.replay, firstRun.replay.ticks.length);
+	const replay = defined(firstRun.replay, 'Expected recorded replay');
+	const replayedSimulation = runReplay(replay, replay.ticks.length);
 	assert.equal(serializeGameState(replayedSimulation.getStateSnapshot()), serializeGameState(firstRun.finalState));
-	const dataset = exportDatasetFromReplay(firstRun.replay);
+	const dataset = exportDatasetFromReplay(replay);
 	assert.ok(dataset.length > 0);
 	assert.equal(dataset.length, firstRun.dataset?.length ?? 0);
 	assert.deepEqual(dataset[0]?.action, firstRun.dataset?.[0]?.action);
@@ -70,8 +75,7 @@ export function runSimulationTests(): void {
 		enemies: [{ type: 'stationary', x: 200, y: 250, ammo: { type: 'basic', count: 1 } }],
 	};
 	const hpState = createInitialGameState(hpLevel, 1);
-	const enemy = hpState.tanks.find((tank) => tank.id === 'enemy-0');
-	assert.ok(enemy);
+	const enemy = defined(hpState.tanks.find((tank) => tank.id === 'enemy-0'), 'Expected enemy tank');
 	hpState.projectiles.push(createProjectileState('p1', enemy.x + 5, enemy.y + 5));
 	hpState.projectiles.push(createProjectileState('p2', enemy.x + enemy.size - 5, enemy.y + enemy.size - 5));
 	const hpSim = new Simulation(
@@ -79,8 +83,10 @@ export function runSimulationTests(): void {
 		createMatchBootstrap(hpLevel, 1, { playerController: new PassiveTankController() }).controllers
 	);
 	hpSim.step();
-	const hpEnemyAfter = hpSim.getStateSnapshot().tanks.find((tank) => tank.id === 'enemy-0');
-	assert.ok(hpEnemyAfter);
+	const hpEnemyAfter = defined(
+		hpSim.getStateSnapshot().tanks.find((tank) => tank.id === 'enemy-0'),
+		'Expected enemy after projectile hit'
+	);
 	assert.equal(hpEnemyAfter.health, 2);
 	assert.equal(hpEnemyAfter.invulnerabilityTicksRemaining, 8);
 
@@ -106,8 +112,10 @@ export function runSimulationTests(): void {
 		createMatchBootstrap(bombLevel, 2, { playerController: new PassiveTankController() }).controllers
 	);
 	bombSim.step();
-	const bombEnemyAfter = bombSim.getStateSnapshot().tanks.find((tank) => tank.id === 'enemy-0');
-	assert.ok(bombEnemyAfter);
+	const bombEnemyAfter = defined(
+		bombSim.getStateSnapshot().tanks.find((tank) => tank.id === 'enemy-0'),
+		'Expected enemy after bomb hit'
+	);
 	assert.equal(bombEnemyAfter.health, 1);
 
 	const noBounceLevel: LevelConfig = {
@@ -149,7 +157,9 @@ export function runSimulationTests(): void {
 	});
 	const fastTurretSim = new Simulation(fastBootstrap.initialState, fastBootstrap.controllers);
 	fastTurretSim.step();
-	const playerAfterTurn = fastTurretSim.getStateSnapshot().tanks.find((tank) => tank.id === 'player-0');
-	assert.ok(playerAfterTurn);
+	const playerAfterTurn = defined(
+		fastTurretSim.getStateSnapshot().tanks.find((tank) => tank.id === 'player-0'),
+		'Expected player after turret turn'
+	);
 	assert.ok(Math.abs(playerAfterTurn.aimAngle - 0.6) < 1e-6);
 }

@@ -18,8 +18,10 @@ import csv
 import json
 import time
 import socket
+import signal
 import subprocess
 import threading
+import traceback
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, TextIO, Tuple, cast
 import grpc
@@ -36,6 +38,12 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.logger import configure
 from runtime_codec import decode_multi_discrete_action
 from treads_env import OBS_SIZE, TreadsEnv
+from model_contract import (
+    ACTION_HEAD_SIZES,
+    MODEL_CONTRACT,
+    assert_contract_compatible,
+    write_contract_for_model,
+)
 
 ensure_pickle_compat()
 
@@ -102,7 +110,11 @@ def _ensure_proto_stubs() -> Tuple[Any, Any]:
 
     pb2_path = os.path.join(GENERATED_DIR, "treads_pb2.py")
     pb2_grpc_path = os.path.join(GENERATED_DIR, "treads_pb2_grpc.py")
-    if not (os.path.exists(pb2_path) and os.path.exists(pb2_grpc_path)):
+    proto_mtime = os.path.getmtime(PROTO_PATH)
+    stubs_stale = not (os.path.exists(pb2_path) and os.path.exists(pb2_grpc_path)) or any(
+        os.path.getmtime(path) < proto_mtime for path in (pb2_path, pb2_grpc_path) if os.path.exists(path)
+    )
+    if stubs_stale:
         result = subprocess.run(
             [
                 sys.executable,
@@ -189,14 +201,12 @@ class HybridTrainer:
         checkpoint_episode_interval: int = 500,
         replay_episode_interval: int = 250,
         eval_interval_episodes: int = 500,
-        eval_episodes: int = 24,
+        eval_episodes: int = 12,
         eval_levels: Optional[List[int]] = None,
         eval_seed_start: int = 25000,
         seed: int = 42,
         num_workers: int = 4,
-        stability_mode: bool = True,
-        phase_pass_evals_required: int = 5,
-        phase_fail_evals_before_rollback: int = 3,
+        phase_pass_evals_required: int = 2,
     ) -> None:
         self._explicit_levels = levels is not None
         self.curriculum: List[Dict[str, Any]] = curriculum or DEFAULT_CURRICULUM
@@ -230,30 +240,23 @@ class HybridTrainer:
         self.eval_episodes = max(1, eval_episodes)
         self.eval_levels = eval_levels or [1, 2, 3, 4, 5, 6, 7, 8, 9]
         self.eval_seed_start = eval_seed_start
+        self.evaluation_round = 0
         self.procedural_levels = not self._explicit_levels
         self.curriculum_difficulty_band = 0.0 if not self._explicit_levels else 0.5
-        self.stability_mode = bool(stability_mode)
         self.phase_pass_evals_required = max(1, int(phase_pass_evals_required))
-        self.phase_fail_evals_before_rollback = max(1, int(phase_fail_evals_before_rollback))
         self.phase_eval_pass_streak = 0
-        self.phase_eval_fail_streak = 0
         self.last_phase_eval_win_rate = 0.0
+        self.last_eval_lower_bound = 0.0
+        self.last_eval_details: Dict[int, Dict[str, float]] = {}
+        self.last_global_eval_lower_bound = 0.0
+        self.last_global_eval_details: Dict[int, Dict[str, float]] = {}
+        self.last_phase_eval_lower_bound = 0.0
+        self.last_phase_eval_details: Dict[int, Dict[str, float]] = {}
         self.stable_checkpoints: Dict[int, str] = {}
         self.peak_phase_index: int = 0
-        self.last_rollback_episode: int = 0
         self.ret_rms = RunningMeanStd()
-        if load_model_path:
-            rms_path = os.path.join(os.path.dirname(load_model_path), "ret_rms_state.json")
-            if os.path.exists(rms_path):
-                try:
-                    with open(rms_path, "r") as f:
-                        self.ret_rms = RunningMeanStd.from_dict(json.load(f))
-                    print(f"Loaded reward normalizer state from: {rms_path} (var={self.ret_rms.var:.4f}, count={self.ret_rms.count:.0f})")
-                except Exception as exc:
-                    print(f"WARNING: failed to load reward normalizer state ({exc}), starting fresh")
-        self._ent_coef_boost: float = 0.0
-        self._stale_eval_count: int = 0
-        self._last_phase_eval_value: Optional[float] = None
+        self.discounted_returns: Dict[int, float] = {}
+        self.scenario_competence: Dict[int, Dict[str, float]] = {}
 
         self.output_dir = output_dir or os.path.join(os.path.dirname(__file__), "output")
         os.makedirs(self.output_dir, exist_ok=True)
@@ -279,8 +282,7 @@ class HybridTrainer:
             def __init__(self) -> None:
                 super().__init__()
                 self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(OBS_SIZE,), dtype=np.float32)
-                # MultiDiscrete([move(9), aim_bin(16), fire(2), bomb(2)])
-                self.action_space = spaces.MultiDiscrete([9, 16, 2, 2])
+                self.action_space = spaces.MultiDiscrete(ACTION_HEAD_SIZES)
 
             def reset(
                 self,
@@ -301,6 +303,7 @@ class HybridTrainer:
         lr_schedule = linear_schedule_between(learning_rate, 0.0)
         if load_model_path and os.path.exists(load_model_path):
             print(f"Loading PPO model from: {load_model_path}")
+            assert_contract_compatible(load_model_path)
             self.model = cast(Any, PPO.load(  # pyright: ignore[reportUnknownMemberType]
                 load_model_path,
                 env=dummy_env,
@@ -317,8 +320,8 @@ class HybridTrainer:
                 max_grad_norm=max_grad_norm,
                 ent_coef=ent_coef,
                 target_kl=target_kl,
-                policy_kwargs=dict(optimizer_kwargs=dict(eps=1e-5)),
             ))
+            assert_contract_compatible(load_model_path, self.model.action_space)
             print(
                 "  Resume settings: "
                 f"n_steps={cast(int, self.model.n_steps)} "
@@ -349,6 +352,13 @@ class HybridTrainer:
                 policy_kwargs=dict(net_arch=[512, 256], optimizer_kwargs=dict(eps=1e-5)),
                 seed=seed,
             )
+            # The semantic zero-residual aim action is useful immediately and
+            # still leaves broad categorical exploration available.
+            import torch
+            with torch.no_grad():
+                aim_offset = ACTION_HEAD_SIZES[0]
+                neutral_bin = int(MODEL_CONTRACT["action"]["neutralAimBin"])
+                cast(Any, self.model).policy.action_net.bias[aim_offset + neutral_bin] = 2.0
         if cast(int, self.model.n_steps) != self.n_steps or cast(int, self.model.rollout_buffer.buffer_size) != self.n_steps:
             raise RuntimeError(
                 "Model rollout settings do not match trainer settings: "
@@ -361,10 +371,6 @@ class HybridTrainer:
         # Set up SB3 logger (required for model.train())
         self.model.set_logger(configure(self.output_dir, ["stdout"]))
 
-        # Start rollout workers
-        self.workers: List[Dict[str, Any]] = []
-        self._start_workers()
-
         # Logging state
         self.total_timesteps = 0
         self.total_episodes = 0
@@ -376,78 +382,234 @@ class HybridTrainer:
         self.best_win_rate = 0.0
         self.best_train_win_rate = 0.0
         self.best_eval_win_rate = 0.0
+        self.best_eval_lower_bound = 0.0
         self.start_time = time.time()
+        if self.load_model_path:
+            self._restore_trainer_state(self.load_model_path)
+        if not self._explicit_levels:
+            self.levels = self._build_mixed_levels()
+        self.workers: List[Dict[str, Any]] = []
+        self._start_workers()
         self._write_run_manifest(status="initializing")
-        with open(self.metrics_history_path, "w", encoding="utf-8"):
-            pass
+        if not self.load_model_path:
+            with open(self.metrics_history_path, "w", encoding="utf-8"):
+                pass
 
     def _evaluate_policy(self) -> float:
-        """Deterministic eval on fixed levels/seeds for stable model selection."""
-        return self._evaluate_levels(self.eval_levels, self.eval_episodes, self.eval_seed_start)
+        """Deterministic actions on held-out randomized level variants."""
+        seed_start = self.eval_seed_start + self.evaluation_round * 100_000
+        self.evaluation_round += 1
+        win_rate = self._evaluate_levels(self.eval_levels, self.eval_episodes, seed_start)
+        self.last_global_eval_lower_bound = self.last_eval_lower_bound
+        self.last_global_eval_details = dict(self.last_eval_details)
+        return win_rate
 
     def _evaluate_levels(self, levels: List[int], episodes_per_level: int, seed_start: int) -> float:
-        """Deterministic eval on an explicit level set."""
+        """Evaluate deterministic actions on independent held-out variants."""
         wins = 0
         episodes = 0
         seed = seed_start
+        details: Dict[int, Dict[str, float]] = {}
 
         for level in levels:
-            for _ in range(episodes_per_level):
-                env = TreadsEnv(level=level, seed_start=seed, max_episode_steps=self.max_episode_steps)
-                try:
-                    obs, _ = env.reset()
-                    done = False
-                    info: Dict[str, Any] = {}
-                    while not done:
-                        action, _ = cast(Any, self.model).predict(obs, deterministic=True)
-                        obs_raw = cast(Optional[Dict[str, Any]], getattr(env, "_last_obs_raw", None))
-                        decoded = decode_multi_discrete_action(action, obs_raw)
-                        obs, _reward, terminated, truncated, info = env.step(decoded)
-                        done = terminated or truncated
-                    result = cast(Dict[str, Any], info.get("result", {}))
-                    wins += int(bool(result.get("win", False)))
-                    episodes += 1
-                finally:
-                    env.close()
-                    seed += 1
+            level_wins = 0
+            env: Optional[TreadsEnv] = None
 
+            def create_env(episode_seed: int) -> TreadsEnv:
+                return TreadsEnv(
+                    level=level,
+                    seed_start=episode_seed,
+                    max_episode_steps=self.max_episode_steps,
+                    spawn_jitter=True,
+                    procedural_levels=True,
+                    difficulty_band=max(0.15, self.curriculum_difficulty_band),
+                    player_max_ammo=self._get_player_max_ammo(),
+                    player_max_bombs=self._get_player_max_bombs(),
+                )
+
+            try:
+                for _ in range(episodes_per_level):
+                    result: Dict[str, Any] = {}
+                    for attempt in range(3):
+                        if env is None:
+                            env = create_env(seed)
+                        try:
+                            obs, _ = env.reset(seed=seed)
+                            done = False
+                            info: Dict[str, Any] = {}
+                            while not done:
+                                action, _ = cast(Any, self.model).predict(obs, deterministic=True)
+                                obs_raw = cast(Optional[Dict[str, Any]], getattr(env, "_last_obs_raw", None))
+                                decoded = decode_multi_discrete_action(action, obs_raw)
+                                obs, _reward, terminated, truncated, info = env.step(decoded)
+                                done = terminated or truncated
+                            result = cast(Dict[str, Any], info.get("result", {}))
+                            break
+                        except Exception as exc:
+                            env.close()
+                            env = None
+                            if attempt == 2:
+                                raise RuntimeError(
+                                    f"Evaluation failed after 3 attempts for level={level}, seed={seed}"
+                                ) from exc
+                            print(
+                                f"  WARNING: retrying eval level={level} seed={seed} "
+                                f"after attempt {attempt + 1}: {exc}"
+                            )
+                    outcome = int(bool(result.get("win", False)))
+                    wins += outcome
+                    level_wins += outcome
+                    episodes += 1
+                    seed += 1
+            finally:
+                if env is not None:
+                    env.close()
+            details[level] = {
+                "wins": float(level_wins),
+                "episodes": float(episodes_per_level),
+                "win_rate": float(level_wins / max(episodes_per_level, 1)),
+                "wilson_lower": self._wilson_lower_bound(level_wins, episodes_per_level),
+            }
+
+        self.last_eval_lower_bound = self._wilson_lower_bound(wins, episodes)
+        self.last_eval_details = details
         return float(wins / max(episodes, 1))
+
+    @staticmethod
+    def _wilson_lower_bound(wins: int, episodes: int, z: float = 1.96) -> float:
+        if episodes <= 0:
+            return 0.0
+        rate = wins / episodes
+        denominator = 1.0 + z * z / episodes
+        center = rate + z * z / (2.0 * episodes)
+        margin = z * np.sqrt((rate * (1.0 - rate) + z * z / (4.0 * episodes)) / episodes)
+        return float(max(0.0, (center - margin) / denominator))
 
     def _save_ret_rms(self) -> None:
         """Persist running-mean-std reward normalizer state next to the model."""
         try:
-            with open(self._ret_rms_path, "w") as f:
-                json.dump(self.ret_rms.to_dict(), f)
+            self._json_dump(self._ret_rms_path, self.ret_rms.to_dict())
         except Exception as exc:
             print(f"  WARNING: failed to persist ret_rms state to {self._ret_rms_path}: {exc}")
 
+    @staticmethod
+    def _trainer_state_path(model_path: str) -> str:
+        root, extension = os.path.splitext(model_path)
+        if extension.lower() != ".zip":
+            root = model_path
+        return root + ".trainer.json"
+
+    def _trainer_state_payload(self) -> Dict[str, Any]:
+        return {
+            "schemaVersion": 3,
+            "modelContract": MODEL_CONTRACT,
+            "totalTimesteps": self.total_timesteps,
+            "totalEpisodes": self.total_episodes,
+            "seedCounter": self.seed_counter,
+            "currentPhaseIndex": self.current_phase_index,
+            "peakPhaseIndex": self.peak_phase_index,
+            "phaseStartEpisode": self.phase_start_episode,
+            "phaseEpisodeWins": self.phase_episode_wins,
+            "phaseEpisodeRewards": self.phase_episode_rewards,
+            "phaseEvalPassStreak": self.phase_eval_pass_streak,
+            "lastPhaseEvalWinRate": self.last_phase_eval_win_rate,
+            "lastGlobalEvalLowerBound": self.last_global_eval_lower_bound,
+            "lastGlobalEvalDetails": self.last_global_eval_details,
+            "lastPhaseEvalLowerBound": self.last_phase_eval_lower_bound,
+            "lastPhaseEvalDetails": self.last_phase_eval_details,
+            "curriculumDifficultyBand": self.curriculum_difficulty_band,
+            "scenarioCompetence": self.scenario_competence,
+            "evaluationRound": self.evaluation_round,
+            "bestWinRate": self.best_win_rate,
+            "bestTrainWinRate": self.best_train_win_rate,
+            "bestEvalWinRate": self.best_eval_win_rate,
+            "bestEvalLowerBound": self.best_eval_lower_bound,
+            "returnNormalizer": self.ret_rms.to_dict(),
+            "discountedReturnsByWorker": self.discounted_returns,
+            "stableCheckpoints": self.stable_checkpoints,
+        }
+
+    def _save_model_checkpoint(self, model_base_path: str) -> str:
+        model_path = model_base_path if model_base_path.endswith(".zip") else model_base_path + ".zip"
+        temp_model_path = f"{model_path}.{os.getpid()}.{threading.get_ident()}.tmp.zip"
+        try:
+            cast(Any, self.model).save(temp_model_path)
+            os.replace(temp_model_path, model_path)
+        finally:
+            if os.path.exists(temp_model_path):
+                os.remove(temp_model_path)
+        write_contract_for_model(model_path)
+        self._json_dump(self._trainer_state_path(model_path), self._trainer_state_payload())
+        self._save_ret_rms()
+        return model_path
+
+    def _restore_trainer_state(self, model_path: str) -> None:
+        state_path = self._trainer_state_path(model_path)
+        if not os.path.isfile(state_path):
+            raise ValueError(
+                f"Checkpoint is missing trainer state: {state_path}. "
+                "A model-only load would reset curriculum and schedules, so resume is refused."
+            )
+        with open(state_path, "r", encoding="utf-8") as handle:
+            state = cast(Dict[str, Any], json.load(handle))
+        if int(state.get("schemaVersion", 0)) != 3:
+            raise ValueError(f"Unsupported trainer state schema in {state_path}.")
+
+        self.total_timesteps = int(state.get("totalTimesteps", 0))
+        self.total_episodes = int(state.get("totalEpisodes", 0))
+        self.seed_counter = int(state.get("seedCounter", self.seed))
+        self.current_phase_index = int(state.get("currentPhaseIndex", 0))
+        if not 0 <= self.current_phase_index < len(self.curriculum):
+            raise ValueError(f"Invalid curriculum phase in {state_path}: {self.current_phase_index}")
+        self.peak_phase_index = int(state.get("peakPhaseIndex", self.current_phase_index))
+        self.phase_start_episode = int(state.get("phaseStartEpisode", self.total_episodes))
+        self.phase_episode_wins = [int(value) for value in state.get("phaseEpisodeWins", [])]
+        self.phase_episode_rewards = [float(value) for value in state.get("phaseEpisodeRewards", [])]
+        self.phase_eval_pass_streak = int(state.get("phaseEvalPassStreak", 0))
+        self.last_phase_eval_win_rate = float(state.get("lastPhaseEvalWinRate", 0.0))
+        self.last_global_eval_lower_bound = float(state.get("lastGlobalEvalLowerBound", 0.0))
+        self.last_global_eval_details = {
+            int(key): {name: float(value) for name, value in cast(Dict[str, Any], details).items()}
+            for key, details in cast(Dict[str, Any], state.get("lastGlobalEvalDetails", {})).items()
+        }
+        self.last_phase_eval_lower_bound = float(state.get("lastPhaseEvalLowerBound", 0.0))
+        self.last_phase_eval_details = {
+            int(key): {name: float(value) for name, value in cast(Dict[str, Any], details).items()}
+            for key, details in cast(Dict[str, Any], state.get("lastPhaseEvalDetails", {})).items()
+        }
+        self.curriculum_difficulty_band = float(state.get("curriculumDifficultyBand", 0.0))
+        self.scenario_competence = {
+            int(key): {name: float(value) for name, value in cast(Dict[str, Any], stats).items()}
+            for key, stats in cast(Dict[str, Any], state.get("scenarioCompetence", {})).items()
+        }
+        self.evaluation_round = int(state.get("evaluationRound", 0))
+        self.best_win_rate = float(state.get("bestWinRate", 0.0))
+        self.best_train_win_rate = float(state.get("bestTrainWinRate", 0.0))
+        self.best_eval_win_rate = float(state.get("bestEvalWinRate", 0.0))
+        self.best_eval_lower_bound = float(state.get("bestEvalLowerBound", 0.0))
+        self.ret_rms = RunningMeanStd.from_dict(cast(Dict[str, float], state.get("returnNormalizer", {})))
+        self.discounted_returns = {
+            int(key): float(value)
+            for key, value in cast(Dict[str, Any], state.get("discountedReturnsByWorker", {})).items()
+        }
+        self.stable_checkpoints = {
+            int(key): str(value)
+            for key, value in cast(Dict[str, Any], state.get("stableCheckpoints", {})).items()
+        }
+        cast(Any, self.model).num_timesteps = self.total_timesteps
+        print(
+            f"Restored trainer state: episodes={self.total_episodes}, timesteps={self.total_timesteps}, "
+            f"phase={self.current_phase_index + 1}, ret_var={self.ret_rms.var:.4f}"
+        )
+
     def _save_stable_checkpoint(self, phase_index: int, eval_win_rate: float) -> None:
         path = os.path.join(self.output_dir, f"treads_ppo_phase{phase_index}_stable")
-        cast(Any, self.model).save(path)
-        self._save_ret_rms()
         self.stable_checkpoints[phase_index] = path + ".zip"
+        self._save_model_checkpoint(path)
         print(
             f"  Stable checkpoint saved for phase {phase_index + 1} "
             f"(eval wr={eval_win_rate:.3f}): {self.stable_checkpoints[phase_index]}"
         )
-
-    def _restore_stable_checkpoint(self) -> bool:
-        # Find the best available checkpoint at or below the current phase
-        ckpt_path: Optional[str] = None
-        for idx in range(self.current_phase_index, -1, -1):
-            candidate = self.stable_checkpoints.get(idx)
-            if candidate and os.path.exists(candidate):
-                ckpt_path = candidate
-                break
-        if not ckpt_path:
-            return False
-        try:
-            cast(Any, self.model).set_parameters(ckpt_path, exact_match=False, device="cpu")
-            print(f"  Restored stable checkpoint: {ckpt_path}")
-            return True
-        except Exception as exc:
-            print(f"  WARNING: failed to restore stable checkpoint ({exc})")
-            return False
 
     def _advance_curriculum_from_eval(self) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
         if self._explicit_levels or self.current_phase_index >= len(self.curriculum) - 1:
@@ -461,49 +623,20 @@ class HybridTrainer:
         self.phase_episode_rewards = []
         self.phase_start_episode = self.total_episodes
         self.phase_eval_pass_streak = 0
-        self.phase_eval_fail_streak = 0
         self.last_phase_eval_win_rate = 0.0
-        self._stale_eval_count = 0
-        self._last_phase_eval_value = None
-        return previous, self._get_curriculum_phase()
-
-    def _rollback_curriculum_from_eval(self) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
-        if self._explicit_levels or self.current_phase_index <= 0:
-            return None
-        # Enforce depth limit with relaxation after sustained failure
-        rollback_floor = self._rollback_floor()
-        if self.current_phase_index - 1 < rollback_floor:
-            print(f"  Rollback blocked: would go below floor phase {rollback_floor + 1} (peak={self.peak_phase_index + 1})")
-            return None
-        # Enforce cooldown: require 4000+ episodes between rollbacks
-        if self.total_episodes - self.last_rollback_episode < 4000:
-            print(f"  Rollback blocked: cooldown ({self.total_episodes - self.last_rollback_episode}/4000 episodes)")
-            return None
-        previous = self._get_curriculum_phase()
-        self.current_phase_index -= 1
-        self.rehearsal_ids = self._build_rehearsal_ids()
-        self.levels = self._build_mixed_levels()
-        # Reset phase history (no biased seeding); _phase_is_stable() requires
-        # min_phase_episodes of real data before allowing the next promotion.
-        self.phase_episode_wins = []
-        self.phase_episode_rewards = []
-        self.phase_start_episode = self.total_episodes
-        self.phase_eval_pass_streak = 0
-        self.phase_eval_fail_streak = 0
-        self.last_phase_eval_win_rate = 0.0
-        self._stale_eval_count = 0
-        self._last_phase_eval_value = None
-        self.last_rollback_episode = self.total_episodes
-        self._ent_coef_boost = self.ent_coef_start * 0.5
         return previous, self._get_curriculum_phase()
 
     def _now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat()
 
     def _json_dump(self, path: str, payload: Dict[str, Any]) -> None:
-        with open(path, "w", encoding="utf-8") as handle:
+        temp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        with open(temp_path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
             handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
 
     def _count_replays(self) -> int:
         if not os.path.isdir(self.replay_dir):
@@ -517,6 +650,7 @@ class HybridTrainer:
             "runId": os.path.basename(os.path.abspath(self.output_dir)),
             "outputDir": os.path.abspath(self.output_dir),
             "status": status,
+            "processId": os.getpid(),
             "startedAt": self.run_started_at.isoformat(),
             "finishedAt": self.run_finished_at.isoformat() if self.run_finished_at is not None else None,
             "updatedAt": self._now_iso(),
@@ -532,10 +666,16 @@ class HybridTrainer:
                 "enabled": not self._explicit_levels,
                 "currentPhaseIndex": self.current_phase_index if not self._explicit_levels else None,
                 "currentPhaseName": self._get_curriculum_phase()["name"] if not self._explicit_levels else "Explicit levels",
-                "activeScenarios": self.levels,
+                "activeScenarios": sorted(set(self.levels)),
+                "samplingWeights": {
+                    str(scenario_id): self.levels.count(scenario_id)
+                    for scenario_id in sorted(set(self.levels))
+                },
                 "rehearsalScenarios": self.rehearsal_ids,
                 "difficultyBand": self.curriculum_difficulty_band,
                 "playerMaxAmmo": self._get_player_max_ammo(),
+                "playerMaxBombs": self._get_player_max_bombs(),
+                "scenarioCompetence": self.scenario_competence,
             },
             "hyperparameters": {
                 "nSteps": self.n_steps,
@@ -569,6 +709,12 @@ class HybridTrainer:
                 "replayCount": self._count_replays(),
                 "onnxAvailable": os.path.exists(self.current_onnx_path),
                 "bestEvalWinRate": self.best_eval_win_rate,
+            },
+            "evaluation": {
+                "lastGlobalWilsonLower": self.last_global_eval_lower_bound,
+                "lastGlobalDetails": self.last_global_eval_details,
+                "lastPhaseWilsonLower": self.last_phase_eval_lower_bound,
+                "lastPhaseDetails": self.last_phase_eval_details,
             },
             "error": error or None,
         }
@@ -605,8 +751,11 @@ class HybridTrainer:
             "difficultyBand": self.curriculum_difficulty_band,
             "phaseRecentWinrate500": self._phase_recent_win_rate() if not self._explicit_levels else None,
             "phaseEvalPassStreak": self.phase_eval_pass_streak if not self._explicit_levels else None,
-            "phaseEvalFailStreak": self.phase_eval_fail_streak if not self._explicit_levels else None,
             "lastPhaseEvalWinRate": self.last_phase_eval_win_rate if not self._explicit_levels else None,
+            "lastGlobalEvalWilsonLower": self.last_global_eval_lower_bound,
+            "lastGlobalEvalDetails": self.last_global_eval_details,
+            "lastPhaseEvalWilsonLower": self.last_phase_eval_lower_bound,
+            "lastPhaseEvalDetails": self.last_phase_eval_details,
             "avgReward50": avg_reward,
             "avgWinrate50": avg_winrate,
             "avgTick50": avg_tick,
@@ -660,13 +809,26 @@ class HybridTrainer:
     def _start_worker_handle() -> Dict[str, Any]:
         port = _find_free_port()
         proc = subprocess.Popen(
-            ["node", ROLLOUT_WORKER_PATH, "--port", str(port)],
+            [
+                "node",
+                ROLLOUT_WORKER_PATH,
+                "--port",
+                str(port),
+                "--parent-pid",
+                str(os.getpid()),
+            ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             text=True,
         )
-        channel = grpc.insecure_channel(f"127.0.0.1:{port}")
+        channel = grpc.insecure_channel(
+            f"127.0.0.1:{port}",
+            options=[
+                ("grpc.max_receive_message_length", 64 * 1024 * 1024),
+                ("grpc.max_send_message_length", 64 * 1024 * 1024),
+            ],
+        )
         stub = TREADS_PB2_GRPC.RolloutWorkerServiceStub(channel)
         deadline = time.time() + 10.0
         last_error: Optional[Exception] = None
@@ -741,6 +903,14 @@ class HybridTrainer:
     def _get_player_max_ammo(self) -> int:
         return int(self._get_curriculum_phase().get("player_max_ammo", 5))
 
+    def _get_player_max_bombs(self) -> int:
+        if self._explicit_levels:
+            return 0
+        return int(self._get_curriculum_phase().get(
+            "player_max_bombs",
+            0 if self.current_phase_index < 12 else 1,
+        ))
+
     def _get_curriculum_levels(self) -> List[int]:
         return list(self._get_curriculum_phase()["scenario_ids"])
 
@@ -775,36 +945,40 @@ class HybridTrainer:
 
         return foundational
 
-    def _target_current_share(self) -> float:
-        """Adaptive current-phase share with stronger rehearsal during collapse."""
-        if self._explicit_levels:
-            return 1.0
-        anneal_episodes = 2000.0
-        progress = min(1.0, max(0.0, self._phase_episode_count() / anneal_episodes))
-        base = 0.55 + 0.17 * progress
-        phase_wr = self._phase_recent_win_rate()
-        # When current phase is unstable, increase rehearsal to prevent forgetting.
-        if phase_wr < 0.12:
-            return min(base, 0.45)
-        if phase_wr < 0.20:
-            return min(base, 0.55)
-        if phase_wr < 0.30:
-            return min(base, 0.65)
-        return base
-
     def _build_mixed_levels(self) -> List[int]:
-        """Build level list with adaptive rehearsal mix (starts ~60/40, anneals to ~80/20)."""
-        current = self._get_curriculum_levels()
-        if not self.rehearsal_ids:
-            return current
-        rehearsal_unique = list(set(self.rehearsal_ids))
-        n_current = len(current)
-        n_rehearsal = len(rehearsal_unique)
-        target_current = self._target_current_share()
-        target_rehearsal = max(1e-6, 1.0 - target_current)
-        # Scale current repetitions to approximate target mix while keeping scenario diversity.
-        current_reps = max(1, round((target_current / target_rehearsal) * (n_rehearsal / max(n_current, 1))))
-        return current * current_reps + rehearsal_unique
+        """Build a competence-weighted pool with permanent rehearsal.
+
+        Every previously introduced scenario remains eligible. Under-mastered
+        scenarios receive more samples, while all nine real levels are present
+        from the first update so the policy never faces a late distribution jump.
+        """
+        if self._explicit_levels:
+            return list(self.levels)
+
+        introduced: List[int] = []
+        for phase in self.curriculum[: self.current_phase_index + 1]:
+            for scenario_id in cast(List[int], phase["scenario_ids"]):
+                if scenario_id not in introduced:
+                    introduced.append(scenario_id)
+
+        weighted: List[int] = []
+        current_ids = set(self._get_curriculum_levels())
+        for scenario_id in introduced:
+            stats = self.scenario_competence.get(scenario_id, {})
+            competence = float(stats.get("ema", 0.0)) if stats.get("episodes", 0.0) >= 20 else 0.0
+            repetitions = 1 + round(6.0 * (1.0 - competence))
+            if scenario_id in current_ids:
+                repetitions += 2
+            weighted.extend([scenario_id] * max(1, repetitions))
+
+        for real_level in range(1, 10):
+            stats = self.scenario_competence.get(real_level, {})
+            episodes = float(stats.get("episodes", 0.0))
+            competence = float(stats.get("ema", 0.0)) if episodes >= 20 else 0.0
+            repetitions = 1 if episodes < 20 else 1 + round(2.0 * (1.0 - competence))
+            weighted.extend([real_level] * repetitions)
+
+        return weighted
 
     def _target_difficulty_band(self) -> float:
         """Map phase progress + competence into a smooth [0,1] difficulty target."""
@@ -860,105 +1034,6 @@ class HybridTrainer:
             return False  # insufficient data to judge stability
         # Disallow large drops in the recent trend.
         return self._phase_reward_trend(window=150) >= -0.35
-
-    def _maybe_advance_curriculum(self) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], float]]:
-        if self._explicit_levels or self.current_phase_index >= len(self.curriculum) - 1:
-            return None
-        current = self._get_curriculum_phase()
-        phase_episodes = self._phase_episode_count()
-        min_phase_episodes = current.get("min_phase_episodes")
-        if min_phase_episodes is None:
-            return None
-        if phase_episodes < int(min_phase_episodes):
-            return None
-
-        win_rate = self._phase_recent_win_rate()
-        required_wr = float(current.get("required_win_rate", 0.40))
-        stable = self._phase_is_stable()
-
-        meets_regular_criteria = win_rate >= required_wr and stable
-        if not meets_regular_criteria:
-            # Forced advance is only allowed much later and only if reward trend is not degrading.
-            force_phase_episodes = current.get("force_phase_episodes")
-            if force_phase_episodes is None or phase_episodes < int(force_phase_episodes):
-                return None
-
-            reward_trend = self._phase_reward_trend(window=200)
-            minimally_competent = win_rate >= (required_wr * 0.95)
-            if reward_trend <= 0.0 or not minimally_competent or not stable:
-                return None
-
-            print(
-                f"  *** FORCED ADVANCE at episode {self.total_episodes} "
-                f"(phase_episodes={phase_episodes}, win rate {win_rate:.3f} < {required_wr:.2f}, "
-                f"reward trend={reward_trend:.3f}) ***"
-            )
-
-        previous = current
-        self.current_phase_index += 1
-        self.peak_phase_index = max(self.peak_phase_index, self.current_phase_index)
-        self.rehearsal_ids = self._build_rehearsal_ids()
-        self.levels = self._build_mixed_levels()
-        self.phase_episode_wins = []
-        self.phase_episode_rewards = []
-        self.phase_start_episode = self.total_episodes
-        self._stale_eval_count = 0
-        self._last_phase_eval_value = None
-        return previous, self._get_curriculum_phase(), win_rate
-
-    def _rollback_floor(self) -> int:
-        """Compute rollback floor. Relaxes after sustained failure (5000+ episodes stuck)."""
-        base_floor = max(0, self.peak_phase_index - 2)
-        stuck_episodes = self._phase_episode_count()
-        if stuck_episodes >= 10000 and self._phase_recent_win_rate() < 0.05:
-            # Deeply stuck — allow going back up to 4 phases below peak
-            return max(0, self.peak_phase_index - 4)
-        if stuck_episodes >= 5000 and self._phase_recent_win_rate() < 0.10:
-            # Moderately stuck — allow going back up to 3 phases below peak
-            return max(0, self.peak_phase_index - 3)
-        return base_floor
-
-    def _maybe_rollback_curriculum(self) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], float]]:
-        """Rollback one phase when sustained collapse is detected in current phase."""
-        if self._explicit_levels or self.current_phase_index <= 0:
-            return None
-
-        phase_episodes = self._phase_episode_count()
-        if phase_episodes < 1200:
-            return None
-
-        win_rate = self._phase_recent_win_rate()
-        reward_trend = self._phase_reward_trend(window=200)
-        if win_rate >= 0.25 or reward_trend > 0.0:
-            return None
-
-        # Enforce depth limit with relaxation after sustained failure
-        rollback_floor = self._rollback_floor()
-        if self.current_phase_index - 1 < rollback_floor:
-            print(f"  Rollback blocked: would go below floor phase {rollback_floor + 1} (peak={self.peak_phase_index + 1})")
-            return None
-        # Enforce cooldown: require 4000+ episodes between rollbacks
-        if self.total_episodes - self.last_rollback_episode < 4000:
-            print(f"  Rollback blocked: cooldown ({self.total_episodes - self.last_rollback_episode}/4000 episodes)")
-            return None
-
-        previous = self._get_curriculum_phase()
-        self.current_phase_index -= 1
-        self.rehearsal_ids = self._build_rehearsal_ids()
-        self.levels = self._build_mixed_levels()
-        # Reset phase history (no biased seeding); _phase_is_stable() requires
-        # min_phase_episodes of real data before allowing the next promotion.
-        self.phase_episode_wins = []
-        self.phase_episode_rewards = []
-        self.phase_start_episode = self.total_episodes
-        self.last_rollback_episode = self.total_episodes
-        self._ent_coef_boost = self.ent_coef_start * 0.5
-        self.phase_eval_pass_streak = 0
-        self.phase_eval_fail_streak = 0
-        self.last_phase_eval_win_rate = 0.0
-        self._stale_eval_count = 0
-        self._last_phase_eval_value = None
-        return previous, self._get_curriculum_phase(), win_rate
 
     @staticmethod
     def _send_msg_to(worker: Dict[str, Any], msg: Dict[str, Any]) -> None:
@@ -1016,6 +1091,7 @@ class HybridTrainer:
                     procedural_levels=bool(req.get("proceduralLevels", True)),
                     difficulty_band=float(req.get("difficultyBand", 0.0)),
                     player_max_ammo=int(req.get("playerMaxAmmo", 0)),
+                    player_max_bombs=int(req.get("playerMaxBombs", 0)),
                     global_episode_offset=int(req.get("globalEpisodeOffset", 0)),
                     gamma=float(req.get("gamma", 0.99)),
                 ),
@@ -1093,7 +1169,8 @@ class HybridTrainer:
                     "shapingScale": max(0.3, 1.0 - self.current_phase_index * 0.06),
                     "proceduralLevels": self.procedural_levels,
                     "difficultyBand": self.curriculum_difficulty_band,
-                    "playerMaxAmmo": self._get_player_max_ammo(),
+                "playerMaxAmmo": self._get_player_max_ammo(),
+                "playerMaxBombs": self._get_player_max_bombs(),
                     "globalEpisodeOffset": self.total_episodes,
                     "gamma": self.gamma,
                 })
@@ -1216,7 +1293,8 @@ class HybridTrainer:
         try:
             import torch
             buf = self.model.rollout_buffer
-            obs_t = torch.as_tensor(buf.observations[:, 0, :], dtype=torch.float32)
+            buffered_obs = np.asarray(buf.observations, dtype=np.float32)
+            obs_t = torch.as_tensor(buffered_obs.reshape(-1, OBS_SIZE), dtype=torch.float32)
             policy = cast(Any, self.model).policy
             with torch.no_grad():
                 dist = policy.get_distribution(obs_t)
@@ -1230,7 +1308,7 @@ class HybridTrainer:
                     float(d.entropy().mean().item()) for d in inner_list
                 ]
             head_names = ["move", "aim", "fire", "bomb"]
-            head_max_ent = [float(np.log(s)) for s in [9, 16, 2, 2]]
+            head_max_ent = [float(np.log(s)) for s in ACTION_HEAD_SIZES]
             parts = [
                 f"{name}={ent:.3f}/{maxent:.3f}"
                 for name, ent, maxent in zip(head_names, head_entropies, head_max_ent)
@@ -1278,6 +1356,27 @@ class HybridTrainer:
         adv_parts: List[NDArray[np.float32]] = []
         returns_parts: List[NDArray[np.float32]] = []
 
+        # VecNormalize-style statistics track discounted environmental returns,
+        # independently of critic predictions and GAE lambda. Each worker keeps
+        # its own accumulator across rollout chunks.
+        discounted_samples: List[float] = []
+        for worker_index, chunk in enumerate(worker_rollouts):
+            raw_rewards = np.asarray(chunk["rewards"], dtype=np.float32)
+            starts = np.asarray(chunk["episode_starts"], dtype=np.float32)
+            running_return = float(self.discounted_returns.get(worker_index, 0.0))
+            for reward, episode_start in zip(raw_rewards, starts):
+                if episode_start > 0.5:
+                    running_return = 0.0
+                running_return = self.gamma * running_return + float(reward)
+                discounted_samples.append(running_return)
+            if bool(chunk.get("last_done", False)):
+                running_return = 0.0
+            self.discounted_returns[worker_index] = running_return
+
+        if discounted_samples:
+            self.ret_rms.update(np.asarray(discounted_samples, dtype=np.float32))
+        ret_std = float(np.sqrt(self.ret_rms.var + 1e-8))
+
         for chunk in worker_rollouts:
             rewards_arr = np.array(chunk["rewards"], dtype=np.float32)
             starts_arr = np.array(chunk["episode_starts"], dtype=np.float32)
@@ -1290,21 +1389,6 @@ class HybridTrainer:
                 dtype=np.float32,
             )
 
-            # SB3 VecNormalize-style reward normalization: divide rewards by
-            # sqrt(var of discounted returns).  We compute returns once on raw
-            # rewards (no bootstrap) to update the running stats, then re-run
-            # GAE on (normalized rewards + gamma * V_post bootstrap) so the
-            # buffer's advantages/returns are on the same scale the value head
-            # is regressing toward.
-            _, raw_returns = self._compute_chunk_gae(
-                rewards=rewards_arr,
-                episode_starts=starts_arr,
-                values=values_arr,
-                last_value=float(chunk["last_value"]),
-                last_done=bool(chunk["last_done"]),
-            )
-            self.ret_rms.update(raw_returns)
-            ret_std = float(np.sqrt(self.ret_rms.var + 1e-8))
             if ret_std > 1e-6:
                 rewards_arr = rewards_arr / ret_std
             # Add the unnormalized bootstrap AFTER scaling raw rewards. The
@@ -1369,6 +1453,16 @@ class HybridTrainer:
         self.episode_wins.extend(ep_wins)
         self.episode_levels.extend(ep_levels)
         self.episode_reward_breakdowns.extend(ep_breakdowns)
+        for scenario_id, win in zip(ep_levels, ep_wins):
+            sid = int(scenario_id)
+            stats = self.scenario_competence.setdefault(
+                sid,
+                {"episodes": 0.0, "wins": 0.0, "ema": 0.0},
+            )
+            stats["episodes"] += 1.0
+            stats["wins"] += float(win)
+            alpha = 0.05
+            stats["ema"] = (1.0 - alpha) * stats["ema"] + alpha * float(win)
         if not self._explicit_levels:
             self.phase_episode_wins.extend(ep_wins)
             self.phase_episode_rewards.extend([float(r) for r in ep_rewards])
@@ -1434,39 +1528,42 @@ class HybridTrainer:
             return float(avg_reward), float(avg_winrate)
         return 0.0, 0.0
 
-    def train(self, target_episodes: int = 10_000, max_timesteps: int = 20_000_000) -> None:
+    def train(self, target_episodes: int = 100_000, max_timesteps: int = 80_000_000) -> None:
         """Main training loop."""
-        csv_file: TextIO = open(self.training_log_path, "w", newline="")
+        append_log = self.load_model_path is not None and os.path.exists(self.training_log_path)
+        csv_file: TextIO = open(self.training_log_path, "a" if append_log else "w", newline="")
         csv_writer = csv.writer(csv_file)
-        csv_writer.writerow([
-            "iteration", "timesteps", "episodes", "curriculum_phase", "active_scenarios", "phase_recent_winrate_500",
-            "difficulty_band",
-            "avg_reward_50", "avg_winrate_50",
-            "avg_tick_50", "avg_hit_50", "avg_hurt_50", "avg_kill_50", "avg_death_50", "avg_terminal_win_50", "avg_terminal_loss_50", "avg_timeout_50", "avg_approach_50", "avg_dodge_50",
-            "steps_per_sec", "elapsed_sec"
-        ])
+        if not append_log:
+            csv_writer.writerow([
+                "iteration", "timesteps", "episodes", "curriculum_phase", "active_scenarios", "phase_recent_winrate_500",
+                "difficulty_band",
+                "avg_reward_50", "avg_winrate_50",
+                "avg_tick_50", "avg_hit_50", "avg_hurt_50", "avg_kill_50", "avg_death_50", "avg_terminal_win_50", "avg_terminal_loss_50", "avg_timeout_50", "avg_approach_50", "avg_dodge_50",
+                "steps_per_sec", "elapsed_sec"
+            ])
         csv_file.flush()
         self._write_run_manifest(status="running")
 
         iteration = 0
-        next_checkpoint_episode = self.checkpoint_episode_interval
-        next_eval_episode = self.eval_interval_episodes
+        next_checkpoint_episode = (
+            self.total_episodes // self.checkpoint_episode_interval + 1
+        ) * self.checkpoint_episode_interval
+        next_eval_episode = (
+            self.total_episodes // self.eval_interval_episodes + 1
+        ) * self.eval_interval_episodes
         interrupt_reason = ""
+        failure_reason = ""
         try:
             while self.total_episodes < target_episodes and self.total_timesteps < max_timesteps:
                 iteration += 1
 
                 curr_phase_name = self._get_curriculum_phase()["name"] if not self._explicit_levels else "Explicit levels"
 
-                # Update adaptive rehearsal mix continuously within a phase.
-                if self.stability_mode and not self._explicit_levels and self.phase_eval_fail_streak > 0:
-                    # During instability, reduce distribution drift.
-                    self.levels = self._get_curriculum_levels()
-                    self.curriculum_difficulty_band = max(0.0, self.curriculum_difficulty_band - 0.02)
-                else:
-                    if not self._explicit_levels and self.rehearsal_ids:
-                        self.levels = self._build_mixed_levels()
-                    self._update_difficulty_band()
+                # Resample continuously from per-scenario competence. No policy
+                # rollback is used, so learning progress is never discarded.
+                if not self._explicit_levels:
+                    self.levels = self._build_mixed_levels()
+                self._update_difficulty_band()
 
                 # 1. Send current weights to worker
                 t0 = time.perf_counter()
@@ -1489,9 +1586,6 @@ class HybridTrainer:
                 timestep_progress = min(1.0, max(0.0, self.total_timesteps / max(max_timesteps, 1)))
                 cast(Any, self.model)._current_progress_remaining = 1.0 - timestep_progress
                 current_ent_coef = self.ent_coef_final + (self.ent_coef_start - self.ent_coef_final) * (1.0 - timestep_progress)
-                # Apply entropy boost from rollback recovery (decays each iteration)
-                current_ent_coef = min(self.ent_coef_start, current_ent_coef + self._ent_coef_boost)
-                self._ent_coef_boost = max(0.0, self._ent_coef_boost - 0.0005)
                 cast(Any, self.model).ent_coef = float(current_ent_coef)
                 cast(Any, self.model).num_timesteps = self.total_timesteps
 
@@ -1597,39 +1691,10 @@ class HybridTrainer:
                 self._write_iteration_snapshot(snapshot)
                 self._write_run_manifest(status="running")
 
-                if not self.stability_mode:
-                    phase_transition = self._maybe_advance_curriculum()
-                    if phase_transition is not None:
-                        previous_phase, next_phase, trigger_win_rate = phase_transition
-                        recent_breakdowns = self.episode_reward_breakdowns[-50:]
-                        summary_parts: List[str] = []
-                        for key in ["tick", "hit", "hurt", "kill", "death", "terminalWin", "terminalLoss", "timeout", "approach", "dodge"]:
-                            vals = [float(b.get(key, 0.0)) for b in recent_breakdowns]
-                            summary_parts.append(f"{key}={np.mean(vals):.3f}")
-                        print(
-                            f"\n*** Curriculum phase transition at episode {self.total_episodes}: "
-                            f"{previous_phase['name']} -> {next_phase['name']} | trigger win rate={trigger_win_rate:.3f} ***"
-                        )
-                        print("  RewardBreakdown(trigger window): " + " ".join(summary_parts) + "\n")
-
-                # Safety-net: episode-based rollback as fallback in ALL modes
-                # (catches cases where eval dead-zones prevent eval-based rollback)
-                if not self._explicit_levels and self.current_phase_index > 0:
-                    phase_rollback = self._maybe_rollback_curriculum()
-                    if phase_rollback is not None:
-                        previous_phase, rollback_phase, collapse_win_rate = phase_rollback
-                        restored = self._restore_stable_checkpoint()
-                        print(
-                            f"\n*** Safety-net rollback at episode {self.total_episodes}: "
-                            f"{previous_phase['name']} -> {rollback_phase['name']} | "
-                            f"phase_recent_winrate_500={collapse_win_rate:.3f} | restored={restored} ***\n"
-                        )
-
                 # 7. Track best training-window model separately from eval best.
                 if len(self.episode_rewards) >= 20 and avg_winrate > self.best_train_win_rate:
                     self.best_train_win_rate = avg_winrate
-                    cast(Any, self.model).save(self.best_train_model_path)
-                    self._save_ret_rms()
+                    self._save_model_checkpoint(self.best_train_model_path)
                     print(f"  ** New best training-window model: {avg_winrate:.3f} **")
 
                 # 7b. Periodic deterministic eval for robust best checkpoint selection.
@@ -1638,126 +1703,93 @@ class HybridTrainer:
                         eval_win_rate = self._evaluate_policy()
                         print(
                             f"  Eval | Episodes={self.total_episodes} | "
-                            f"WinRate={eval_win_rate:.3f} on levels={self.eval_levels}"
+                            f"WinRate={eval_win_rate:.3f} | Wilson95Lower={self.last_global_eval_lower_bound:.3f} "
+                            f"on levels={self.eval_levels}"
                         )
-                        if eval_win_rate > self.best_eval_win_rate:
+                        print(
+                            "  EvalByLevel | "
+                            + " ".join(
+                                f"L{level}={int(details['wins'])}/{int(details['episodes'])}"
+                                for level, details in sorted(self.last_global_eval_details.items())
+                            )
+                        )
+                        if self.last_global_eval_lower_bound > self.best_eval_lower_bound:
                             self.best_eval_win_rate = eval_win_rate
+                            self.best_eval_lower_bound = self.last_global_eval_lower_bound
                             self.best_win_rate = eval_win_rate
-                            cast(Any, self.model).save(self.best_model_path)
-                            self._save_ret_rms()
+                            self._save_model_checkpoint(self.best_model_path)
                             self._export_policy_onnx(self.best_model_path)
                             print(f"  ** New best eval model! Win rate: {eval_win_rate:.3f} **")
                     except Exception as eval_exc:
                         print(f"  WARNING: _evaluate_policy failed ({eval_exc}) - continuing with phase gate checks.")
 
-                    if self.stability_mode and not self._explicit_levels:
+                    if not self._explicit_levels:
                         phase_levels = self._get_curriculum_levels()
-                        phase_eval_source = "deterministic"
+                        phase_eval_source = "held-out-randomized"
                         try:
                             phase_eval = self._evaluate_levels(
                                 phase_levels,
                                 self.eval_episodes,
-                                self.eval_seed_start + 100000 + self.current_phase_index * 1000,
+                                self.eval_seed_start + 50_000_000 + self.total_episodes * 10,
                             )
+                            phase_lower_bound = self.last_eval_lower_bound
+                            self.last_phase_eval_lower_bound = phase_lower_bound
+                            self.last_phase_eval_details = dict(self.last_eval_details)
                         except Exception as phase_eval_exc:
                             phase_eval_source = "training-window-fallback"
                             phase_eval = self._phase_recent_win_rate()
+                            phase_window = self.phase_episode_wins[-500:]
+                            phase_lower_bound = self._wilson_lower_bound(
+                                int(sum(phase_window)),
+                                len(phase_window),
+                            )
+                            self.last_phase_eval_lower_bound = phase_lower_bound
+                            self.last_phase_eval_details = {}
                             print(
-                                f"  WARNING: phase deterministic eval failed ({phase_eval_exc}) - "
+                                f"  WARNING: phase randomized eval failed ({phase_eval_exc}) - "
                                 f"using phase_recent_winrate_500 fallback={phase_eval:.3f}"
                             )
 
                         self.last_phase_eval_win_rate = phase_eval
                         current = self._get_curriculum_phase()
                         required_wr = float(current.get("required_win_rate", 0.40))
-                        promote_threshold = required_wr if phase_eval_source == "deterministic" else max(required_wr, 0.65)
-                        collapse_threshold = max(0.15, required_wr * 0.75)
-
-                        # Detect stale eval: same value repeated means deterministic
-                        # eval is stuck on fixed seeds, not reflecting real performance.
-                        if self._last_phase_eval_value is not None and abs(phase_eval - self._last_phase_eval_value) < 1e-6:
-                            self._stale_eval_count += 1
-                        else:
-                            self._stale_eval_count = 0
-                        self._last_phase_eval_value = phase_eval
-
-                        # Cross-check: if training WR is near zero but eval says
-                        # otherwise, trust training WR — eval is stale/degenerate.
-                        training_wr = self._phase_recent_win_rate()
-                        stale_and_collapsed = (
-                            self._stale_eval_count >= 4
-                            and training_wr < 0.05
-                            and self._phase_episode_count() >= 3000
-                        )
-
-                        if stale_and_collapsed:
-                            # Override: treat stale eval as failure
-                            self.phase_eval_fail_streak += 1
-                            self.phase_eval_pass_streak = 0
-                            print(
-                                f"  ** Stale eval override: eval={phase_eval:.3f} unchanged {self._stale_eval_count}x "
-                                f"but training_wr={training_wr:.3f} — counting as fail (streak={self.phase_eval_fail_streak}) **"
-                            )
-                        elif phase_eval >= promote_threshold:
+                        if phase_lower_bound >= required_wr:
                             self.phase_eval_pass_streak += 1
-                            self.phase_eval_fail_streak = 0
-                        elif phase_eval <= collapse_threshold:
-                            self.phase_eval_fail_streak += 1
-                            self.phase_eval_pass_streak = 0
                         else:
                             self.phase_eval_pass_streak = 0
-                            self.phase_eval_fail_streak = 0
 
                         print(
                             f"  PhaseEval[{phase_eval_source}] | Phase={current['name']} | WR={phase_eval:.3f} | "
-                            f"required={required_wr:.3f} | pass_streak={self.phase_eval_pass_streak} | "
-                            f"fail_streak={self.phase_eval_fail_streak}"
+                            f"Wilson95Lower={phase_lower_bound:.3f} | required={required_wr:.3f} | "
+                            f"pass_streak={self.phase_eval_pass_streak}"
                         )
+                        if self.last_phase_eval_details:
+                            print(
+                                "  PhaseEvalByLevel | "
+                                + " ".join(
+                                    f"L{level}={int(details['wins'])}/{int(details['episodes'])}"
+                                    for level, details in sorted(self.last_phase_eval_details.items())
+                                )
+                            )
 
                         phase_episodes = self._phase_episode_count()
                         min_phase_episodes = int(current.get("min_phase_episodes") or 0)
-                        force_phase_episodes = int(current.get("force_phase_episodes") or 0)
-                        force_eligible = (
-                            force_phase_episodes > 0
-                            and phase_episodes >= force_phase_episodes
-                            and phase_eval >= required_wr
-                        )
                         can_promote = (
                             self.current_phase_index < len(self.curriculum) - 1
                             and phase_episodes >= min_phase_episodes
-                            and (self.phase_eval_pass_streak >= self.phase_pass_evals_required or force_eligible)
+                            and self.phase_eval_pass_streak >= self.phase_pass_evals_required
                             and self._phase_is_stable()
                         )
 
                         if can_promote:
-                            trigger = "force-advance" if force_eligible else "eval-gated"
                             self._save_stable_checkpoint(self.current_phase_index, phase_eval)
                             transition = self._advance_curriculum_from_eval()
                             if transition is not None:
                                 previous_phase, next_phase = transition
                                 print(
-                                    f"\n*** {trigger} phase transition at episode {self.total_episodes}: "
+                                    f"\n*** Competence-gated phase transition at episode {self.total_episodes}: "
                                     f"{previous_phase['name']} -> {next_phase['name']} | "
-                                    f"phase_eval={phase_eval:.3f} ({phase_eval_source}) ***\n"
-                                )
-
-                        rollback_floor = self._rollback_floor()
-                        can_rollback = (
-                            self.current_phase_index > 0
-                            and self.current_phase_index - 1 >= rollback_floor
-                            and phase_episodes >= 1500
-                            and self.phase_eval_fail_streak >= self.phase_fail_evals_before_rollback
-                            and self.total_episodes - self.last_rollback_episode >= 3000
-                        )
-                        if can_rollback:
-                            rollback = self._rollback_curriculum_from_eval()
-                            restored = self._restore_stable_checkpoint()
-                            if rollback is not None:
-                                previous_phase, rollback_phase = rollback
-                                print(
-                                    f"\n*** Eval-gated rollback at episode {self.total_episodes}: "
-                                    f"{previous_phase['name']} -> {rollback_phase['name']} | "
-                                    f"phase_eval={phase_eval:.3f} ({phase_eval_source}) | restored={restored} ***\n"
+                                    f"phase_eval={phase_eval:.3f}, lower={phase_lower_bound:.3f} ***\n"
                                 )
                     next_eval_episode += self.eval_interval_episodes
                     self._write_run_manifest(status="running")
@@ -1767,13 +1799,17 @@ class HybridTrainer:
                     ckpt_path = os.path.join(
                         self.output_dir, f"treads_ppo_ep{next_checkpoint_episode}"
                     )
-                    cast(Any, self.model).save(ckpt_path)
-                    self._save_ret_rms()
+                    self._save_model_checkpoint(ckpt_path)
                     next_checkpoint_episode += self.checkpoint_episode_interval
 
         except KeyboardInterrupt:
             interrupt_reason = "Training interrupted by user."
             print("\nTraining interrupted by user.")
+        except BaseException as exc:
+            failure_reason = f"{type(exc).__name__}: {exc}"
+            print(f"\nTraining failed: {failure_reason}")
+            traceback.print_exc()
+            raise
         finally:
             self.run_finished_at = datetime.now(timezone.utc)
             if self.episode_reward_breakdowns:
@@ -1803,8 +1839,7 @@ class HybridTrainer:
 
             csv_file.close()
             # Save final model
-            cast(Any, self.model).save(self.final_model_path)
-            self._save_ret_rms()
+            self._save_model_checkpoint(self.final_model_path)
             self._export_policy_onnx(self.final_model_path)
             final_breakdowns = self.episode_reward_breakdowns[-50:] if self.episode_reward_breakdowns else []
             final_snapshot = self._build_iteration_snapshot(
@@ -1825,7 +1860,21 @@ class HybridTrainer:
                 time.time() - self.start_time,
             )
             self._write_iteration_snapshot(final_snapshot)
-            self._write_run_manifest(status="completed" if not interrupt_reason else "interrupted", error=interrupt_reason)
+            if failure_reason:
+                final_status = "failed"
+                final_error = failure_reason
+            elif interrupt_reason:
+                final_status = "interrupted"
+                final_error = interrupt_reason
+            elif self.total_episodes >= target_episodes:
+                final_status = "completed"
+                final_error = ""
+            else:
+                final_status = "budget_exhausted"
+                final_error = (
+                    f"Transition budget exhausted at {self.total_episodes}/{target_episodes} episodes."
+                )
+            self._write_run_manifest(status=final_status, error=final_error)
             print(f"Final model saved to {self.final_model_path}")
             self.close()
 
@@ -1856,7 +1905,7 @@ def train() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--levels", type=str, default="", help="Optional comma-separated level numbers; omit to use curriculum")
     parser.add_argument("--timesteps", type=int, default=0, help="Max timesteps (default: auto-computed from target-episodes × max-ticks)")
-    parser.add_argument("--target-episodes", type=int, default=10_000, help="Stop when this many episodes are collected")
+    parser.add_argument("--target-episodes", type=int, default=100_000, help="Stop when this many episodes are collected")
     parser.add_argument("--load-model", type=str, default="", help="Optional .zip model path to resume from")
     parser.add_argument("--output-dir", type=str, default="", help="Optional output directory override")
     parser.add_argument("--checkpoint-interval", type=int, default=500, help="Checkpoint interval in episodes")
@@ -1870,12 +1919,9 @@ def train() -> None:
     parser.add_argument("--clip-range", type=float, default=0.15, help="PPO clip range (default: 0.15)")
     parser.add_argument("--clip-range-final", type=float, default=0.08, help="Final PPO clip range at end of training (default: 0.08)")
     parser.add_argument("--target-kl", type=float, default=0.02, help="PPO target KL early-stop threshold (default: 0.02)")
-    parser.add_argument("--stability-mode", action="store_true", default=True, help="Enable eval-gated curriculum stabilization mode (default: enabled)")
-    parser.add_argument("--no-stability-mode", action="store_false", dest="stability_mode", help="Disable eval-gated curriculum stabilization mode")
-    parser.add_argument("--phase-pass-evals", type=int, default=3, help="Consecutive phase eval passes required before promotion (default: 3)")
-    parser.add_argument("--phase-fail-evals", type=int, default=2, help="Consecutive phase eval failures before rollback (default: 2)")
+    parser.add_argument("--phase-pass-evals", type=int, default=2, help="Consecutive confidence-bound phase eval passes required before promotion")
     parser.add_argument("--eval-interval", type=int, default=500, help="Run deterministic eval every N collected episodes (default: 500)")
-    parser.add_argument("--eval-episodes", type=int, default=4, help="Deterministic eval episodes per level (default: 4)")
+    parser.add_argument("--eval-episodes", type=int, default=12, help="Held-out randomized eval episodes per level (default: 12)")
     parser.add_argument("--eval-levels", type=str, default="1,2,3,4,5,6,7,8,9", help="Comma-separated levels for deterministic eval")
     parser.add_argument("--max-update-steps", type=int, default=16384, help="Cap total rollout steps per PPO update (default: 16384)")
     cpu_count = os.cpu_count() or 1
@@ -1923,10 +1969,16 @@ def train() -> None:
         eval_episodes=args.eval_episodes,
         eval_levels=eval_levels,
         num_workers=args.num_workers,
-        stability_mode=args.stability_mode,
         phase_pass_evals_required=args.phase_pass_evals,
-        phase_fail_evals_before_rollback=args.phase_fail_evals,
     )
+
+    def request_graceful_shutdown(signum: int, _frame: Any) -> None:
+        print(f"\nReceived signal {signum}; finishing the current cleanup path.")
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, request_graceful_shutdown)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, request_graceful_shutdown)
 
     print(f"Starting hybrid training (rollout in TypeScript, PPO in Python, {args.num_workers} worker(s))")
     print(f"n_steps: {effective_n_steps} ({effective_n_steps // args.num_workers} per worker)")

@@ -15,6 +15,7 @@ import type {
 	TankObservation,
 } from '../src/game/core/types';
 import { resolveScenarioConfig } from './training-scenarios';
+import { applyProceduralDifficulty, applySpawnJitter, configurePlayerResources } from './scenario-variation';
 
 interface ResetRequest {
 	sessionId?: string;
@@ -22,6 +23,11 @@ interface ResetRequest {
 	seed?: number;
 	maxTicks?: number;
 	saveReplay?: boolean;
+	spawnJitter?: boolean;
+	proceduralLevels?: boolean;
+	difficultyBand?: number;
+	playerMaxAmmo?: number;
+	playerMaxBombs?: number;
 }
 
 interface StepRequest {
@@ -66,13 +72,26 @@ class EnvSession {
 
 	public readonly initPayload: Record<string, unknown>;
 
-	public constructor(level: number, seed: number, maxTicks: number, saveReplay: boolean) {
+	public constructor(
+		level: number,
+		seed: number,
+		maxTicks: number,
+		saveReplay: boolean,
+		spawnJitter: boolean,
+		proceduralLevels: boolean,
+		difficultyBand: number,
+		playerMaxAmmo: number,
+		playerMaxBombs: number
+	) {
 		this.level = level;
 		this.seed = seed;
 		this.maxTicks = maxTicks;
 		this.saveReplay = saveReplay;
 
-		const levelConfig = resolveScenarioConfig(level);
+		const baseConfig = resolveScenarioConfig(level);
+		const jittered = spawnJitter ? applySpawnJitter(baseConfig, seed) : baseConfig;
+		const varied = proceduralLevels ? applyProceduralDifficulty(jittered, seed, difficultyBand) : jittered;
+		const levelConfig = configurePlayerResources(varied, playerMaxAmmo, playerMaxBombs);
 		const initialState = createInitialGameState(levelConfig, seed);
 		const defaultControllers = createDefaultControllers(levelConfig);
 		const controllers: Record<string, TankController> = {
@@ -224,6 +243,29 @@ function getPortArg(): number {
 	return 50051;
 }
 
+function getParentPidArg(): number | null {
+	const args = process.argv.slice(2);
+	for (let i = 0; i < args.length; i += 1) {
+		if (args[i] === '--parent-pid' && args[i + 1]) {
+			const parentPid = Number(args[i + 1]);
+			return Number.isSafeInteger(parentPid) && parentPid > 0 ? parentPid : null;
+		}
+	}
+	return null;
+}
+
+function watchParentProcess(parentPid: number | null): void {
+	if (parentPid === null) return;
+	const timer = setInterval(() => {
+		try {
+			process.kill(parentPid, 0);
+		} catch {
+			clearInterval(timer);
+			process.exit(0);
+		}
+	}, 1000);
+}
+
 function health(
 	_call: grpc.ServerUnaryCall<Record<string, never>, { ok: boolean; message: string }>,
 	callback: grpc.sendUnaryData<{ ok: boolean; message: string }>
@@ -242,8 +284,23 @@ function reset(
 		const seed = Number(req.seed ?? 42);
 		const maxTicks = Math.max(1, Number(req.maxTicks ?? 720));
 		const saveReplay = Boolean(req.saveReplay);
+		const spawnJitter = Boolean(req.spawnJitter);
+		const proceduralLevels = Boolean(req.proceduralLevels);
+		const difficultyBand = Math.max(0, Math.min(1, Number(req.difficultyBand ?? 0)));
+		const playerMaxAmmo = Number(req.playerMaxAmmo ?? -1);
+		const playerMaxBombs = Number(req.playerMaxBombs ?? -1);
 
-		const session = new EnvSession(level, seed, maxTicks, saveReplay);
+		const session = new EnvSession(
+			level,
+			seed,
+			maxTicks,
+			saveReplay,
+			spawnJitter,
+			proceduralLevels,
+			difficultyBand,
+			playerMaxAmmo,
+			playerMaxBombs
+		);
 		sessions.set(sessionId, session);
 
 		const observation = session.buildObservation();
@@ -282,10 +339,6 @@ function step(
 			plantBomb: Boolean(req.plantBomb),
 		});
 
-		if (outcome.done) {
-			sessions.delete(sessionId);
-		}
-
 		callback(null, {
 			done: outcome.done,
 			observationJson: JSON.stringify(outcome.observation ?? null),
@@ -308,6 +361,7 @@ function close(
 }
 
 function main(): void {
+	watchParentProcess(getParentPidArg());
 	const port = getPortArg();
 	const server = new grpc.Server();
 	server.addService(serviceDef.service, {

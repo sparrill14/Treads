@@ -2,10 +2,12 @@ import express, { type Express, type Request, type Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 
-const PORT = 3007;
+const PORT = Number(process.env.TREADS_DASHBOARD_PORT ?? 3007);
 const ROOT_RUN_ID = '__root__';
 const REPO_ROOT = process.cwd();
-const OUTPUT_ROOT = path.join(REPO_ROOT, 'training', 'output');
+const OUTPUT_ROOT = process.env.TREADS_OUTPUT_ROOT
+	? path.resolve(process.env.TREADS_OUTPUT_ROOT)
+	: path.join(REPO_ROOT, 'training', 'output');
 const DIST_DIR = path.join(REPO_ROOT, 'dist');
 
 interface MetricsSnapshot {
@@ -98,6 +100,23 @@ function readJsonIfExists(filePath: string): Record<string, unknown> | null {
 	} catch {
 		return null;
 	}
+}
+
+function isCompatibleModel(modelPath: string): boolean {
+	if (!fileExists(modelPath)) return false;
+	const expected = readJsonIfExists(
+		path.join(REPO_ROOT, 'src', 'game', 'controllers', 'neural-model-contract.json')
+	);
+	const actual = readJsonIfExists(modelPath.replace(/\.onnx$/i, '.contract.json'));
+	return (
+		expected !== null &&
+		actual !== null &&
+		actual.contractVersion === expected.contractVersion &&
+		actual.observationVersion === expected.observationVersion &&
+		actual.actionVersion === expected.actionVersion &&
+		JSON.stringify(actual.observation) === JSON.stringify(expected.observation) &&
+		JSON.stringify(actual.action) === JSON.stringify(expected.action)
+	);
 }
 
 function parseNumber(value: unknown): number | null {
@@ -417,20 +436,24 @@ function getRunSummary(run: { id: string; label: string; dir: string; isRoot: bo
 	const updatedAtMs = getRunUpdatedMs(run.dir, manifest, latestMetrics, replayCount);
 	const liveMetricsPath = path.join(run.dir, 'live_metrics.json');
 	const liveUpdatedAtMs = fileExists(liveMetricsPath) ? fs.statSync(liveMetricsPath).mtimeMs : 0;
+	const manifestPath = path.join(run.dir, 'run_manifest.json');
+	const manifestUpdatedAtMs = fileExists(manifestPath) ? fs.statSync(manifestPath).mtimeMs : 0;
 	const manifestStatus = typeof manifest?.status === 'string' ? manifest.status : '';
+	const reportsActive = manifestStatus === 'running' || manifestStatus === 'initializing';
+	const isRunning = reportsActive && Date.now() - Math.max(liveUpdatedAtMs, manifestUpdatedAtMs) < 45_000;
 	return {
 		id: run.id,
 		label: run.label,
 		isRoot: run.isRoot,
 		path: path.relative(OUTPUT_ROOT, run.dir) || '.',
-		status: manifestStatus || 'complete',
-		isRunning: manifestStatus === 'running' && Date.now() - liveUpdatedAtMs < 45_000,
+		status: reportsActive && !isRunning ? 'stale' : manifestStatus || 'complete',
+		isRunning,
 		startedAt: typeof manifest?.startedAt === 'string' ? manifest.startedAt : null,
 		finishedAt: typeof manifest?.finishedAt === 'string' ? manifest.finishedAt : null,
 		updatedAt: new Date(updatedAtMs).toISOString(),
 		updatedAtMs,
 		replayCount,
-		onnxAvailable: fileExists(path.join(run.dir, 'treads_policy.onnx')),
+		onnxAvailable: isCompatibleModel(path.join(run.dir, 'treads_policy.onnx')),
 		latestMetrics,
 		manifest,
 	};
@@ -456,7 +479,7 @@ function resolveRunDir(runId: string | null): string {
 
 function resolveCurrentModel(preferredRunId: string | null = null): ModelStatus {
 	const { runs, activeRunId } = scanRuns();
-	const candidates = [preferredRunId, activeRunId, ...runs.map((run) => run.id)].filter(
+	const candidates = (preferredRunId ? [preferredRunId] : [activeRunId, ...runs.map((run) => run.id)]).filter(
 		(runId): runId is string => typeof runId === 'string' && runId.length > 0
 	);
 	const seen = new Set<string>();
@@ -467,7 +490,7 @@ function resolveCurrentModel(preferredRunId: string | null = null): ModelStatus 
 		}
 		seen.add(runId);
 		const filePath = path.join(resolveRunDir(runId), 'treads_policy.onnx');
-		if (!fileExists(filePath)) {
+		if (!isCompatibleModel(filePath)) {
 			continue;
 		}
 		const stats = fs.statSync(filePath);
@@ -483,7 +506,7 @@ function resolveCurrentModel(preferredRunId: string | null = null): ModelStatus 
 	}
 
 	const fallbackPath = path.join(OUTPUT_ROOT, 'treads_policy.onnx');
-	if (fileExists(fallbackPath)) {
+	if (!preferredRunId && isCompatibleModel(fallbackPath)) {
 		const stats = fs.statSync(fallbackPath);
 		return {
 			available: true,
@@ -592,6 +615,21 @@ app.get('/api/model/current.onnx', (req: Request, res: Response) => {
 		return;
 	}
 	res.sendFile(model.filePath);
+});
+
+app.get('/api/model/current.contract.json', (req: Request, res: Response) => {
+	const runId = typeof req.query.run === 'string' ? req.query.run : null;
+	const model = resolveCurrentModel(runId);
+	if (!model.available || !model.filePath) {
+		res.status(404).json({ error: 'No ONNX model contract is available yet.' });
+		return;
+	}
+	const contractPath = model.filePath.replace(/\.onnx$/i, '.contract.json');
+	if (!fileExists(contractPath)) {
+		res.status(409).json({ error: 'The selected model predates the versioned model contract.' });
+		return;
+	}
+	res.sendFile(contractPath);
 });
 
 app.get('/api/live', (req: Request, res: Response) => {
