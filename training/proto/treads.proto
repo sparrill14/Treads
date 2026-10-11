@@ -115,6 +115,8 @@ message EvaluateRequest {
   double difficulty_band = 5;
   int32 player_max_ammo = 6;
   int32 player_max_bombs = 7;
+  bool canonical_spawns = 8;
+  bool heuristic_player = 9;
 }
 
 message EvaluateResponse {

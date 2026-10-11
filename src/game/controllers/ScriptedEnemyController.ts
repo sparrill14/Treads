@@ -5,6 +5,7 @@ import {
 	getMoveDelta,
 	normalizeAngle,
 	obstacleIntersectsTank,
+	rotateAngleTowards,
 } from '../core/geometry';
 import { bombWouldHitTank, predictProjectileWillHitTank } from '../core/physics';
 import { mixSeed, SeededRandom } from '../core/prng';
@@ -44,11 +45,15 @@ export class ScriptedEnemyController implements TankController {
 	private pathTicksRemaining = 0;
 	private aimAngleChangeAmount = 0;
 	private lastSeenEnemyPositions = new Map<string, { x: number; y: number }>();
+	private allowBounces = true;
+	private turretRotationPerTick = 0.3;
 
 	constructor(private options: ScriptedEnemyControllerOptions) {}
 
 	public reset(initial: MatchInit): void {
 		this.selfId = initial.selfId;
+		this.allowBounces = initial.rules?.projectileBounces ?? true;
+		this.turretRotationPerTick = 0.3 * (initial.rules?.turretSpeedMultiplier ?? 1);
 		const selfTank = initial.tanks.find((t) => t.id === initial.selfId);
 		this.planner = new NavigationPlanner(initial.arena, initial.obstacles, selfTank?.size);
 		const salt = [...this.selfId].reduce((sum, character) => sum + character.charCodeAt(0), 0);
@@ -62,7 +67,8 @@ export class ScriptedEnemyController implements TankController {
 	public act(obs: TankObservation): TankAction {
 		const target = this.selectTarget(obs.enemies, obs.self);
 		const profile = this.options.heuristicProfile ?? 'default';
-		const evasiveMove = profile === 'default' ? 'none' : this.getThreatEvasiveMove(obs, profile === 'advanced' ? 2 : 1);
+		const bombThreat = obs.bombs.some((bomb) => bombWouldHitTank(bomb.x, bomb.y, bomb.blastRadius + 8, obs.self));
+		const evasiveMove = profile === 'default' && !bombThreat ? 'none' : this.getThreatEvasiveMove(obs, profile === 'advanced' ? 2 : 1);
 		const fallbackAimAngle = this.getAimAngle(obs, target);
 		const firingSolution = this.getFiringSolution(obs, target, fallbackAimAngle, profile);
 		const aimAngle = firingSolution.aimAngle;
@@ -75,8 +81,10 @@ export class ScriptedEnemyController implements TankController {
 					: baseMove;
 		const plantBomb = this.shouldPlantBomb(obs, target, profile);
 
-		if (target && profile !== 'default') {
-			this.lastSeenEnemyPositions.set(target.id, { x: target.x, y: target.y });
+        if (profile !== 'default') {
+            for (const enemy of obs.enemies) {
+                this.lastSeenEnemyPositions.set(enemy.id, { x: enemy.x, y: enemy.y });
+            }
 		}
 
 		return {
@@ -165,14 +173,23 @@ export class ScriptedEnemyController implements TankController {
 		const velocityY = target.y - last.y;
 		const projectileSpeedPerTick = getProjectileSpec(obs.self.ammoType).speed * TICK_SECONDS;
 		const distance = Math.hypot(targetCenterX - selfCenterX, targetCenterY - selfCenterY);
-		const travelTicks = projectileSpeedPerTick > 0 ? distance / projectileSpeedPerTick : 0;
+		const dx = targetCenterX - selfCenterX;
+		const dy = targetCenterY - selfCenterY;
+		const a = velocityX ** 2 + velocityY ** 2 - projectileSpeedPerTick ** 2;
+		const b = 2 * (dx * velocityX + dy * velocityY);
+		const c = distance ** 2;
+		const discriminant = b ** 2 - 4 * a * c;
+		const roots = Math.abs(a) < 1e-9 ? [-c / b] : discriminant >= 0
+			? [(-b - Math.sqrt(discriminant)) / (2 * a), (-b + Math.sqrt(discriminant)) / (2 * a)] : [];
+		const positiveRoots = roots.filter((time) => Number.isFinite(time) && time > 0);
+		const travelTicks = positiveRoots.length ? Math.min(...positiveRoots) : distance / projectileSpeedPerTick;
 		const predictedX = this.clampTankCoordinate(
-			targetCenterX + velocityX * Math.min(travelTicks, 36),
+			targetCenterX + velocityX * Math.min(travelTicks, 600),
 			target.size,
 			obs.arena.width
 		);
 		const predictedY = this.clampTankCoordinate(
-			targetCenterY + velocityY * Math.min(travelTicks, 36),
+			targetCenterY + velocityY * Math.min(travelTicks, 600),
 			target.size,
 			obs.arena.height
 		);
@@ -186,7 +203,7 @@ export class ScriptedEnemyController implements TankController {
 		let bestHit = false;
 		for (const angle of [eliteAngle, ...candidates]) {
 			const projectile = this.createPredictionProjectile(obs.self, angle, obs);
-			const willHit = predictProjectileWillHitTank(projectile, target, obs.arena, obs.obstacles);
+			const willHit = predictProjectileWillHitTank(projectile, target, obs.arena, obs.obstacles, this.allowBounces);
 			if (!bestHit && willHit) {
 				bestAngle = angle;
 				bestHit = true;
@@ -274,10 +291,8 @@ export class ScriptedEnemyController implements TankController {
 
 	private getThreatEvasiveMove(obs: TankObservation, lookaheadSteps: number): MoveIntent {
 		const immediateThreat = obs.projectiles.some(
-			(projectile) =>
-				projectile.team !== obs.self.team &&
-				predictProjectileWillHitTank(projectile, obs.self, obs.arena, obs.obstacles)
-		);
+			(projectile) => predictProjectileWillHitTank(projectile, obs.self, obs.arena, obs.obstacles, this.allowBounces)
+		) || obs.bombs.some((bomb) => bombWouldHitTank(bomb.x, bomb.y, bomb.blastRadius + 8, obs.self));
 		if (!immediateThreat) {
 			return 'none';
 		}
@@ -290,7 +305,8 @@ export class ScriptedEnemyController implements TankController {
 				candidate = this.projectTankAfterMove(candidate, 'none', obs.arena.width, obs.arena.height, obs.obstacles);
 				totalDanger += this.computeDangerScore(candidate, obs, step + 1) * 0.7;
 			}
-			const moveBonus = move === 'none' ? 0 : 4;
+			const moved = candidate.x !== obs.self.x || candidate.y !== obs.self.y;
+			const moveBonus = move === 'none' || !moved ? 0 : 0.01;
 			const score = -totalDanger + moveBonus;
 			if (score > bestScore) {
 				bestScore = score;
@@ -307,6 +323,17 @@ export class ScriptedEnemyController implements TankController {
 	): MoveIntent {
 		if (!target) {
 			return preferredMove;
+		}
+		// Combat positioning cannot replace obstacle routing with a straight-line chase.
+		if (this.planner) {
+			const guidance = this.planner.getPathGuidance(
+				obs.self.x + obs.self.size / 2, obs.self.y + obs.self.size / 2,
+				target.x + target.size / 2, target.y + target.size / 2
+			);
+			const directDistance = Math.hypot(target.x - obs.self.x, target.y - obs.self.y);
+			if (guidance.reachable && guidance.distance > directDistance + 30) {
+				return preferredMove;
+			}
 		}
 
 		const firstMoves = this.getAdvancedFirstMoves(preferredMove);
@@ -361,7 +388,8 @@ export class ScriptedEnemyController implements TankController {
 	): number {
 		const role = this.resolveRole();
 		const distance = Math.hypot(target.x - state.x, target.y - state.y);
-		const preferredDistance = role === 'pressure' ? 130 : role === 'flank' ? 190 : 250;
+		const preferredDistance = state.maxAmmo === 0 && state.maxBombs > 0
+			? 0 : role === 'pressure' ? 130 : role === 'flank' ? 190 : 250;
 		const distancePenalty = Math.abs(distance - preferredDistance) * 0.08;
 		const dangerPenalty = this.computeDangerScore(state, obs, 1) * 1.2;
 		const movementPenalty = move === 'none' ? 3 : 0;
@@ -379,9 +407,7 @@ export class ScriptedEnemyController implements TankController {
 		const candidateCenterX = candidateTank.x + candidateTank.size / 2;
 		const candidateCenterY = candidateTank.y + candidateTank.size / 2;
 		for (const projectile of obs.projectiles) {
-			if (projectile.team === obs.self.team) {
-				continue;
-			}
+			// Friendly and ricocheted own shots damage tanks too.
 			const projected = {
 				...projectile,
 				x: projectile.x + projectile.vx * TICK_SECONDS * lookaheadTick,
@@ -390,15 +416,12 @@ export class ScriptedEnemyController implements TankController {
 			const px = Math.max(0, Math.min(projected.x, obs.arena.width));
 			const py = Math.max(0, Math.min(projected.y, obs.arena.height));
 			const distance = Math.hypot(candidateCenterX - px, candidateCenterY - py);
-			if (predictProjectileWillHitTank(projected, candidateTank, obs.arena, obs.obstacles)) {
+			if (predictProjectileWillHitTank(projected, candidateTank, obs.arena, obs.obstacles, this.allowBounces)) {
 				score += 220;
 			}
 			score += Math.max(0, 120 - distance) * 0.7;
 		}
 		for (const bomb of obs.bombs) {
-			if (bomb.team === obs.self.team) {
-				continue;
-			}
 			const distance = Math.hypot(candidateCenterX - bomb.x, candidateCenterY - bomb.y);
 			const fuseUrgency = Math.max(0, 1 - bomb.fuseTicksRemaining / 360);
 			const overlapPenalty = Math.max(0, bomb.blastRadius + candidateTank.size / 2 - distance);
@@ -444,9 +467,13 @@ export class ScriptedEnemyController implements TankController {
 				: this.getAdvancedCandidateAngles(obs, target, fallbackAimAngle, profile);
 
 		for (const angle of candidateAngles) {
-			const projectile = this.createPredictionProjectile(obs.self, angle, obs);
+			// Fire along the turret angle the simulation will actually reach this tick.
+			const firingAngle = rotateAngleTowards(obs.self.aimAngle, angle, this.turretRotationPerTick);
+			const projectile = this.createPredictionProjectile(obs.self, firingAngle, obs);
+			const last = this.lastSeenEnemyPositions.get(target.id);
+			const velocity = last && profile !== 'default' ? { x: target.x - last.x, y: target.y - last.y } : { x: 0, y: 0 };
 			if (
-				predictProjectileWillHitTank(projectile, target, obs.arena, obs.obstacles) &&
+				predictProjectileWillHitTank(projectile, target, obs.arena, obs.obstacles, this.allowBounces, velocity) &&
 				(profile !== 'advanced' || !this.wouldCauseFriendlyFire(projectile, obs))
 			) {
 				return { aimAngle: angle, fire: true };
@@ -549,20 +576,31 @@ export class ScriptedEnemyController implements TankController {
 		if (profile === 'advanced' && this.wouldBombAlly(centerX, centerY, bombSpec.blastRadius, obs)) {
 			return false;
 		}
-		const selfWouldBeHit = bombWouldHitTank(centerX, centerY, bombSpec.blastRadius * 0.85, obs.self);
-		if (profile === 'advanced') {
-			return !selfWouldBeHit;
+		// Every newly planted bomb overlaps its owner. Check whether the owner
+		// can leave the blast before the fuse expires, then prioritize that escape.
+		return this.canEscapeBomb(obs, centerX, centerY, bombSpec.blastRadius, bombSpec.fuseTicks);
+	}
+
+	private canEscapeBomb(obs: TankObservation, x: number, y: number, radius: number, fuseTicks: number): boolean {
+		for (const move of ALL_MOVES.filter((candidate) => candidate !== 'none')) {
+			let tank = obs.self;
+			for (let tick = 0; tick < Math.min(fuseTicks - 8, 120); tick++) {
+				const next = this.projectTankAfterMove(tank, move, obs.arena.width, obs.arena.height, obs.obstacles);
+				if (next.x === tank.x && next.y === tank.y) break;
+				tank = next;
+				if (!bombWouldHitTank(x, y, radius + 8, tank)) return true;
+			}
 		}
-		return !selfWouldBeHit || obs.self.health > 1;
+		return false;
 	}
 
 	private wouldCauseFriendlyFire(projectile: ProjectileStateView, obs: TankObservation): boolean {
-		if (predictProjectileWillHitTank(projectile, obs.self, obs.arena, obs.obstacles)) {
+		if (predictProjectileWillHitTank(projectile, obs.self, obs.arena, obs.obstacles, this.allowBounces)) {
 			return true;
 		}
 		const allies = obs.allies ?? [];
 		for (const ally of allies) {
-			if (!ally.destroyed && predictProjectileWillHitTank(projectile, ally, obs.arena, obs.obstacles)) {
+			if (!ally.destroyed && predictProjectileWillHitTank(projectile, ally, obs.arena, obs.obstacles, this.allowBounces)) {
 				return true;
 			}
 		}

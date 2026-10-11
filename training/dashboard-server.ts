@@ -103,7 +103,7 @@ function readJsonIfExists(filePath: string): Record<string, unknown> | null {
 }
 
 function isCompatibleModel(modelPath: string): boolean {
-	if (!fileExists(modelPath)) return false;
+	if (!fileExists(modelPath) || !fileExists(modelPath.replace(/\.onnx$/i, '.weights.json'))) return false;
 	const expected = readJsonIfExists(
 		path.join(REPO_ROOT, 'src', 'game', 'controllers', 'neural-model-contract.json')
 	);
@@ -280,6 +280,41 @@ function readMetricsHistory(runDir: string): MetricsSnapshot[] {
 	});
 }
 
+function readLatestMetric(runDir: string): MetricsSnapshot | null {
+	const live = readJsonIfExists(path.join(runDir, 'live_metrics.json'));
+	if (live) return normalizeMetricRecord(live);
+	const jsonlPath = path.join(runDir, 'metrics_history.jsonl');
+	const isJsonl = fileExists(jsonlPath);
+	const filePath = isJsonl ? jsonlPath : path.join(runDir, 'training_log.csv');
+	if (!fileExists(filePath)) return null;
+	// Run summaries need one record, regardless of how long training has run.
+	const handle = fs.openSync(filePath, 'r');
+	try {
+		const size = fs.fstatSync(handle).size;
+		const start = Math.max(0, size - 64 * 1024);
+		const buffer = Buffer.alloc(size - start);
+		fs.readSync(handle, buffer, 0, buffer.length, start);
+		const lines = buffer.toString('utf8').split(/\r?\n/);
+		if (start > 0) lines.shift(); // Discard the partial record at the start of the tail.
+		if (isJsonl) {
+			for (const line of lines.reverse()) {
+				if (!line.trim()) continue;
+				try { return normalizeMetricRecord(JSON.parse(line) as Record<string, unknown>); }
+				catch { /* An append in progress may leave an incomplete final record. */ }
+			}
+			return null;
+		}
+		const headerBuffer = Buffer.alloc(Math.min(size, 64 * 1024));
+		fs.readSync(handle, headerBuffer, 0, headerBuffer.length, 0);
+		const headerLine = headerBuffer.toString('utf8').split(/\r?\n/, 1)[0];
+		const lastLine = lines.filter((line) => line.trim()).at(-1);
+		if (!lastLine || lastLine === headerLine) return null;
+		const headers = parseCsvLine(headerLine);
+		const columns = parseCsvLine(lastLine);
+		return normalizeMetricRecord(Object.fromEntries(headers.map((header, index) => [header, columns[index] ?? ''])));
+	} finally { fs.closeSync(handle); }
+}
+
 function parseReplayFileName(fileName: string): {
 	worker: number | null;
 	episode: number | null;
@@ -430,9 +465,10 @@ function getRunUpdatedMs(
 
 function getRunSummary(run: { id: string; label: string; dir: string; isRoot: boolean }): RunSummary {
 	const manifest = readJsonIfExists(path.join(run.dir, 'run_manifest.json'));
-	const history = readMetricsHistory(run.dir);
-	const latestMetrics = history.length > 0 ? history[history.length - 1] : null;
-	const replayCount = listReplayFiles(run.dir, run.id).length;
+	const latestMetrics = readLatestMetric(run.dir);
+	const replayDir = path.join(run.dir, 'replays');
+	const replayCount = fileExists(replayDir) ? fs.readdirSync(replayDir, { withFileTypes: true })
+		.filter((entry) => entry.isFile() && entry.name.endsWith('.json')).length : 0;
 	const updatedAtMs = getRunUpdatedMs(run.dir, manifest, latestMetrics, replayCount);
 	const liveMetricsPath = path.join(run.dir, 'live_metrics.json');
 	const liveUpdatedAtMs = fileExists(liveMetricsPath) ? fs.statSync(liveMetricsPath).mtimeMs : 0;
@@ -478,7 +514,7 @@ function resolveRunDir(runId: string | null): string {
 }
 
 function resolveCurrentModel(preferredRunId: string | null = null): ModelStatus {
-	const { runs, activeRunId } = scanRuns();
+	const { runs, activeRunId } = preferredRunId ? { runs: [], activeRunId: preferredRunId } : scanRuns();
 	const candidates = (preferredRunId ? [preferredRunId] : [activeRunId, ...runs.map((run) => run.id)]).filter(
 		(runId): runId is string => typeof runId === 'string' && runId.length > 0
 	);
@@ -550,6 +586,15 @@ function livePayload(requestedRunId: string | null): {
 
 const app: Express = express();
 app.use(express.json());
+app.use('/api', (req, res, next) => {
+	const runId = req.query.run;
+	if (runId !== undefined && (typeof runId !== 'string' || runId.length === 0 ||
+		runId === '.' || runId === '..' || /[\\/\0]/.test(runId) || path.isAbsolute(runId))) {
+		res.status(400).json({ error: 'Run must be a single output directory name.' });
+		return;
+	}
+	next();
+});
 
 app.get('/api/runs', (_req: Request, res: Response) => {
 	const { runs, activeRunId } = scanRuns();
@@ -632,6 +677,16 @@ app.get('/api/model/current.contract.json', (req: Request, res: Response) => {
 	res.sendFile(contractPath);
 });
 
+app.get('/api/model/current.weights.json', (req: Request, res: Response) => {
+	const runId = typeof req.query.run === 'string' ? req.query.run : null;
+	const model = resolveCurrentModel(runId);
+	if (!model.available || !model.filePath) {
+		res.status(404).json({ error: 'No compatible policy weights are available. Re-export the checkpoint.' });
+		return;
+	}
+	res.sendFile(model.filePath.replace(/\.onnx$/i, '.weights.json'));
+});
+
 app.get('/api/live', (req: Request, res: Response) => {
 	const requestedRunId = typeof req.query.run === 'string' ? req.query.run : null;
 	res.setHeader('Content-Type', 'text/event-stream');
@@ -655,7 +710,7 @@ app.get('/{*path}', (_req: Request, res: Response) => {
 	res.sendFile(path.join(DIST_DIR, 'index.html'));
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, '127.0.0.1', () => {
 	console.log(`Training dashboard server running at http://localhost:${PORT}`);
 	console.log(`Reading runs from ${OUTPUT_ROOT}`);
 });

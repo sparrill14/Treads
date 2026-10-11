@@ -198,8 +198,8 @@ class EnvSession {
 			enemiesDestroyed,
 			totalEnemies,
 			win: finalState.status === 'player_win',
-			loss: finalState.status === 'enemy_win',
-			draw: finalState.status === 'running',
+			loss: finalState.status === 'enemy_win' || (playerTank?.destroyed ?? true),
+			draw: finalState.status === 'draw',
 			timeout: finalState.status === 'running',
 			observation: finalObservation,
 		};
@@ -282,7 +282,7 @@ function reset(
 		const sessionId = req.sessionId || randomUUID();
 		const level = Number(req.level ?? 1);
 		const seed = Number(req.seed ?? 42);
-		const maxTicks = Math.max(1, Number(req.maxTicks ?? 720));
+		const maxTicks = Math.max(1, Number(req.maxTicks || 1800));
 		const saveReplay = Boolean(req.saveReplay);
 		const spawnJitter = Boolean(req.spawnJitter);
 		const proceduralLevels = Boolean(req.proceduralLevels);

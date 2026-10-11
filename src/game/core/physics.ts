@@ -1,4 +1,4 @@
-import { tankIntersectsBlast } from './geometry';
+import { obstacleIntersectsTank, tankIntersectsBlast } from './geometry';
 import {
 	SIMULATION_TICK_SECONDS,
 	type ArenaState,
@@ -25,8 +25,9 @@ export function stepProjectile(
 	const substeps = Math.max(1, Math.ceil(tickDistance / MIN_PROJECTILE_SUBSTEP_DISTANCE));
 
 	for (let step = 0; step < substeps; step++) {
-		projectile.x += tickDx / substeps;
-		projectile.y += tickDy / substeps;
+		// A bounce changes velocity for the remaining substeps of this tick.
+		projectile.x += projectile.vx * SIMULATION_TICK_SECONDS / substeps;
+		projectile.y += projectile.vy * SIMULATION_TICK_SECONDS / substeps;
 
 		const minX = projectile.radius;
 		const maxX = arena.width - projectile.radius;
@@ -105,15 +106,27 @@ export function predictProjectileWillHitTank(
 	projectile: ProjectileStateView,
 	tank: TankStateView,
 	arena: ArenaState,
-	obstacles: ObstacleStateView[]
+	obstacles: ObstacleStateView[],
+	allowBounces = true,
+	velocityPerTick = { x: 0, y: 0 }
 ): boolean {
 	const predictedProjectile: ProjectileStateView = { ...projectile };
+	const predictedTank: TankStateView = { ...tank };
 	for (let tick = 0; tick < PREDICTION_MAX_TICKS; tick++) {
 		if (predictedProjectile.bounces > predictedProjectile.maxBounces) {
 			return false;
 		}
-		stepProjectile(predictedProjectile, arena, obstacles, true);
-		if (projectileHitsTank(predictedProjectile, tank)) {
+		stepProjectile(predictedProjectile, arena, obstacles, allowBounces);
+		if (predictedProjectile.bounces > predictedProjectile.maxBounces) return false;
+		if (velocityPerTick.x !== 0 || velocityPerTick.y !== 0) {
+			const x = clamp(predictedTank.x + velocityPerTick.x, 0, arena.width - tank.size);
+			const y = clamp(predictedTank.y + velocityPerTick.y, 0, arena.height - tank.size);
+			if (!obstacles.some((obstacle) => obstacleIntersectsTank(x, y, tank.size, obstacle))) {
+				predictedTank.x = x;
+				predictedTank.y = y;
+			}
+		}
+		if (projectileHitsTank(predictedProjectile, predictedTank)) {
 			return true;
 		}
 	}

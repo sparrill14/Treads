@@ -26,11 +26,11 @@
     "postbuild": "echo \"Build completed successfully.\"",
     "test": "tsc -p tsconfig.test.json && node ./.test-dist/tests/run-tests.js",
     "lint": "eslint src/ training/ tests/ --ext .ts",
-    "lint:py": ".venv\\Scripts\\python.exe -m compileall training",
+    "lint:py": "node training/run-python.mjs -m compileall -q -x output training",
     "build:training": "npx tsc -p training/tsconfig.training.json",
     "verify:training": "npm run build:training && npm run lint:py",
-    "test:training": ".venv\\Scripts\\python.exe training/test_pipeline_contract.py && .venv\\Scripts\\python.exe training/test_dashboard_model_gate.py && .venv\\Scripts\\python.exe training/test_aiming_e2e.py && .venv\\Scripts\\python.exe training/test_navigation_e2e.py && .venv\\Scripts\\python.exe training/test_env_session.py && .venv\\Scripts\\python.exe training/test_observation_parity.py && .venv\\Scripts\\python.exe training/test_sampler_parity.py && .venv\\Scripts\\python.exe training/test_worker_evaluation_e2e.py && .venv\\Scripts\\python.exe training/test_checkpoint_resume.py && .venv\\Scripts\\python.exe training/smoke_test.py",
-    "train:supervised": ".venv\\Scripts\\python.exe training/supervise_training.py",
+    "test:training": "npm run build:training && node training/run-python.mjs training/run_tests.py",
+    "train:supervised": "node training/run-python.mjs training/supervise_training.py",
     "dashboard": "npm run build:training && node ./.training-dist/training/dashboard-server.js"
   },
   "repository": {
@@ -66,7 +66,6 @@
     "@types/express": "^5.0.6",
     "bootstrap": "^5.3.8",
     "d3": "^7.9.0",
-    "express": "^5.3.0",
-    "onnxruntime-web": "^1.30.0"
+    "express": "^5.3.0"
   }
 }

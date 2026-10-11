@@ -1,11 +1,12 @@
 """
-Export the trained SB3 PPO model to ONNX format for use in the browser.
+Export the trained SB3 PPO model to ONNX and synchronous browser actor weights.
 The exported network outputs raw logits matching the versioned action contract.
 Browser-side code argmax-decodes each
 contiguous slice into [move_idx, aim_bin, fire, bomb].
 """
 
 import os
+import json
 import sys
 from typing import Any, cast
 import numpy as np
@@ -75,7 +76,6 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
         dynamo=False,
     )
     print(f"ONNX model saved to {onnx_path}")
-    write_contract_for_model(onnx_path)
 
     # Verify with onnxruntime
     import onnxruntime as ort  # pyright: ignore[reportMissingTypeStubs]
@@ -90,6 +90,29 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
         raise RuntimeError(
             f"Expected {ACTION_LOGITS_DIM} logits, got {len(logits)}"
         )
+
+    # Check real-valued observations, not just the all-zero shape fixture.
+    generator = np.random.default_rng(42)
+    parity_obs = generator.random((32, OBS_SIZE), dtype=np.float32)
+    with torch.no_grad():
+        expected_logits = wrapper(torch.from_numpy(parity_obs)).numpy()
+    actual_logits = session.run(["logits"], {"observation": parity_obs})[0]
+    np.testing.assert_allclose(actual_logits, expected_logits, rtol=1e-4, atol=1e-5)
+
+    # Browser and worker use this same synchronous actor to preserve tick parity.
+    weights_path = os.path.splitext(onnx_path)[0] + ".weights.json"
+    temp_path = weights_path + f".{os.getpid()}.tmp"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump({key: value.detach().cpu().numpy().tolist()
+                       for key, value in policy.state_dict().items()}, handle, allow_nan=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, weights_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+    write_contract_for_model(onnx_path)
 
     # Argmax-decode each head
     offset = 0

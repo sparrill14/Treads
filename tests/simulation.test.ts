@@ -146,6 +146,25 @@ export function runSimulationTests(): void {
 	noBounceSim.step();
 	assert.equal(noBounceSim.getStateSnapshot().projectiles.length, 0);
 
+	// Fire an actual super round beside the wall, exercising barrel spawn and substeps.
+	const ricochetLevel: LevelConfig = {
+		player: { x: 955, y: 250, ammo: { type: 'super', count: 1 } },
+		enemies: [{ type: 'stationary', x: 100, y: 250, ammo: { type: 'basic', count: 0 } }],
+		obstacles: [],
+	};
+	const ricochetBootstrap = createMatchBootstrap(ricochetLevel, 42, {
+		playerController: new FixedAimController({ move: 'none', aimAngle: 0, fire: true, plantBomb: false }),
+	});
+	const ricochetSim = new Simulation(ricochetBootstrap.initialState, ricochetBootstrap.controllers);
+	ricochetSim.step();
+	const firstBounce = defined(ricochetSim.getStateSnapshot().projectiles[0], 'Super round must survive its first bounce');
+	assert.equal(firstBounce.bounces, 1, 'A wall must not consume two bounces in the same tick');
+	assert.ok(firstBounce.vx < 0 && firstBounce.x < 996, 'The round must travel away from the wall immediately');
+	ricochetSim.step();
+	const returningRound = defined(ricochetSim.getStateSnapshot().projectiles[0], 'Ricochet must remain alive');
+	assert.equal(returningRound.bounces, 1);
+	assert.ok(returningRound.x < firstBounce.x);
+
 	const fastTurretLevel: LevelConfig = {
 		player: { x: 100, y: 250 },
 		obstacles: [],

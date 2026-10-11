@@ -1,6 +1,7 @@
 import packageJson from '../../package.json';
 import { AudioManager } from '../game/AudioManager';
 import { NeuralNetController } from '../game/controllers/NeuralNetController';
+import { assertCompatibleContract } from '../game/controllers/NeuralModelContract';
 import type { TankController } from '../game/core/types';
 import { Level } from '../game/Level';
 import { LEVEL_CONFIGS, type LevelConfig } from '../game/LevelConfig';
@@ -35,6 +36,7 @@ export class LevelSelector {
 	private activeLevelNumber = 1;
 	private activeLevel: Level | null = null;
 	private aiMode = false;
+	private aiLoading = false;
 	private aiController: NeuralNetController | null = null;
 	private aiModelUrl: string | null = null;
 	private selectedRunId: string | null = null;
@@ -160,9 +162,23 @@ export class LevelSelector {
 		this.canvas = document.createElement('canvas');
 		this.canvas.id = 'game-canvas';
 		this.canvas.className = 'game-canvas';
+		this.canvas.setAttribute('aria-label', 'Tank arena. Click to focus and fire. Move with WASD or arrow keys. Space plants a bomb.');
 		this.canvasFrame.appendChild(this.canvas);
+		const instructions = document.createElement('p');
+		instructions.className = 'arena-instructions';
+		instructions.textContent = 'Click the arena to focus and fire. WASD / arrows move. Space plants a bomb. F2 shows diagnostics.';
+		const restart = document.createElement('button');
+		restart.type = 'button';
+		restart.className = 'control-button';
+		restart.textContent = 'Restart Match';
+		restart.addEventListener('click', () => {
+			if (this.replayViewer?.hasActiveReplay()) this.replayViewer.exitReplay();
+			else if (this.editorMode && this.levelEditor) this.startEditorPlaytest(this.levelEditor.getConfig());
+			else this.startActiveLevel();
+		});
+		stageActions.appendChild(restart);
 
-		stageCard.append(stageHeader, this.canvasFrame);
+		stageCard.append(stageHeader, this.canvasFrame, instructions);
 
 		const levelPanel = document.createElement('div');
 		levelPanel.className = 'panel-card level-panel';
@@ -300,7 +316,15 @@ export class LevelSelector {
 		await this.replayViewer?.setRun(runId);
 		await this.refreshModelStatus();
 		if (this.aiMode && !this.replayViewer?.hasActiveReplay()) {
-			await this.reloadAiController();
+			this.updateAiControls(true);
+			try {
+				await this.reloadAiController();
+			} catch (error) {
+				console.error('Failed to load the selected policy:', error);
+				this.aiMode = false;
+				if (this.modelStatus) this.modelStatus.available = false;
+			}
+			this.updateAiControls(false);
 			this.startActiveLevel();
 		}
 		this.updateHeroMeta();
@@ -327,8 +351,8 @@ export class LevelSelector {
 			null;
 		if (!selectedRun || !selectedRun.latestMetrics) {
 			this.heroMeta.textContent = this.modelStatus?.available
-				? `Model ready from ${this.modelStatus.runId ?? 'current output'}`
-				: 'Waiting for run metrics and a browser-ready ONNX export';
+				? `Policy exported from ${this.modelStatus.runId ?? 'current output'}`
+				: 'Waiting for run metrics and an exported policy';
 			return;
 		}
 		const metrics = selectedRun.latestMetrics;
@@ -349,6 +373,7 @@ export class LevelSelector {
 		if (!this.modelStatus?.available) {
 			return null;
 		}
+		if (this.modelStatus.url?.startsWith('models/')) return this.modelStatus.url;
 		const params = new URLSearchParams();
 		if (this.selectedRunId) {
 			params.set('run', this.selectedRunId);
@@ -365,14 +390,24 @@ export class LevelSelector {
 		} catch (error) {
 			console.error('Failed to fetch model status:', error);
 			this.modelStatus = null;
+			// Static deployments can load the same validated companions without a dashboard server.
+			try {
+				const contract = await fetch('models/treads_policy.contract.json');
+				if (!contract.ok) throw new Error('No bundled policy', { cause: error });
+				assertCompatibleContract(await contract.json());
+				const weights = await fetch('models/treads_policy.weights.json', { method: 'HEAD' });
+				if (weights.ok) this.modelStatus = { available: true, runId: 'bundled', filePath: null,
+					updatedAt: null, updatedAtMs: null, sizeBytes: 0, url: 'models/treads_policy.onnx' };
+			} catch { /* A static build without a policy remains playable with human controls. */ }
 		}
 		this.updateAiControls();
 		this.updateHeroMeta();
 	}
 
-	private updateAiControls(loading = false): void {
+	private updateAiControls(loading = this.aiLoading): void {
+		this.aiLoading = loading;
 		if (this.aiToggleBtn) {
-			this.aiToggleBtn.disabled = loading;
+			this.aiToggleBtn.disabled = loading || (!this.aiMode && !this.modelStatus?.available);
 			this.aiToggleBtn.textContent = loading ? 'Loading AI...' : this.aiMode ? 'AI Pilot On' : 'AI Pilot Off';
 			this.aiToggleBtn.classList.toggle('active', this.aiMode);
 		}
@@ -390,17 +425,20 @@ export class LevelSelector {
 	private async reloadAiController(): Promise<void> {
 		const modelUrl = this.buildRequestedModelUrl();
 		if (!modelUrl) {
-			throw new Error('No ONNX model is available for the selected run.');
+			throw new Error('No exported policy is available for the selected run.');
 		}
 		if (this.aiController && this.aiModelUrl === modelUrl) {
 			return;
 		}
-		this.aiController = new NeuralNetController(modelUrl);
-		await this.aiController.loadModel();
+		const controller = new NeuralNetController(modelUrl);
+		await controller.loadModel();
+		if (this.buildRequestedModelUrl() !== modelUrl) throw new Error('The selected model changed while loading.');
+		this.aiController = controller;
 		this.aiModelUrl = modelUrl;
 	}
 
 	private async toggleAiMode(): Promise<void> {
+		if (this.aiLoading) return;
 		if (!this.aiMode) {
 			this.updateAiControls(true);
 			await this.refreshModelStatus();
@@ -410,11 +448,12 @@ export class LevelSelector {
 			} catch (error) {
 				console.error('Failed to enable AI mode:', error);
 				this.aiMode = false;
+				if (this.modelStatus) this.modelStatus.available = false;
 			}
 		} else {
 			this.aiMode = false;
 		}
-		this.updateAiControls();
+		this.updateAiControls(false);
 		if (!this.replayViewer?.hasActiveReplay()) {
 			this.startActiveLevel();
 		}

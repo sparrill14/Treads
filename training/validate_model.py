@@ -228,12 +228,12 @@ def main() -> None:
     parser.add_argument(
         "--levels",
         type=str,
-        default="1,2,3,4,5,6,7,8,9",
+        default="1,2,3,4,5,6,7,8,9,10",
         help="Comma-separated levels to validate.",
     )
     parser.add_argument("--episodes-per-level", type=int, default=20)
-    parser.add_argument("--max-ticks", type=int, default=720)
-    parser.add_argument("--seed-start", type=int, default=14000)
+    parser.add_argument("--max-ticks", type=int, default=1800)
+    parser.add_argument("--seed-start", type=int, default=2_000_000_000)
     parser.add_argument(
         "--stochastic",
         action="store_true",

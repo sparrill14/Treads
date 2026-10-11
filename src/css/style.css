@@ -18,8 +18,22 @@
 	--radius-sm: 10px;
 }
 
+.arena-instructions {
+	color: var(--muted);
+	font-size: 0.85rem;
+	padding-top: 12px;
+	line-height: 1.5;
+}
+
+.game-canvas:focus-visible {
+	outline: 2px solid var(--accent-cool);
+	outline-offset: 3px;
+}
+
 * {
 	box-sizing: border-box;
+	scrollbar-color: #42546d var(--bg-soft);
+	scrollbar-width: thin;
 }
 
 body {

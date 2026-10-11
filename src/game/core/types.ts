@@ -110,6 +110,7 @@ export interface MatchInit {
 	tanks: TankStateView[];
 	selfId: string;
 	controllerId: string;
+	rules?: MatchRules;
 }
 
 export interface TankObservation {

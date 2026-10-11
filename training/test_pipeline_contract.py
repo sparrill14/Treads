@@ -113,7 +113,7 @@ def main() -> None:
         112: {"episodes": 100.0, "wins": 10.0, "ema": 0.1},
     }
     pool = curriculum_probe._build_mixed_levels()
-    assert all(level in pool for level in range(1, 10))
+    assert all(level in pool for level in range(1, 11))
     assert pool.count(112) > pool.count(111)
 
     assert _without_option(

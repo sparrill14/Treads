@@ -87,7 +87,7 @@ function parseArgs(): { level: number; seed: number; maxTicks: number; saveRepla
 	const args = process.argv.slice(2);
 	let level = 1;
 	let seed = 42;
-	let maxTicks = 720;
+	let maxTicks = 1800;
 	let saveReplay = false;
 	let persistent = false;
 
@@ -248,7 +248,7 @@ async function runPersistent(): Promise<void> {
 		if (cmd.type === 'reset') {
 			const level = Math.max(1, Math.min(cmd.level ?? 1, LEVEL_CONFIGS.length));
 			const seed = cmd.seed ?? 42;
-			const maxTicks = cmd.maxTicks ?? 720;
+			const maxTicks = cmd.maxTicks ?? 1800;
 			const saveReplay = cmd.saveReplay ?? false;
 			await runEpisode(level, seed, maxTicks, saveReplay);
 		} else if (cmd.type === 'exit') {

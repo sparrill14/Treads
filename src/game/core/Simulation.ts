@@ -397,6 +397,7 @@ export class Simulation {
 			tanks: cloneJson(this.state.tanks),
 			selfId,
 			controllerId,
+			rules: cloneJson(this.state.rules),
 		};
 	}
 

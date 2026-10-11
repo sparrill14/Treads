@@ -20,12 +20,13 @@ function contractMatchesRuntime(contractPath) {
 }
 
 function isCompatibleOnnx(resourcePath) {
-    return contractMatchesRuntime(resourcePath.replace(/\.onnx$/i, '.contract.json'));
+    return contractMatchesRuntime(resourcePath.replace(/\.onnx$/i, '.contract.json'))
+        && fs.existsSync(resourcePath.replace(/\.onnx$/i, '.weights.json'));
 }
 
 function isCompatibleContract(resourcePath) {
     return contractMatchesRuntime(resourcePath)
-        && fs.existsSync(resourcePath.replace(/\.contract\.json$/i, '.onnx'));
+        && fs.existsSync(resourcePath.replace(/\.contract\.json$/i, '.weights.json'));
 }
 
 module.exports = {
@@ -47,7 +48,6 @@ module.exports = {
         }),
         new CopyPlugin({
             patterns: [
-                { from: 'node_modules/onnxruntime-web/dist/*.wasm', to: '[name][ext]' },
                 {
                     from: 'training/output/*.onnx',
                     to: 'models/[name][ext]',
@@ -59,6 +59,12 @@ module.exports = {
                     to: 'models/[name][ext]',
                     noErrorOnMissing: true,
                     filter: isCompatibleContract,
+                },
+                {
+                    from: 'training/output/*.weights.json',
+                    to: 'models/[name][ext]',
+                    noErrorOnMissing: true,
+                    filter: (resourcePath) => contractMatchesRuntime(resourcePath.replace(/\.weights\.json$/i, '.contract.json')),
                 },
             ],
         }),
@@ -78,7 +84,7 @@ module.exports = {
         },
     },
     performance: {
-        assetFilter: (assetFilename) => !/\.(mp3|ogg|wav|onnx|wasm)$/i.test(assetFilename),
+        assetFilter: (assetFilename) => !/\.(mp3|ogg|wav|onnx|map)$|\.(weights|contract)\.json$/i.test(assetFilename),
     },
     module: {
         rules: [

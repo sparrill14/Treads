@@ -1,0 +1,29 @@
+name: Game and training checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: training/requirements.txt
+      - run: npm ci
+      - run: python -m pip install -r training/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+      - run: npm run lint
+      - run: npm test
+      - run: npm run verify:training
+      - run: npm run test:training
+      - run: npm run build:prod

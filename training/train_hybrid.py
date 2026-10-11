@@ -170,7 +170,7 @@ DEFAULT_CURRICULUM: List[Dict[str, Any]] = [
     # ── Real game levels ──
     {"name": "Phase 9 (easy levels)", "scenario_ids": [1, 2, 3, 4], "min_phase_episodes": 2800, "force_phase_episodes": 11000, "required_win_rate": 0.33, "player_max_ammo": 5},
     {"name": "Phase 10 (mid levels)", "scenario_ids": [1, 2, 3, 4, 5, 6], "min_phase_episodes": 3200, "force_phase_episodes": 12000, "required_win_rate": 0.32, "player_max_ammo": 5},
-    {"name": "Phase 11 (all levels)", "scenario_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9], "min_phase_episodes": None, "required_win_rate": 0.30, "player_max_ammo": 5},
+    {"name": "Phase 11 (all levels)", "scenario_ids": list(range(1, 11)), "min_phase_episodes": None, "required_win_rate": 0.30, "player_max_ammo": 5},
 ]
 
 
@@ -194,7 +194,7 @@ class HybridTrainer:
         target_kl: float = 0.02,
         vf_coef: float = 0.5,
         max_grad_norm: float = 0.5,
-        max_episode_steps: int = 720,
+        max_episode_steps: int = 1800,
         output_dir: Optional[str] = None,
         load_model_path: Optional[str] = None,
         checkpoint_episode_interval: int = 500,
@@ -202,7 +202,7 @@ class HybridTrainer:
         eval_interval_episodes: int = 500,
         eval_episodes: int = 12,
         eval_levels: Optional[List[int]] = None,
-        eval_seed_start: int = 25000,
+        eval_seed_start: int = 1_000_000_000,
         seed: int = 42,
         num_workers: int = 4,
         phase_pass_evals_required: int = 2,
@@ -237,7 +237,7 @@ class HybridTrainer:
         self.ent_coef_final = ent_coef_final
         self.eval_interval_episodes = max(1, eval_interval_episodes)
         self.eval_episodes = max(1, eval_episodes)
-        self.eval_levels = eval_levels or [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        self.eval_levels = eval_levels or list(range(1, 11))
         self.eval_seed_start = eval_seed_start
         self.evaluation_round = 0
         self.procedural_levels = not self._explicit_levels
@@ -397,7 +397,8 @@ class HybridTrainer:
 
     def _evaluate_policy(self) -> float:
         """Deterministic actions on held-out randomized level variants."""
-        seed_start = self.eval_seed_start + self.evaluation_round * 100_000
+        # Paired comparisons require the same held-out seeds and rules each time.
+        seed_start = self.eval_seed_start
         self.evaluation_round += 1
         win_rate = self._evaluate_levels(self.eval_levels, self.eval_episodes, seed_start)
         self.last_global_eval_lower_bound = self.last_eval_lower_bound
@@ -512,11 +513,11 @@ class HybridTrainer:
                                 for seed in assignments[index]
                             ],
                             max_ticks=self.max_episode_steps,
-                            tick_norm_ticks=self.max_episode_steps,
+                            tick_norm_ticks=720,
                             procedural_levels=True,
-                            difficulty_band=max(0.15, self.curriculum_difficulty_band),
-                            player_max_ammo=self._get_player_max_ammo(),
-                            player_max_bombs=self._get_player_max_bombs(),
+                            difficulty_band=0.25 if level <= 10 else max(0.15, self.curriculum_difficulty_band),
+                            player_max_ammo=-1 if level <= 10 else self._get_player_max_ammo(),
+                            player_max_bombs=-1 if level <= 10 else self._get_player_max_bombs(),
                         ),
                         timeout=180.0,
                     )
@@ -1050,11 +1051,13 @@ class HybridTrainer:
         return self.curriculum[self.current_phase_index]
 
     def _get_player_max_ammo(self) -> int:
+        if self._explicit_levels:
+            return -1
         return int(self._get_curriculum_phase().get("player_max_ammo", 5))
 
     def _get_player_max_bombs(self) -> int:
         if self._explicit_levels:
-            return 0
+            return -1
         return int(self._get_curriculum_phase().get(
             "player_max_bombs",
             0 if self.current_phase_index < 12 else 1,
@@ -1098,7 +1101,7 @@ class HybridTrainer:
         """Build a competence-weighted pool with permanent rehearsal.
 
         Every previously introduced scenario remains eligible. Under-mastered
-        scenarios receive more samples, while all nine real levels are present
+        scenarios receive more samples, while all ten real levels are present
         from the first update so the policy never faces a late distribution jump.
         """
         if self._explicit_levels:
@@ -1120,7 +1123,7 @@ class HybridTrainer:
                 repetitions += 2
             weighted.extend([scenario_id] * max(1, repetitions))
 
-        for real_level in range(1, 10):
+        for real_level in range(1, 11):
             stats = self.scenario_competence.get(real_level, {})
             episodes = float(stats.get("episodes", 0.0))
             competence = float(stats.get("ema", 0.0)) if episodes >= 20 else 0.0
@@ -1230,7 +1233,7 @@ class HybridTrainer:
                     n_steps=int(req.get("n_steps", 4096)),
                     levels=[int(v) for v in cast(List[Any], req.get("levels", [1]))],
                     max_ticks=int(req.get("maxTicks", 1800)),
-                    tick_norm_ticks=int(req.get("tickNormTicks", 1800)),
+                    tick_norm_ticks=int(req.get("tickNormTicks", 720)),
                     seed_start=int(req.get("seedStart", 0)),
                     replay_every_episodes=int(req.get("replayEveryEpisodes", 0)),
                     replay_dir=str(req.get("replayDir", "")),
@@ -1309,7 +1312,7 @@ class HybridTrainer:
                     "n_steps": worker_steps[i],
                     "levels": self.levels,
                     "maxTicks": self.max_episode_steps,
-                    "tickNormTicks": self.max_episode_steps,
+                    "tickNormTicks": 720,
                     "seedStart": worker_seeds[i],
                     "replayEveryEpisodes": self.replay_episode_interval,
                     "replayDir": self.replay_dir,
@@ -1347,7 +1350,7 @@ class HybridTrainer:
             if failed:
                 if attempt == 0:
                     print(f"  Worker failure detected ({failed}), restarting and retrying collect once...")
-                    for idx in failed:
+                    for idx in range(num_w):
                         self._restart_worker(idx)
                     self._send_weights()
                     continue
@@ -2098,16 +2101,18 @@ def train() -> None:
     parser.add_argument("--gamma", type=float, default=0.997, help="Discount factor (default: 0.997)")
     parser.add_argument("--ent-coef", type=float, default=0.015, help="Entropy coefficient (default: 0.015)")
     parser.add_argument("--ent-coef-final", type=float, default=0.003, help="Final entropy coefficient at end of training (default: 0.003)")
-    parser.add_argument("--max-ticks", type=int, default=720, help="Max ticks per episode (default: 720)")
+    parser.add_argument("--max-ticks", type=int, default=1800, help="Max ticks per episode (default: 1800, 30 seconds)")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate (default: 1e-4)")
     parser.add_argument("--n-steps", type=int, default=8192, help="Rollout steps per iteration (default: 8192)")
     parser.add_argument("--clip-range", type=float, default=0.15, help="PPO clip range (default: 0.15)")
     parser.add_argument("--clip-range-final", type=float, default=0.08, help="Final PPO clip range at end of training (default: 0.08)")
     parser.add_argument("--target-kl", type=float, default=0.02, help="PPO target KL early-stop threshold (default: 0.02)")
     parser.add_argument("--phase-pass-evals", type=int, default=2, help="Consecutive confidence-bound phase eval passes required before promotion")
+    parser.add_argument("--seed", type=int, default=42, help="Training seed for independent reproducibility runs")
+    parser.add_argument("--eval-seed", type=int, default=1_000_000_000, help="Fixed validation seed namespace")
     parser.add_argument("--eval-interval", type=int, default=500, help="Run deterministic eval every N collected episodes (default: 500)")
     parser.add_argument("--eval-episodes", type=int, default=12, help="Held-out randomized eval episodes per level (default: 12)")
-    parser.add_argument("--eval-levels", type=str, default="1,2,3,4,5,6,7,8,9", help="Comma-separated levels for deterministic eval")
+    parser.add_argument("--eval-levels", type=str, default="1,2,3,4,5,6,7,8,9,10", help="Comma-separated levels for deterministic eval")
     parser.add_argument("--max-update-steps", type=int, default=16384, help="Cap total rollout steps per PPO update (default: 16384)")
     cpu_count = os.cpu_count() or 1
     default_workers = max(1, min(cpu_count - 4, 12))  # leave cores for OS + Python; cap at 12
@@ -2155,6 +2160,8 @@ def train() -> None:
         eval_levels=eval_levels,
         num_workers=args.num_workers,
         phase_pass_evals_required=args.phase_pass_evals,
+        seed=args.seed,
+        eval_seed_start=args.eval_seed,
     )
 
     def request_graceful_shutdown(signum: int, _frame: Any) -> None:

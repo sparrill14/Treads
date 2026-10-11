@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 from typing import cast
 
@@ -55,6 +56,11 @@ def main() -> None:
             json.dump({"status": "running"}, handle)
         old_timestamp = time.time() - 120.0
         os.utime(stale_manifest, (old_timestamp, old_timestamp))
+        history_path = os.path.join(stale_dir, 'metrics_history.jsonl')
+        with open(history_path, 'w', encoding='utf-8') as handle:
+            for iteration in range(10_000):
+                handle.write(json.dumps({'iteration': iteration, 'avgReward50': iteration / 100}) + '\n')
+            handle.write('{"iteration":')  # Simulate a partially written append.
 
         port = free_port()
         environment = os.environ.copy()
@@ -85,6 +91,10 @@ def main() -> None:
             stale = next(run for run in runs if run["id"] == "stale-run")
             assert stale["status"] == "stale"
             assert stale["isRunning"] is False
+            assert stale['latestMetrics']['iteration'] == 9999
+            assert stale['latestMetrics']['avgReward50'] == 99.99
+            # The summary optimization must preserve full history for charts.
+            assert len(fetch_json(port, '/api/metrics?run=stale-run')['history']) == 10_000
 
             with open(CONTRACT_PATH, "r", encoding="utf-8") as source:
                 contract = json.load(source)
@@ -102,8 +112,22 @@ def main() -> None:
             ) as destination:
                 json.dump(contract, destination)
             compatible = fetch_model_status(port)
+            # A compatible ONNX sidecar alone cannot run the synchronous browser actor.
+            assert compatible["available"] is False
+            with open(os.path.join(output_dir, "treads_policy.weights.json"), "w", encoding="utf-8") as handle:
+                json.dump({"fixture": True}, handle)
+            compatible = fetch_model_status(port)
             assert compatible["available"] is True
+            assert fetch_json(port, "/api/model/current.weights.json")["fixture"] is True
             assert fetch_model_status(port, "missing-run")["available"] is False
+            for run_id in ('..', '../outside', '..\\outside', '.', '/absolute', 'C:\\absolute'):
+                query = urllib.parse.urlencode({'run': run_id})
+                try:
+                    fetch_json(port, '/api/metrics?' + query)
+                except urllib.error.HTTPError as error:
+                    assert error.code == 400, error
+                else:
+                    raise AssertionError(f'Dashboard accepted an unsafe run path: {run_id}')
         finally:
             process.terminate()
             try:

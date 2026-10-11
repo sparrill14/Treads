@@ -17,6 +17,7 @@ const BOMB_DIM = NEURAL_MODEL_CONTRACT.observation.bombDim;
 const MAX_FUSE_TICKS = 360;
 const MAX_BLAST_RADIUS = 100;
 const PROJECTILE_SPEED_NORM = 300;
+export const POLICY_TICK_NORM_TICKS = 720;
 
 const SQRT2_2 = Math.SQRT2 / 2;
 const MOVE_DIR_MAP: Record<MoveIntent, [number, number]> = {
@@ -90,7 +91,7 @@ function hasLineOfSight(obs: TankObservation, sx: number, sy: number, tx: number
  */
 export function normalizePolicyObservation(
 	obs: TankObservation,
-	maxTicks = 720,
+	maxTicks = POLICY_TICK_NORM_TICKS,
 	navigationPlanner?: NavigationPlanner | null
 ): number[] {
 	const result = new Array<number>(OBS_SIZE).fill(0);

@@ -27,16 +27,25 @@ export class InputManager {
 	private onKeyUp: (e: KeyboardEvent) => void;
 	private onMouseMove: (e: MouseEvent) => void;
 	private onClick: (e: MouseEvent) => void;
+	private readonly clearInput = (): void => {
+		for (const key of Object.keys(this.keyStates)) this.keyStates[key] = false;
+		this.shootRequested = false;
+		this.bombRequested = false;
+	};
 
 	constructor(canvas: HTMLCanvasElement) {
 		this.canvas = canvas;
+		this.canvas.tabIndex = 0;
 
 		this.onKeyDown = (event: KeyboardEvent) => {
+			if (document.activeElement !== this.canvas) return;
 			if (Object.prototype.hasOwnProperty.call(this.keyStates, event.key)) {
+				event.preventDefault();
 				this.keyStates[event.key] = true;
 			}
 			if (event.code === 'Space') {
-				this.bombRequested = true;
+				event.preventDefault();
+				if (!event.repeat) this.bombRequested = true;
 			}
 		};
 
@@ -59,6 +68,8 @@ export class InputManager {
 
 		this.onClick = (event: MouseEvent) => {
 			if (this.canvas && this.canvas.contains(event.target as Node)) {
+				this.canvas.focus({ preventScroll: true });
+				this.onMouseMove(event);
 				this.shootRequested = true;
 			}
 		};
@@ -67,6 +78,8 @@ export class InputManager {
 		document.addEventListener('keyup', this.onKeyUp);
 		document.addEventListener('mousemove', this.onMouseMove);
 		document.addEventListener('click', this.onClick);
+		window.addEventListener('blur', this.clearInput);
+		this.canvas.addEventListener('blur', this.clearInput);
 	}
 
 	public up(): boolean {
@@ -106,5 +119,7 @@ export class InputManager {
 		document.removeEventListener('keyup', this.onKeyUp);
 		document.removeEventListener('mousemove', this.onMouseMove);
 		document.removeEventListener('click', this.onClick);
+		window.removeEventListener('blur', this.clearInput);
+		this.canvas.removeEventListener('blur', this.clearInput);
 	}
 }

@@ -32,6 +32,7 @@ export class GameCanvas {
 		this.gameRenderer.initializeCanvas(width, height);
 		this.tickMs = 1000 / initialState.tickRate;
 		this.previousState = this.simulation.getStateSnapshot();
+		this.publishState(initialState);
 		document.addEventListener('keydown', this.onKeyDown);
 	}
 
@@ -74,7 +75,19 @@ export class GameCanvas {
 
 		this.gameRenderer.updateVisuals(frameDelta / 1000);
 		this.gameRenderer.render(currentState, this.previousState, alpha);
+		this.publishState(currentState);
 		this.animationFrameID = requestAnimationFrame(this.gameLoop.bind(this));
+	}
+
+	private publishState(state: ReturnType<Simulation['getState']>): void {
+		this.gameRenderer.canvas.dataset.tick = String(state.tick);
+		this.gameRenderer.canvas.dataset.status = state.status;
+		const player = state.tanks.find((tank) => tank.id === state.playerTankId);
+		if (player) {
+			this.gameRenderer.canvas.dataset.playerX = String(player.x);
+			this.gameRenderer.canvas.dataset.playerY = String(player.y);
+			this.gameRenderer.canvas.dataset.playerHealth = String(player.health);
+		}
 	}
 
 	private handleEvents(events: SimulationEvent[]): void {

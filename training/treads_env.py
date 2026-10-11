@@ -104,7 +104,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         self,
         level: int = 1,
         seed_start: int = 0,
-        max_episode_steps: int = 720,
+        max_episode_steps: int = 1800,
         spawn_jitter: bool = False,
         procedural_levels: bool = False,
         difficulty_band: float = 0.0,
@@ -120,7 +120,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         self.difficulty_band = float(np.clip(difficulty_band, 0.0, 1.0))
         self.player_max_ammo = int(player_max_ammo)
         self.player_max_bombs = int(player_max_bombs)
-        set_tick_norm_ticks(max_episode_steps)
+        set_tick_norm_ticks(720)
         self.process: Optional[subprocess.Popen[str]] = None
         self._grpc_port: Optional[int] = None
         self._grpc_channel: Optional[grpc.Channel] = None
@@ -311,6 +311,8 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         self._prev_enemy_alive_count = len(enemies)
         self._prev_enemy_health_total = sum(float(enemy["health"]) for enemy in enemies)
         self._prev_self_health = float(obs_raw["self"]["health"])
+        self._prev_own_bomb_count = sum(bomb["ownerTankId"] == obs_raw["self"]["id"]
+                                        for bomb in obs_raw.get("bombs", []))
         self._prev_enemy_dist, self._approach_target_id = self._nearest_enemy_distance(obs_raw)
 
     def _compute_reward(
@@ -336,34 +338,20 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         enemies_killed = self._prev_enemy_alive_count - len(alive_enemies)
         if enemies_killed > 0:
             reward += KILL_REWARD * enemies_killed
+        own_bomb_count = sum(bomb["ownerTankId"] == obs_raw["self"]["id"]
+                             for bomb in obs_raw.get("bombs", []))
+        reward -= 0.03 * max(0, own_bomb_count - self._prev_own_bomb_count)
+        self._prev_own_bomb_count = own_bomb_count
 
-        terminal = bool(done_msg and (done_msg.get("win") or done_msg.get("loss")))
-        tracked_enemy = next(
-            (enemy for enemy in alive_enemies if str(enemy["id"]) == self._approach_target_id),
-            None,
-        )
-        if self._prev_enemy_dist >= 0.0 and self._approach_target_id:
-            close_potential = terminal or tracked_enemy is None
-            current_enemy_dist = (
-                0.0
-                if close_potential
-                else self._enemy_path_distance(obs_raw, cast(Dict[str, Any], tracked_enemy))
-            )
-            previous_potential = 1.0 - min(max(self._prev_enemy_dist / ARENA_DIAGONAL, 0.0), 1.0)
-            current_potential = (
-                0.0
-                if close_potential
-                else 1.0 - min(max(current_enemy_dist / ARENA_DIAGONAL, 0.0), 1.0)
-            )
-            reward += APPROACH_SCALE * (
-                REWARD_GAMMA * current_potential - previous_potential
-            )
-            self._prev_enemy_dist = -1.0 if close_potential else current_enemy_dist
-            if close_potential:
-                self._approach_target_id = ""
-
-        if not terminal and not self._approach_target_id and alive_enemies:
-            self._prev_enemy_dist, self._approach_target_id = self._nearest_enemy_distance(obs_raw)
+        terminal = bool(done_msg and not done_msg.get("timeout") and
+                        (done_msg.get("win") or done_msg.get("loss") or done_msg.get("draw")))
+        current_enemy_dist, target_id = self._nearest_enemy_distance(obs_raw)
+        previous_potential = 1.0 - min(max(self._prev_enemy_dist / ARENA_DIAGONAL, 0.0), 1.0)
+        current_potential = (0.0 if terminal or not target_id else
+                             1.0 - min(max(current_enemy_dist / ARENA_DIAGONAL, 0.0), 1.0))
+        reward += APPROACH_SCALE * (REWARD_GAMMA * current_potential - previous_potential)
+        self._prev_enemy_dist = current_enemy_dist if target_id else float("inf")
+        self._approach_target_id = target_id
 
         self._prev_enemy_alive_count = len(alive_enemies)
         self._prev_enemy_health_total = enemy_health_total
@@ -372,9 +360,9 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         if done_msg is not None:
             if done_msg.get("win"):
                 reward += TERMINAL_WIN_REWARD
-            elif done_msg.get("loss"):
+            elif done_msg.get("loss") or done_msg.get("draw"):
                 reward += DEATH_REWARD + TERMINAL_LOSS_REWARD
-            elif done_msg.get("draw") or done_msg.get("timeout"):
+            elif done_msg.get("timeout"):
                 reward += TIMEOUT_REWARD
 
         return reward
@@ -441,8 +429,9 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
             assert self._last_obs_raw is not None
             reward = self._compute_reward(self._last_obs_raw, done_msg=result)
             obs = self._normalize_obs(self._last_obs_raw)
-            terminated = bool(result and (result.get("win") or result.get("loss")))
-            truncated = bool(result and (result.get("draw") or result.get("timeout")))
+            terminated = bool(result and not result.get("timeout") and
+                              (result.get("win") or result.get("loss") or result.get("draw")))
+            truncated = bool(result and result.get("timeout"))
             return obs, reward, terminated, truncated, {"result": result}
 
         observation = cast(Optional[Dict[str, Any]], msg.get("observation"))
@@ -467,7 +456,7 @@ class TreadsEnvDiscrete(gym.Env[NDArray[np.float32], Any]):
 
     metadata = {"render_modes": []}
 
-    def __init__(self, level: int = 1, seed_start: int = 0, max_episode_steps: int = 720) -> None:
+    def __init__(self, level: int = 1, seed_start: int = 0, max_episode_steps: int = 1800) -> None:
         super().__init__()
         self._env = TreadsEnv(
             level=level, seed_start=seed_start, max_episode_steps=max_episode_steps
