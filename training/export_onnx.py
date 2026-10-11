@@ -17,6 +17,7 @@ from numpy.typing import NDArray
 sys.path.insert(0, os.path.dirname(__file__))
 
 from sb3_compat import ensure_pickle_compat
+from atomic_files import atomic_replace
 from stable_baselines3 import PPO
 from treads_env import OBS_SIZE
 from model_contract import (
@@ -108,7 +109,7 @@ def export_to_onnx(model_path: str, onnx_path: str) -> None:
                        for key, value in policy.state_dict().items()}, handle, allow_nan=False)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_path, weights_path)
+        atomic_replace(temp_path, weights_path)
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)

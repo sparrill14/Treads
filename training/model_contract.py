@@ -3,6 +3,7 @@
 import json
 import os
 from typing import Any, Dict, Iterable, Optional, Tuple, cast
+from atomic_files import atomic_replace
 
 CONTRACT_PATH = os.path.join(
     os.path.dirname(__file__),
@@ -48,7 +49,7 @@ def write_contract_for_model(model_path: str) -> str:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_path, destination)
+        atomic_replace(temp_path, destination)
         return destination
     finally:
         if os.path.exists(temp_path):

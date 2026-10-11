@@ -45,6 +45,7 @@ from model_contract import (
     assert_contract_compatible,
     write_contract_for_model,
 )
+from atomic_files import atomic_replace
 
 ensure_pickle_compat()
 
@@ -690,7 +691,7 @@ class HybridTrainer:
         temp_model_path = f"{model_path}.{os.getpid()}.{threading.get_ident()}.tmp.zip"
         try:
             cast(Any, self.model).save(temp_model_path)
-            os.replace(temp_model_path, model_path)
+            atomic_replace(temp_model_path, model_path)
         finally:
             if os.path.exists(temp_model_path):
                 os.remove(temp_model_path)
@@ -792,7 +793,7 @@ class HybridTrainer:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_path, path)
+        atomic_replace(temp_path, path)
 
     def _count_replays(self) -> int:
         if not os.path.isdir(self.replay_dir):
@@ -1290,7 +1291,7 @@ class HybridTrainer:
         tmp_file = self._weights_file_path + f".{os.getpid()}.tmp"
         with open(tmp_file, "w", encoding="utf-8") as handle:
             json.dump(weights, handle, separators=(",", ":"))
-        os.replace(tmp_file, self._weights_file_path)
+        atomic_replace(tmp_file, self._weights_file_path)
         msg: Dict[str, Any] = {"type": "set_weights_from_file", "path": self._weights_file_path}
         for w in self.workers:
             self._send_msg_to(w, msg)

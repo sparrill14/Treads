@@ -4,6 +4,8 @@ import glob
 import os
 import sys
 import tempfile
+import threading
+import time
 from typing import Optional
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -37,6 +39,19 @@ def main() -> None:
             first.ret_rms.mean = 1.25
             first.ret_rms.var = 2.5
             model_path = first._save_model_checkpoint(checkpoint)
+            if os.name == "nt":
+                # An antivirus/indexer-style reader prevents deleting the old ZIP
+                # until it releases its Windows handle.
+                reader = open(model_path, "rb")
+                release = threading.Timer(2.0, reader.close)
+                release.start()
+                try:
+                    started = time.monotonic()
+                    first._save_model_checkpoint(checkpoint)
+                    assert time.monotonic() - started >= 1.5
+                finally:
+                    release.join()
+                    reader.close()
         finally:
             first.close()
 

@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 sys.path.insert(0, os.path.dirname(__file__))
 
 from model_contract import assert_contract_compatible  # noqa: E402
+from atomic_files import atomic_replace
 
 
 def _atomic_json_dump(path: str, payload: Dict[str, Any]) -> None:
@@ -23,7 +24,7 @@ def _atomic_json_dump(path: str, payload: Dict[str, Any]) -> None:
         handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(temp_path, path)
+    atomic_replace(temp_path, path)
 
 
 def find_latest_checkpoint(output_dir: str) -> Optional[Tuple[str, int]]:
