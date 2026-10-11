@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, TextIO, Tuple, cast
 import grpc
 import numpy as np
+import torch
 import gymnasium as gym
 from gymnasium import spaces
 from numpy.typing import NDArray
@@ -40,6 +41,7 @@ from model_contract import (
     ACTION_HEAD_SIZES,
     MODEL_CONTRACT,
     OBS_SIZE,
+    POLICY_TICK_NORM_TICKS,
     assert_contract_compatible,
     write_contract_for_model,
 )
@@ -184,11 +186,12 @@ class HybridTrainer:
         n_steps: int = 4096,
         batch_size: int = 512,
         n_epochs: int = 10,
-        gamma: float = 0.997,
-        gae_lambda: float = 0.95,
+        gamma: float = 0.9995,
+        gae_lambda: float = 0.99,
         learning_rate: float = 1e-4,
         clip_range: float = 0.15,
         clip_range_final: float = 0.08,
+        clip_range_vf: Optional[float] = None,
         ent_coef: float = 0.015,
         ent_coef_final: float = 0.003,
         target_kl: float = 0.02,
@@ -206,7 +209,12 @@ class HybridTrainer:
         seed: int = 42,
         num_workers: int = 4,
         phase_pass_evals_required: int = 2,
+        torch_threads: Optional[int] = None,
     ) -> None:
+        self.torch_threads = torch_threads if torch_threads is not None else min(4, os.cpu_count() or 1)
+        if self.torch_threads < 1:
+            raise ValueError("torch_threads must be positive")
+        torch.set_num_threads(self.torch_threads)
         self._explicit_levels = levels is not None
         self.curriculum: List[Dict[str, Any]] = curriculum or DEFAULT_CURRICULUM
         self.current_phase_index = 0
@@ -315,7 +323,7 @@ class HybridTrainer:
                 gamma=gamma,
                 gae_lambda=gae_lambda,
                 clip_range=clip_schedule,
-                clip_range_vf=clip_schedule,
+                clip_range_vf=clip_range_vf,
                 vf_coef=vf_coef,
                 max_grad_norm=max_grad_norm,
                 ent_coef=ent_coef,
@@ -343,7 +351,7 @@ class HybridTrainer:
                 gamma=gamma,
                 gae_lambda=gae_lambda,
                 clip_range=clip_schedule,
-                clip_range_vf=clip_schedule,
+                clip_range_vf=clip_range_vf,
                 vf_coef=vf_coef,
                 max_grad_norm=max_grad_norm,
                 ent_coef=ent_coef,
@@ -354,7 +362,6 @@ class HybridTrainer:
             )
             # The semantic zero-residual aim action is useful immediately and
             # still leaves broad categorical exploration available.
-            import torch
             with torch.no_grad():
                 aim_offset = ACTION_HEAD_SIZES[0]
                 neutral_bin = int(MODEL_CONTRACT["action"]["neutralAimBin"])
@@ -513,7 +520,7 @@ class HybridTrainer:
                                 for seed in assignments[index]
                             ],
                             max_ticks=self.max_episode_steps,
-                            tick_norm_ticks=720,
+                            tick_norm_ticks=POLICY_TICK_NORM_TICKS,
                             procedural_levels=True,
                             difficulty_band=0.25 if level <= 10 else max(0.15, self.curriculum_difficulty_band),
                             player_max_ammo=-1 if level <= 10 else self._get_player_max_ammo(),
@@ -834,6 +841,8 @@ class HybridTrainer:
                 "gaeLambda": self.gae_lambda,
                 "learningRate": learning_rate,
                 "clipRange": clip_range,
+                "clipRangeVf": None if self.model.clip_range_vf is None else self.model.clip_range_vf(1.0),
+                "torchThreads": self.torch_threads,
                 "entCoef": cast(float, self.model.ent_coef),
                 "targetKl": self.target_kl,
                 "maxEpisodeSteps": self.max_episode_steps,
@@ -1233,7 +1242,7 @@ class HybridTrainer:
                     n_steps=int(req.get("n_steps", 4096)),
                     levels=[int(v) for v in cast(List[Any], req.get("levels", [1]))],
                     max_ticks=int(req.get("maxTicks", 1800)),
-                    tick_norm_ticks=int(req.get("tickNormTicks", 720)),
+                    tick_norm_ticks=int(req.get("tickNormTicks", POLICY_TICK_NORM_TICKS)),
                     seed_start=int(req.get("seedStart", 0)),
                     replay_every_episodes=int(req.get("replayEveryEpisodes", 0)),
                     replay_dir=str(req.get("replayDir", "")),
@@ -1245,7 +1254,7 @@ class HybridTrainer:
                     player_max_ammo=int(req.get("playerMaxAmmo", 0)),
                     player_max_bombs=int(req.get("playerMaxBombs", 0)),
                     global_episode_offset=int(req.get("globalEpisodeOffset", 0)),
-                    gamma=float(req.get("gamma", 0.99)),
+                    gamma=float(req.get("gamma", 0.9995)),
                 ),
                 timeout=timeout_sec,
             )
@@ -1312,7 +1321,7 @@ class HybridTrainer:
                     "n_steps": worker_steps[i],
                     "levels": self.levels,
                     "maxTicks": self.max_episode_steps,
-                    "tickNormTicks": 720,
+                    "tickNormTicks": POLICY_TICK_NORM_TICKS,
                     "seedStart": worker_seeds[i],
                     "replayEveryEpisodes": self.replay_episode_interval,
                     "replayDir": self.replay_dir,
@@ -2098,7 +2107,12 @@ def train() -> None:
     parser.add_argument("--output-dir", type=str, default="", help="Optional output directory override")
     parser.add_argument("--checkpoint-interval", type=int, default=500, help="Checkpoint interval in episodes")
     parser.add_argument("--replay-interval", type=int, default=250, help="Replay save interval in episodes")
-    parser.add_argument("--gamma", type=float, default=0.997, help="Discount factor (default: 0.997)")
+    parser.add_argument("--gamma", type=float, default=0.9995, help="Discount factor (default: 0.9995 for 30-second matches)")
+    parser.add_argument("--gae-lambda", type=float, default=0.99, help="GAE trace decay (default: 0.99)")
+    parser.add_argument("--value-clip", type=float, default=None, help="Optional critic clipping; disabled by default")
+    parser.add_argument("--batch-size", type=int, default=512, help="PPO minibatch size (default: 512)")
+    parser.add_argument("--epochs", type=int, default=10, help="PPO epochs per update (default: 10)")
+    parser.add_argument("--torch-threads", type=int, default=min(4, os.cpu_count() or 1), help="CPU threads for PPO updates (default: at most 4)")
     parser.add_argument("--ent-coef", type=float, default=0.015, help="Entropy coefficient (default: 0.015)")
     parser.add_argument("--ent-coef-final", type=float, default=0.003, help="Final entropy coefficient at end of training (default: 0.003)")
     parser.add_argument("--max-ticks", type=int, default=1800, help="Max ticks per episode (default: 1800, 30 seconds)")
@@ -2118,6 +2132,12 @@ def train() -> None:
     default_workers = max(1, min(cpu_count - 4, 12))  # leave cores for OS + Python; cap at 12
     parser.add_argument("--num-workers", type=int, default=default_workers, help=f"Number of parallel rollout workers (default: {default_workers}, detected {cpu_count} cores)")
     args = parser.parse_args()
+    if args.num_workers < 1 or args.torch_threads < 1 or args.n_steps < 2 or args.max_update_steps < 2 or args.batch_size < 2 or args.epochs < 1:
+        parser.error("workers and epochs must be positive; rollout, update, and batch sizes must be at least two")
+    if not 0 < args.gamma < 1 or not 0 < args.gae_lambda <= 1:
+        parser.error("gamma must lie in (0, 1) and gae-lambda in (0, 1]")
+    if args.value_clip is not None and args.value_clip <= 0:
+        parser.error("value-clip must be positive when supplied")
 
     # Keep updates fresh: enforce worker minimum while capping total steps per PPO update.
     min_steps_per_worker = 1024
@@ -2140,13 +2160,14 @@ def train() -> None:
     trainer = HybridTrainer(
         levels=levels,
         n_steps=effective_n_steps,
-        batch_size=512,
-        n_epochs=10,
+        batch_size=args.batch_size,
+        n_epochs=args.epochs,
         gamma=args.gamma,
-        gae_lambda=0.95,
+        gae_lambda=args.gae_lambda,
         learning_rate=args.lr,
         clip_range=args.clip_range,
         clip_range_final=args.clip_range_final,
+        clip_range_vf=args.value_clip,
         ent_coef=args.ent_coef,
         ent_coef_final=args.ent_coef_final,
         target_kl=args.target_kl,
@@ -2162,6 +2183,7 @@ def train() -> None:
         phase_pass_evals_required=args.phase_pass_evals,
         seed=args.seed,
         eval_seed_start=args.eval_seed,
+        torch_threads=args.torch_threads,
     )
 
     def request_graceful_shutdown(signum: int, _frame: Any) -> None:
@@ -2179,7 +2201,7 @@ def train() -> None:
     else:
         print(f"Explicit scenarios: {trainer.levels} (curriculum disabled)")
     print(
-        f"Gamma: {args.gamma} | EntCoef: {args.ent_coef}->{args.ent_coef_final} | "
+        f"Gamma: {args.gamma} | GAE lambda: {args.gae_lambda} | EntCoef: {args.ent_coef}->{args.ent_coef_final} | "
         f"MaxTicks: {args.max_ticks} | ClipRange: {args.clip_range}->{args.clip_range_final} | "
         f"TargetKL: {args.target_kl}"
     )

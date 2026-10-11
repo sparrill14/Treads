@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 from stable_baselines3 import PPO
 
-from model_contract import assert_contract_compatible
+from model_contract import assert_contract_compatible, POLICY_TICK_NORM_TICKS
 from train_hybrid import HybridTrainer, TREADS_PB2
 
 
@@ -35,7 +35,8 @@ def summarize(episodes: list[dict]) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("model")
+    parser.add_argument("model", nargs="?")
+    parser.add_argument("--heuristic-only", action="store_true", help="Benchmark heuristics without a checkpoint")
     parser.add_argument("--episodes", type=int, default=30, help="Episodes per level and map variant")
     parser.add_argument("--max-ticks", type=int, default=1800)
     parser.add_argument("--workers", type=int, default=4)
@@ -45,6 +46,10 @@ def main() -> int:
     parser.add_argument("--min-overall", type=float, default=0.70)
     parser.add_argument("--min-level", type=float, default=0.40)
     args = parser.parse_args()
+    if not args.model and not args.heuristic_only:
+        parser.error("a checkpoint is required unless --heuristic-only is selected")
+    if args.heuristic_only and args.gate:
+        parser.error("--gate requires a neural candidate")
     if args.episodes < 1 or args.max_ticks < 1 or args.workers < 1:
         parser.error("episodes, max-ticks, and workers must be positive")
     if not 0 <= args.min_overall <= 1 or not 0 <= args.min_level <= 1:
@@ -52,18 +57,20 @@ def main() -> int:
     if not 0 <= args.seed <= 2_147_483_647 - 100_000 - args.episodes:
         parser.error("seed range must fit the RPC signed 32-bit integer")
     args.workers = min(args.workers, 10 * args.episodes)
-    assert_contract_compatible(args.model)
-    report = {"model": str(Path(args.model).resolve()), "seed": args.seed,
+    if not args.heuristic_only:
+        assert_contract_compatible(args.model)
+    report = {"model": str(Path(args.model).resolve()) if args.model else None, "seed": args.seed,
               "maxTicks": args.max_ticks, "episodesPerLevel": args.episodes, "results": {}}
 
     with tempfile.TemporaryDirectory() as output_dir:
         trainer = HybridTrainer(levels=[1], n_steps=max(64, args.workers), batch_size=32,
                                 n_epochs=1, num_workers=args.workers, output_dir=output_dir)
         try:
-            trainer.model = PPO.load(args.model, device="cpu")
-            assert_contract_compatible(args.model, trainer.model.action_space)
+            if not args.heuristic_only:
+                trainer.model = PPO.load(args.model, device="cpu")
+                assert_contract_compatible(args.model, trainer.model.action_space)
             trainer.send_weights()
-            for controller in ("neural", "heuristic"):
+            for controller in (("heuristic",) if args.heuristic_only else ("neural", "heuristic")):
                 controller_results = {}
                 for variant in ("canonical", "randomized"):
                     jobs = [(level, args.seed + level * 10_000 + index)
@@ -75,7 +82,7 @@ def main() -> int:
                             TREADS_PB2.EvaluateRequest(
                                 episodes=[TREADS_PB2.EvaluationEpisode(level=level, seed=seed)
                                           for level, seed in shards[shard_index]],
-                                max_ticks=args.max_ticks, tick_norm_ticks=720,
+                                max_ticks=args.max_ticks, tick_norm_ticks=POLICY_TICK_NORM_TICKS,
                                 procedural_levels=variant == "randomized", difficulty_band=0.25,
                                 player_max_ammo=-1, player_max_bombs=-1,
                                 canonical_spawns=variant == "canonical",
@@ -100,8 +107,8 @@ def main() -> int:
         finally:
             trainer.close()
 
-    candidate = report["results"]["neural"]
-    report["ready"] = all(result["wilson95Lower"] >= args.min_overall and
+    candidate = report["results"].get("neural")
+    report["ready"] = None if candidate is None else all(result["wilson95Lower"] >= args.min_overall and
                           all(level["winRate"] >= args.min_level for level in result["byLevel"].values())
                           for result in candidate.values())
     report["thresholds"] = {"overallWilson95Lower": args.min_overall, "perLevelWinRate": args.min_level}
@@ -109,7 +116,8 @@ def main() -> int:
         destination = Path(args.output)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    print(f"Competence gate: {'PASS' if report['ready'] else 'FAIL'}", flush=True)
+    print("Heuristic reference benchmark complete" if args.heuristic_only else
+          f"Competence gate: {'PASS' if report['ready'] else 'FAIL'}", flush=True)
     return 1 if args.gate and not report["ready"] else 0
 
 

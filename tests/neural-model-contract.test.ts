@@ -26,6 +26,8 @@ export function runNeuralModelContractTests(): void {
 			dimensions.summaryDim
 	);
 	assert.deepEqual(ACTION_HEAD_SIZES, [9, 65, 2, 2]);
+	assert.throws(() => assertCompatibleContract({ ...NEURAL_MODEL_CONTRACT, contractVersion: 3 }),
+		/Incompatible neural model contract/, 'The richer observation must reject legacy checkpoints');
 	assert.throws(
 		() =>
 			assertCompatibleContract({
@@ -57,6 +59,16 @@ export function runNeuralModelContractTests(): void {
 		arena: state.arena,
 	};
 	const neutral = NEURAL_MODEL_CONTRACT.action.neutralAimBin;
+	const ready = normalizePolicyObservation(observation);
+	const cooling = normalizePolicyObservation({ ...observation,
+		self: { ...player, bombCooldownTicks: 30, bombCooldownTicksOnPlant: 60, maxAmmo: 2 },
+		rules: { ...state.rules, projectileBounces: false, turretSpeedMultiplier: 2 },
+	});
+	assert.notEqual(ready[22], cooling[22], 'Bomb cooldown must be observable');
+	assert.notEqual(ready[23], cooling[23], 'Absolute ammunition capacity must be observable');
+	assert.notEqual(ready[27], cooling[27], 'Bounce rules must be observable');
+	assert.notEqual(ready[28], cooling[28], 'Turret speed rules must be observable');
+	assert.ok([...ready, ...cooling].every((value) => Number.isFinite(value) && value >= 0 && value <= 1));
 	const action = decodePolicyAction([0, neutral, 1, 1], observation);
 	const expected = Math.atan2(140, 500);
 	assert.ok(Math.abs(action.aimAngle - expected) < 1e-12, 'Neutral residual must aim exactly at nearest enemy');

@@ -13,8 +13,8 @@ import { TrainingDashboard } from './TrainingDashboard';
 function levelSubtitle(levelNumber: number): string {
 	const config = LEVEL_CONFIGS[levelNumber - 1];
 	const tags = [
-		`${config.enemies?.length ?? 0} enemies`,
-		`${config.obstacles.length} obstacles`,
+		`${config.enemies?.length ?? 0} ${(config.enemies?.length ?? 0) === 1 ? 'enemy' : 'enemies'}`,
+		`${config.obstacles.length} ${config.obstacles.length === 1 ? 'obstacle' : 'obstacles'}`,
 		config.rules?.projectileBounces === false ? 'no bounces' : 'bounces on',
 	];
 	return tags.join(' | ');
@@ -303,7 +303,7 @@ export class LevelSelector {
 			const title = document.createElement('strong');
 			title.textContent = `Level ${level}`;
 			const meta = document.createElement('span');
-			meta.textContent = `${config.enemies?.length ?? 0} enemy | ${config.obstacles.length} obstacle`;
+			meta.textContent = `${config.enemies?.length ?? 0} ${(config.enemies?.length ?? 0) === 1 ? 'enemy' : 'enemies'} | ${config.obstacles.length} ${config.obstacles.length === 1 ? 'obstacle' : 'obstacles'}`;
 			const rules = document.createElement('small');
 			rules.textContent = config.rules?.projectileBounces === false ? 'No bounce ruleset' : 'Standard bounce ruleset';
 			card.append(title, meta, rules);

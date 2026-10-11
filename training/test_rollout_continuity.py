@@ -9,6 +9,7 @@ import torch
 import grpc
 
 from train_hybrid import HybridTrainer, TREADS_PB2
+from model_contract import POLICY_TICK_NORM_TICKS
 
 
 def main() -> None:
@@ -27,7 +28,7 @@ def main() -> None:
             first = trainer.collect_rollout(10)
             assert first["episode_starts"][0] == 1
             assert not first["episode_rewards"]
-            assert round(first["obs"][-1][8] * 720) == 63
+            assert round(first["obs"][-1][8] * POLICY_TICK_NORM_TICKS) == 63
 
             # Evaluation and publishing updated weights must not reset the live match.
             trainer._evaluate_levels([111], 1, 1_500_000_000)
@@ -42,12 +43,12 @@ def main() -> None:
             trainer.send_weights()
             second = trainer.collect_rollout(10)
             assert second["episode_starts"][0] == 0
-            assert round(second["obs"][0][8] * 720) == 64
+            assert round(second["obs"][0][8] * POLICY_TICK_NORM_TICKS) == 64
             trainer.populate_buffer(second)
             assert np.isfinite(trainer.model.rollout_buffer.advantages).all()
 
             third = trainer.collect_rollout(10)
-            assert round(third["obs"][0][8] * 720) == 128
+            assert round(third["obs"][0][8] * POLICY_TICK_NORM_TICKS) == 128
             assert third["episode_lengths"] == [192]
             assert third["worker_rollouts"][0]["last_done"] is True
             fourth = trainer.collect_rollout(10)

@@ -17,7 +17,7 @@ const BOMB_DIM = NEURAL_MODEL_CONTRACT.observation.bombDim;
 const MAX_FUSE_TICKS = 360;
 const MAX_BLAST_RADIUS = 100;
 const PROJECTILE_SPEED_NORM = 300;
-export const POLICY_TICK_NORM_TICKS = 720;
+export const POLICY_TICK_NORM_TICKS = NEURAL_MODEL_CONTRACT.observation.tickNormTicks;
 
 const SQRT2_2 = Math.SQRT2 / 2;
 const MOVE_DIR_MAP: Record<MoveIntent, [number, number]> = {
@@ -99,6 +99,7 @@ export function normalizePolicyObservation(
 	const self = obs.self;
 	const sx = self.x + self.size / 2;
 	const sy = self.y + self.size / 2;
+	const rules = obs.rules;
 	const livingEnemies = obs.enemies
 		.filter((enemy) => !enemy.destroyed)
 		.sort((a, b) => {
@@ -158,6 +159,16 @@ export function normalizePolicyObservation(
 		result[idx + 20] = 0;
 		result[idx + 21] = 0;
 	}
+	result[idx + 22] = self.bombCooldownTicks / Math.max(self.bombCooldownTicksOnPlant, 1);
+	result[idx + 23] = self.maxAmmo / 10;
+	result[idx + 24] = self.maxBombs / 10;
+	result[idx + 25] = self.maxAmmo > 0 ? (self.ammoType === 'super' ? 1 : 0.5) : 0;
+	result[idx + 26] = self.bombType ? (self.bombType === 'love' ? 1 : 0.5) : 0;
+	result[idx + 27] = (rules?.projectileBounces ?? true) ? 1 : 0;
+	result[idx + 28] = (rules?.turretSpeedMultiplier ?? 1) / 3;
+	result[idx + 29] = (rules?.projectileDamage ?? 1) / 20;
+	result[idx + 30] = (rules?.bombDamage ?? 2) / 20;
+	result[idx + 31] = (rules?.invulnerabilityTicks ?? 8) / 120;
 	idx += SELF_DIM;
 
 	for (let i = 0; i < MAX_ENEMIES; i++) {
@@ -169,7 +180,7 @@ export function normalizePolicyObservation(
 			result[idx + 1] = ((ey - sy) / ARENA_DIAGONAL) * 0.5 + 0.5;
 			[result[idx + 2], result[idx + 3]] = unitAngleFeature(enemy.aimAngle);
 			result[idx + 4] = enemy.speed / 100;
-			result[idx + 5] = enemy.bombType ? 1 : 0;
+			result[idx + 5] = enemy.bombType && enemy.maxBombs > 0 ? 1 : 0;
 			result[idx + 6] = enemy.health / Math.max(enemy.maxHealth, 1);
 			const angleFromEnemyToPlayer = Math.atan2(sy - ey, sx - ex);
 			const enemyAimError = Math.atan2(
@@ -187,6 +198,12 @@ export function normalizePolicyObservation(
 			} else {
 				result[idx + 9] = 0.5;
 			}
+			result[idx + 10] = (enemy.wasLastMoveBlocked ? 0 : moveDirection[0] * enemy.speed / 100) * 0.5 + 0.5;
+			result[idx + 11] = (enemy.wasLastMoveBlocked ? 0 : moveDirection[1] * enemy.speed / 100) * 0.5 + 0.5;
+			result[idx + 12] = enemy.shotCooldownTicks / Math.max(enemy.shotCooldownTicksOnFire, 1);
+			result[idx + 13] = enemy.bombCooldownTicks / Math.max(enemy.bombCooldownTicksOnPlant, 1);
+			result[idx + 14] = enemy.activeAmmo / Math.max(enemy.maxAmmo, 1);
+			result[idx + 15] = enemy.activeBombs / Math.max(enemy.maxBombs, 1);
 		}
 		idx += ENEMY_DIM;
 	}
@@ -201,7 +218,9 @@ export function normalizePolicyObservation(
 			result[idx + 1] = ((projectile.y - sy) / ARENA_DIAGONAL) * 0.5 + 0.5;
 			result[idx + 2] = (projectile.vx / PROJECTILE_SPEED_NORM) * 0.5 + 0.5;
 			result[idx + 3] = (projectile.vy / PROJECTILE_SPEED_NORM) * 0.5 + 0.5;
-			result[idx + 4] = projectile.team === 'enemy' ? 1 : 0;
+			result[idx + 4] = projectile.team !== self.team ? 1 : 0;
+			result[idx + 5] = Math.max(0, projectile.maxBounces - projectile.bounces) / 2;
+			result[idx + 6] = projectile.ownerTankId === self.id ? 1 : 0;
 		}
 		idx += PROJ_DIM;
 	}
@@ -233,7 +252,7 @@ export function normalizePolicyObservation(
 			result[idx + 1] = ((bomb.y - sy) / ARENA_DIAGONAL) * 0.5 + 0.5;
 			result[idx + 2] = Math.min(bomb.fuseTicksRemaining / MAX_FUSE_TICKS, 1);
 			result[idx + 3] = Math.min(bomb.blastRadius / MAX_BLAST_RADIUS, 1);
-			result[idx + 4] = bomb.team === 'enemy' ? 1 : 0;
+			result[idx + 4] = bomb.team !== self.team ? 1 : 0;
 		}
 		idx += BOMB_DIM;
 	}
@@ -254,11 +273,10 @@ export function normalizePolicyObservation(
 			: 0;
 	result[idx + 2] = Math.min(projectiles.length / MAX_PROJECTILES, 1);
 	result[idx + 3] = Math.min(bombs.length / MAX_BOMBS, 1);
-	const enemyBombs = bombs.filter((bomb) => bomb.team === 'enemy');
 	result[idx + 4] =
-		enemyBombs.length > 0
+		bombs.length > 0
 			? Math.min(
-					Math.sqrt(Math.min(...enemyBombs.map((bomb) => (bomb.x - sx) ** 2 + (bomb.y - sy) ** 2))) /
+					Math.sqrt(Math.min(...bombs.map((bomb) => (bomb.x - sx) ** 2 + (bomb.y - sy) ** 2))) /
 						ARENA_DIAGONAL,
 					1
 			  )
@@ -271,6 +289,10 @@ export function normalizePolicyObservation(
 					1
 			  )
 			: 0;
+	result[idx + 6] = Math.max(0, livingEnemies.length - MAX_ENEMIES) / Math.max(livingEnemies.length, 1);
+	result[idx + 7] = Math.max(0, projectiles.length - MAX_PROJECTILES) / Math.max(projectiles.length, 1);
+	result[idx + 8] = Math.max(0, bombs.length - MAX_BOMBS) / Math.max(bombs.length, 1);
+	result[idx + 9] = Math.max(0, obstacles.length - MAX_OBSTACLES) / Math.max(obstacles.length, 1);
 
 	for (let feature = 0; feature < OBS_SIZE; feature++) {
 		result[feature] = Math.max(0, Math.min(1, result[feature]));

@@ -1,19 +1,20 @@
 {
-  "contractVersion": 3,
-  "observationVersion": "angles-sincos-navigation-v3",
+  "contractVersion": 4,
+  "observationVersion": "combat-state-navigation-v4",
   "actionVersion": "target-relative-residual-v2",
   "observation": {
-    "selfDim": 22,
-    "enemyDim": 10,
+    "tickNormTicks": 1800,
+    "selfDim": 32,
+    "enemyDim": 16,
     "maxEnemies": 6,
-    "projectileDim": 5,
-    "maxProjectiles": 15,
+    "projectileDim": 7,
+    "maxProjectiles": 32,
     "obstacleDim": 4,
     "maxObstacles": 5,
     "bombDim": 5,
-    "maxBombs": 6,
-    "summaryDim": 6,
-    "size": 213
+    "maxBombs": 16,
+    "summaryDim": 10,
+    "size": 462
   },
   "action": {
     "headSizes": [9, 65, 2, 2],

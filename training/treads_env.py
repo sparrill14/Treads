@@ -26,6 +26,7 @@ from runtime_codec import (
     navigation_guidance,
     normalize_observation,
     set_tick_norm_ticks,
+    POLICY_TICK_NORM_TICKS,
 )
 
 GRPC_SERVER_PATH = os.path.join(
@@ -92,7 +93,7 @@ TIMEOUT_REWARD = -1.0
 # 5x bump from prior (0.5/0.15) so per-step shaping is meaningful vs the
 # per-step penalty after ARENA_DIAGONAL (~1118) normalization.
 APPROACH_SCALE = 2.5
-REWARD_GAMMA = 0.997
+REWARD_GAMMA = 0.9995
 
 
 class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
@@ -110,6 +111,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         difficulty_band: float = 0.0,
         player_max_ammo: int = -1,
         player_max_bombs: int = -1,
+        reward_gamma: float = REWARD_GAMMA,
     ) -> None:
         super().__init__()
         self.level = level
@@ -120,7 +122,10 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         self.difficulty_band = float(np.clip(difficulty_band, 0.0, 1.0))
         self.player_max_ammo = int(player_max_ammo)
         self.player_max_bombs = int(player_max_bombs)
-        set_tick_norm_ticks(720)
+        if not 0 < reward_gamma < 1:
+            raise ValueError("reward_gamma must lie in (0, 1)")
+        self.reward_gamma = float(reward_gamma)
+        set_tick_norm_ticks(POLICY_TICK_NORM_TICKS)
         self.process: Optional[subprocess.Popen[str]] = None
         self._grpc_port: Optional[int] = None
         self._grpc_channel: Optional[grpc.Channel] = None
@@ -349,7 +354,7 @@ class TreadsEnv(gym.Env[NDArray[np.float32], Dict[str, Any]]):
         previous_potential = 1.0 - min(max(self._prev_enemy_dist / ARENA_DIAGONAL, 0.0), 1.0)
         current_potential = (0.0 if terminal or not target_id else
                              1.0 - min(max(current_enemy_dist / ARENA_DIAGONAL, 0.0), 1.0))
-        reward += APPROACH_SCALE * (REWARD_GAMMA * current_potential - previous_potential)
+        reward += APPROACH_SCALE * (self.reward_gamma * current_potential - previous_potential)
         self._prev_enemy_dist = current_enemy_dist if target_id else float("inf")
         self._approach_target_id = target_id
 
@@ -456,10 +461,12 @@ class TreadsEnvDiscrete(gym.Env[NDArray[np.float32], Any]):
 
     metadata = {"render_modes": []}
 
-    def __init__(self, level: int = 1, seed_start: int = 0, max_episode_steps: int = 1800) -> None:
+    def __init__(self, level: int = 1, seed_start: int = 0, max_episode_steps: int = 1800,
+                 reward_gamma: float = REWARD_GAMMA) -> None:
         super().__init__()
         self._env = TreadsEnv(
-            level=level, seed_start=seed_start, max_episode_steps=max_episode_steps
+            level=level, seed_start=seed_start, max_episode_steps=max_episode_steps,
+            reward_gamma=reward_gamma,
         )
 
         self.action_space = spaces.MultiDiscrete(ACTION_HEAD_SIZES)

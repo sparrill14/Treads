@@ -1,6 +1,7 @@
 """Compare Python evaluation observations with the TypeScript rollout encoder."""
 
 import json
+import copy
 import os
 import subprocess
 import sys
@@ -46,6 +47,24 @@ def main() -> None:
     finally:
         env.close()
 
+    busy = copy.deepcopy(samples[-1])
+    busy["tick"] = 1500
+    busy["rules"] = {"projectileBounces": False, "turretSpeedMultiplier": 2.5,
+                     "projectileDamage": 3, "bombDamage": 5, "invulnerabilityTicks": 16}
+    busy["self"].update(team="alpha", maxAmmo=7, maxBombs=4, bombType="love",
+                        bombCooldownTicks=30, bombCooldownTicksOnPlant=60)
+    for enemy in busy["enemies"]:
+        enemy.update(team="beta", lastMoveIntent="ne", wasLastMoveBlocked=False,
+                     shotCooldownTicks=3, bombCooldownTicks=15, bombCooldownTicksOnPlant=30)
+    busy["projectiles"] = [{"id": f"p{index}", "ownerTankId": busy["self"]["id"],
+        "team": "alpha" if index % 2 else "beta", "kind": "super", "x": 50 + index * 20,
+        "y": 200, "vx": -270, "vy": 0, "speed": 270, "radius": 4,
+        "bounces": index % 3, "maxBounces": 2} for index in reversed(range(40))]
+    busy["bombs"] = [{"id": f"b{index}", "ownerTankId": busy["self"]["id"], "team": "alpha",
+        "kind": "love", "x": 50 + index * 40, "y": 200, "radius": 5, "blastRadius": 70,
+        "fuseTicksRemaining": 100 + index} for index in reversed(range(18))]
+    samples.append(busy)
+
     result = subprocess.run(
         ["node", CLI_PATH],
         input=json.dumps(samples),
@@ -54,7 +73,10 @@ def main() -> None:
         check=True,
     )
     typescript = np.asarray(json.loads(result.stdout), dtype=np.float32)
+    original = json.dumps(samples)
     python = np.asarray([normalize_observation(sample) for sample in samples], dtype=np.float32)
+    assert json.dumps(samples) == original, "Encoding must not mutate observations"
+    assert np.isfinite(python).all() and ((python >= 0) & (python <= 1)).all()
     max_error = float(np.max(np.abs(typescript - python)))
     assert max_error < 1e-6, max_error
     print(f"Observation parity passed across {len(samples)} live states: max_error={max_error:.2e}")

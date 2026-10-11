@@ -115,6 +115,7 @@ export interface MatchInit {
 
 export interface TankObservation {
 	tick: number;
+	rules?: MatchRules;
 	self: TankStateView;
 	enemies: TankStateView[];
 	allies?: TankStateView[];

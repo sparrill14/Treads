@@ -22,6 +22,7 @@ ACTION_VERSION = str(MODEL_CONTRACT["actionVersion"])
 OBS_SIZE = int(MODEL_CONTRACT["observation"]["size"])
 SELF_DIM = int(MODEL_CONTRACT["observation"]["selfDim"])
 ENEMY_DIM = int(MODEL_CONTRACT["observation"]["enemyDim"])
+POLICY_TICK_NORM_TICKS = int(MODEL_CONTRACT["observation"]["tickNormTicks"])
 ACTION_HEAD_SIZES: Tuple[int, ...] = tuple(
     int(value) for value in cast(Iterable[int], MODEL_CONTRACT["action"]["headSizes"])
 )

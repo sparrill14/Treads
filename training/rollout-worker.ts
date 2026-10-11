@@ -844,7 +844,7 @@ function collect(
 		const nSteps = Number(req.nSteps);
 		if (!Number.isInteger(nSteps) || nSteps < 1 ||
 			(req.tickNormTicks && req.tickNormTicks !== TICK_NORM_TICKS)) {
-			callback({ code: grpc.status.INVALID_ARGUMENT, message: 'Positive n_steps and the v3 tick scale of 720 are required' }, null);
+			callback({ code: grpc.status.INVALID_ARGUMENT, message: `Positive n_steps and the policy tick scale of ${TICK_NORM_TICKS} are required` }, null);
 			return;
 		}
 		const levels = (req.levels && req.levels.length > 0 ? req.levels : [1]).map((v) => Number(v));
@@ -859,7 +859,7 @@ function collect(
 		const playerMaxAmmo = Number(req.playerMaxAmmo ?? 0);
 		const playerMaxBombs = Number(req.playerMaxBombs ?? 0);
 		const globalEpisodeOffset = Number(req.globalEpisodeOffset ?? 0);
-		const gamma = Math.max(0, Math.min(1, Number(req.gamma ?? 0.997)));
+		const gamma = Math.max(0, Math.min(1, Number(req.gamma ?? 0.9995)));
 
 		// Deterministic action-sampling RNG keyed on (seedStart, workerId, episodeOffset)
 		// so that, given identical weights and seeds, rollouts are reproducible.
@@ -909,7 +909,7 @@ function evaluate(
 			return;
 		}
 		if (req.tickNormTicks && req.tickNormTicks !== TICK_NORM_TICKS) {
-			callback({ code: grpc.status.INVALID_ARGUMENT, message: 'The v3 tick scale must be 720' }, null);
+			callback({ code: grpc.status.INVALID_ARGUMENT, message: `The policy tick scale must be ${TICK_NORM_TICKS}` }, null);
 			return;
 		}
 		const maxTicks = Math.max(1, Number(req.maxTicks || 1800));

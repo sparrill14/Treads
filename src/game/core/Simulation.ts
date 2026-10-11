@@ -362,6 +362,7 @@ export class Simulation {
 			this.obsBuffers.set(tank.id, {
 				obs: {
 					tick: 0,
+					rules: cloneJson(this.state.rules),
 					self: selfBuf,
 					allies: allyBufs,
 					enemies: enemyBufs,
@@ -410,6 +411,7 @@ export class Simulation {
 			// Legacy path: clone self, freeze entire observation for mutation safety.
 			const observation: TankObservation = {
 				tick: sharedViews.tick,
+				rules: cloneJson(this.state.rules),
 				self: cloneJson(self),
 				allies: cloneJson(sameTeamTanks.filter((tank) => tank.id !== self.id)),
 				enemies: cloneJson(enemyTeamTanks),

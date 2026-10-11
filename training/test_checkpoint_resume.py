@@ -1,4 +1,4 @@
-"""Verify that a v3 checkpoint round-trips all state required for resume."""
+"""Verify that a current-contract checkpoint round-trips all state required for resume."""
 
 import glob
 import os
@@ -54,7 +54,7 @@ def main() -> None:
             assert resumed.ret_rms.var == 2.5
         finally:
             resumed.close()
-    print("Atomic v3 checkpoint and trainer-state resume passed")
+    print("Atomic checkpoint and trainer-state resume passed")
 
 
 if __name__ == "__main__":

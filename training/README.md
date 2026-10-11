@@ -38,8 +38,8 @@ npm run train:supervised -- `
   --output-dir training\output\run_name
 ```
 
-The current v3 observation contract adds obstacle-aware path direction, path distance, and reachability features.
-Legacy checkpoints use incompatible observations and actions and are intentionally rejected by the current runtime, so the first v3 run must start from scratch.
+The current v4 observation contract includes obstacle-aware navigation, combat resources, cooldowns, rule settings, enemy movement state, and projectile bounce budgets.
+Legacy checkpoints, including v3 checkpoints, use incompatible observations and are intentionally rejected by the current runtime, so the first v4 run must start from scratch.
 
 ## Review and corrected behavior, October 2026
 
@@ -73,7 +73,7 @@ It also compares real gameplay logits and deterministic actions with Python and 
 The game tests require advanced tanks to defeat an idle player on level 10 for three seeds and require a bomb-only advanced tank to kill a nearby opponent while retaining full health.
 
 Start a fresh run after these changes.
-The v3 observation layout is unchanged, so old v3 checkpoints are structurally loadable, but their rewards, opponents, ricochets, and collected episode distribution came from different behavior.
+The follow-up optimization introduces the v4 observation layout, so old v3 checkpoints cannot be resumed or loaded in the browser.
 Re-export any checkpoint before trying it in the browser.
 An export now produces `.onnx`, `.contract.json`, and `.weights.json` companions.
 The dashboard requires all companions; a static deployment loads validated companions from `models/treads_policy.*` when they are included in the build.
@@ -108,6 +108,66 @@ This exposes concrete combat and navigation weaknesses despite successful model 
 That is a diagnostic sample, not a precise estimate of a strong policy's win rate.
 No current neural policy should be described as formidable on that evidence.
 
+## Follow-up optimization and the next run
+
+Advanced tanks now predict the first tank that absorbs a projectile, rather than independently tracing hypothetical hits on every tank.
+They can fire when an opponent intercepts a round before an ally, while still rejecting shots intercepted by allies.
+Their dodge search advances both the tank and ricocheting projectiles over up to 120 ticks, checks bomb fuse timing, and preserves combat progress among safe choices.
+Projectile forecasts are shared across dodge and positioning candidates within each decision.
+Gameplay regressions reproduce and verify both an ally behind a target and an avoidable incoming round.
+
+On 80 paired diagnostic episodes with seeds beginning at 1,100,000,000, the advanced player reference improved from 37 to 53 wins.
+Exact-map wins improved from 19/40 to 26/40, and randomized-map wins improved from 18/40 to 27/40.
+These seeds are for tactical development; the final policy test namespace beginning at 2,000,000,000 remains separate.
+This sample establishes useful improvements in those matches, not universal superiority or human difficulty balance.
+
+The v4 encoder has 462 features, with capacity for six enemies, 32 projectiles, 16 bombs, and five obstacles.
+It includes bomb cooldown, absolute player ammunition and bomb capacities, weapon types, bounce and damage rules, enemy movement components and cooldowns, projectile ownership and remaining bounces, and overflow fractions.
+Team features compare with the observing tank's team, so custom team names work correctly.
+All bombs contribute to the nearest-hazard summary, including the player's own bombs.
+Python encoding no longer sorts the source observation in place.
+The tick scale is recorded in the contract at 1,800 ticks and shared by browser, worker, evaluation, and Python encoding.
+
+Fresh PPO defaults use `gamma=0.9995` and `gae_lambda=0.99` to retain credit for delayed combat effects.
+A reward delayed by 180 ticks retains about 15% of its GAE trace weight, compared with about 0.006% under the previous defaults.
+A 30-second outcome retains about 41% of its discount weight rather than about 0.45%.
+These are mathematical credit weights, not measured learning gains.
+Use `--gamma` and `--gae-lambda` for controlled comparisons.
+The standalone Gym environments default to the same shaping discount; pass `reward_gamma` equal to a custom optimizer discount when using them directly.
+Critic clipping is disabled by default and can be enabled explicitly with `--value-clip`; it is independent of policy clipping because its effect depends on reward scale, as described in [SB3's PPO parameters](https://stable-baselines3.readthedocs.io/en/master/modules/ppo.html).
+PPO uses at most four CPU threads by default, adjustable with `--torch-threads`, and records this setting with critic clipping in the run manifest.
+Batch size and PPO epochs are configurable with `--batch-size` and `--epochs`.
+
+Use the bounded preflight to compare worker counts, verify finite returns and optimization, and measure complete update throughput on a representative scenario mix.
+It uses temporary models and does not promote its policies.
+On this machine, a clean three-update comparison measured about 918 complete training steps per second with eight workers, versus 717 with four, using four PPO threads and 8,192-step updates.
+Both configurations produced finite returns and parameters, and the eight-worker result was about 28% faster.
+This is a short throughput measurement on a representative mix, not a competence result or a guarantee of full-curriculum speed.
+
+```powershell
+node training/run-python.mjs training/preflight_training.py `
+  --workers 4,8 --updates 3 `
+  --output training/output/preflight_v4.json
+```
+
+The proposed first experiment is a fresh seed-42 pilot capped at two million transitions, with eight rollout workers and four PPO threads.
+Leave the full curriculum enabled, evaluate all ten levels every 500 completed episodes, and save replays frequently enough to inspect movement, firing, self-damage, and bomb escape.
+Treat it as a learning check rather than a promotion attempt.
+Budget roughly 45 to 60 minutes for the pilot, including validation and checkpoint overhead, based on the local preflight.
+Require increasing held-out lesson competence and inspect per-level combat behavior before extending it.
+
+```powershell
+npm run train:supervised -- `
+  --output-dir training/output/v4_pilot_seed42 `
+  --seed 42 --timesteps 2000000 --target-episodes 100000 `
+  --num-workers 8 --torch-threads 4 --n-steps 8192 `
+  --eval-interval 500 --eval-episodes 12 --replay-interval 100
+```
+
+If the pilot learns reliably, compare seeds 43 and 44 and a matched run using the previous discount and trace settings before selecting the longer experiment.
+Continue a selected compatible v4 checkpoint through `--load-model`, preserving its trainer sidecar and output directory.
+Select checkpoints with validation data, then apply the final unseen-seed readiness gate to the selected candidates.
+
 ## Remaining design limits and next experiments
 
 The corrected pipeline is suitable for controlled training experiments, but a formidable neural tank remains an empirical result that must be demonstrated.
@@ -115,18 +175,18 @@ Run independent jobs with `--seed 42`, `--seed 43`, and `--seed 44`, track per-l
 Use the final readiness evaluator only after selecting a checkpoint with validation data, so repeated tuning does not consume the test set.
 Keep the weak current checkpoint as a diagnostic baseline rather than continuing a long run blindly.
 
-The v3 feedforward observation is partially observable.
-It includes the player's shot cooldown, but omits bomb cooldown, absolute ammunition limits, match rule flags, full enemy cooldowns, and projectile bounce counts.
-It also truncates entity lists and cannot represent arbitrary large editor maps completely.
-The supported ten-level benchmark fits the enemy and obstacle limits, but busy combat can exceed projectile or bomb limits.
-Before broadening training beyond that benchmark, version the observation contract to expose relevant rule and resource state and either add temporal context or use a recurrent policy.
+The v4 feedforward observation exposes current movement and combat state but remains partially observable with respect to controller memory and future changes in intent.
+Movement components derive from the previous movement intent and blocked flag rather than a history of measured positions.
+It also truncates entity lists beyond its caps and cannot represent arbitrary large editor maps completely.
+Overflow features expose truncation, but do not reconstruct omitted hazards or teammates.
+Before broadening training beyond the ten-level benchmark, assess temporal context or a recurrent policy and richer teammate or variable-size entity representations.
 Do not append features silently to a compatible checkpoint.
 
 Tanks currently pass through each other, and friendly projectiles and bombs can damage their owner and teammates.
 Those rules are shared between gameplay and training and are not parity bugs.
 Changing body collision, blast obstruction, or friendly fire is a game design change that should precede a new long training run and include map reachability and replay checks.
-The heuristics now account for friendly hazards, but their conservative friendly-fire rejection can decline a shot whose hypothetical later trajectory reaches an ally after it would already have hit an opponent.
-This is a useful future tactical refinement rather than evidence of neural competence.
+The advanced heuristics account for friendly hazards and first projectile interception.
+Their movement forecasts still assume constant current intent and cannot anticipate every future turn or opponent decision.
 
 Checkpoint resume restores the policy, optimizer, curriculum, metrics, and reward normalization, but does not serialize live worker simulations or every RNG state.
 It is recovery from an episode boundary, not bit-for-bit continuation.

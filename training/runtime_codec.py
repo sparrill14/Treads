@@ -14,18 +14,20 @@ from model_contract import (
     NUM_AIM_BINS,
     OBS_SIZE,
     SELF_DIM,
+    MODEL_CONTRACT,
+    POLICY_TICK_NORM_TICKS,
 )
 
 ARENA_WIDTH = 1000.0
 ARENA_HEIGHT = 500.0
-MAX_ENEMIES = 6
-MAX_PROJECTILES = 15
-MAX_OBSTACLES = 5
-MAX_BOMBS = 6
-PROJ_DIM = 5
-OBS_DIM = 4
-BOMB_DIM = 5
-SUMMARY_DIM = 6
+MAX_ENEMIES = int(MODEL_CONTRACT["observation"]["maxEnemies"])
+MAX_PROJECTILES = int(MODEL_CONTRACT["observation"]["maxProjectiles"])
+MAX_OBSTACLES = int(MODEL_CONTRACT["observation"]["maxObstacles"])
+MAX_BOMBS = int(MODEL_CONTRACT["observation"]["maxBombs"])
+PROJ_DIM = int(MODEL_CONTRACT["observation"]["projectileDim"])
+OBS_DIM = int(MODEL_CONTRACT["observation"]["obstacleDim"])
+BOMB_DIM = int(MODEL_CONTRACT["observation"]["bombDim"])
+SUMMARY_DIM = int(MODEL_CONTRACT["observation"]["summaryDim"])
 
 MAX_FUSE_TICKS = 360.0
 MAX_BLAST_RADIUS = 100.0
@@ -38,7 +40,7 @@ BOMB_THRESHOLD = 0.5
 MOVE_DEAD_ZONE = 0.33
 AIM_OFFSET_LIMIT = math.pi / 18.0
 ARENA_DIAGONAL = math.sqrt(ARENA_WIDTH * ARENA_WIDTH + ARENA_HEIGHT * ARENA_HEIGHT)
-tick_norm_ticks = 720.0
+tick_norm_ticks = float(POLICY_TICK_NORM_TICKS)
 
 ObsDict = Dict[str, Any]
 DecodedAction = Dict[str, Any]
@@ -355,6 +357,17 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
         result[idx + 19] = 1.0
         result[idx + 20] = 0.0
         result[idx + 21] = 0.0
+    rules = cast(ObsDict, obs_raw.get("rules", {}))
+    result[idx + 22] = float(self_data.get("bombCooldownTicks", 0)) / max(float(self_data.get("bombCooldownTicksOnPlant", 1)), 1.0)
+    result[idx + 23] = float(self_data.get("maxAmmo", 0)) / 10.0
+    result[idx + 24] = float(self_data.get("maxBombs", 0)) / 10.0
+    result[idx + 25] = (1.0 if self_data.get("ammoType") == "super" else 0.5) if self_data.get("maxAmmo", 0) > 0 else 0.0
+    result[idx + 26] = (1.0 if self_data.get("bombType") == "love" else 0.5) if self_data.get("bombType") else 0.0
+    result[idx + 27] = 1.0 if rules.get("projectileBounces", True) else 0.0
+    result[idx + 28] = float(rules.get("turretSpeedMultiplier", 1)) / 3.0
+    result[idx + 29] = float(rules.get("projectileDamage", 1)) / 20.0
+    result[idx + 30] = float(rules.get("bombDamage", 2)) / 20.0
+    result[idx + 31] = float(rules.get("invulnerabilityTicks", 8)) / 120.0
     idx += SELF_DIM
 
     for i in range(MAX_ENEMIES):
@@ -368,7 +381,7 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
             result[idx + 2] = enemy_aim_sin
             result[idx + 3] = enemy_aim_cos
             result[idx + 4] = float(enemy["speed"]) / 100.0
-            result[idx + 5] = 1.0 if enemy.get("bombType") else 0.0
+            result[idx + 5] = 1.0 if enemy.get("bombType") and enemy.get("maxBombs", 0) > 0 else 0.0
             result[idx + 6] = float(enemy["health"]) / max(float(enemy["maxHealth"]), 1.0)
 
             angle_from_enemy_to_player = math.atan2(sy - ecy, sx - ecx)
@@ -394,10 +407,17 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
                     result[idx + 9] = 0.5
             else:
                 result[idx + 9] = 0.5
+            speed = float(enemy["speed"]) / 100.0
+            blocked = bool(enemy.get("wasLastMoveBlocked", False))
+            result[idx + 10] = (0.0 if blocked else move_dir[0] * speed) * 0.5 + 0.5
+            result[idx + 11] = (0.0 if blocked else move_dir[1] * speed) * 0.5 + 0.5
+            result[idx + 12] = float(enemy.get("shotCooldownTicks", 0)) / max(float(enemy.get("shotCooldownTicksOnFire", 1)), 1.0)
+            result[idx + 13] = float(enemy.get("bombCooldownTicks", 0)) / max(float(enemy.get("bombCooldownTicksOnPlant", 1)), 1.0)
+            result[idx + 14] = float(enemy.get("activeAmmo", 0)) / max(float(enemy.get("maxAmmo", 1)), 1.0)
+            result[idx + 15] = float(enemy.get("activeBombs", 0)) / max(float(enemy.get("maxBombs", 1)), 1.0)
         idx += ENEMY_DIM
 
-    projectiles = cast(List[ObsDict], obs_raw.get("projectiles", []))
-    projectiles.sort(key=lambda p: _projectile_distance_sq(p, sx, sy))
+    projectiles = sorted(cast(List[ObsDict], obs_raw.get("projectiles", [])), key=lambda p: _projectile_distance_sq(p, sx, sy))
     for i in range(MAX_PROJECTILES):
         if i < len(projectiles):
             projectile = projectiles[i]
@@ -405,11 +425,12 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
             result[idx + 1] = ((float(projectile["y"]) - sy) / ARENA_DIAGONAL) * 0.5 + 0.5
             result[idx + 2] = (float(projectile["vx"]) / PROJECTILE_SPEED_NORM) * 0.5 + 0.5
             result[idx + 3] = (float(projectile["vy"]) / PROJECTILE_SPEED_NORM) * 0.5 + 0.5
-            result[idx + 4] = 1.0 if projectile.get("team") == "enemy" else 0.0
+            result[idx + 4] = 1.0 if projectile.get("team") != self_data.get("team") else 0.0
+            result[idx + 5] = max(0.0, float(projectile.get("maxBounces", 0)) - float(projectile.get("bounces", 0))) / 2.0
+            result[idx + 6] = 1.0 if projectile.get("ownerTankId") == self_data.get("id") else 0.0
         idx += PROJ_DIM
 
-    obstacles = cast(List[ObsDict], obs_raw.get("obstacles", []))
-    obstacles.sort(key=lambda o: _obstacle_center_distance_sq(o, sx, sy))
+    obstacles = sorted(cast(List[ObsDict], obs_raw.get("obstacles", [])), key=lambda o: _obstacle_center_distance_sq(o, sx, sy))
     for i in range(MAX_OBSTACLES):
         if i < len(obstacles):
             obstacle = obstacles[i]
@@ -425,8 +446,7 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
             result[idx + 3] = float(obstacle["height"]) / ARENA_HEIGHT
         idx += OBS_DIM
 
-    bombs = cast(List[ObsDict], obs_raw.get("bombs", []))
-    bombs.sort(key=lambda b: _bomb_distance_sq(b, sx, sy))
+    bombs = sorted(cast(List[ObsDict], obs_raw.get("bombs", [])), key=lambda b: _bomb_distance_sq(b, sx, sy))
     for i in range(MAX_BOMBS):
         if i < len(bombs):
             bomb = bombs[i]
@@ -434,7 +454,7 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
             result[idx + 1] = ((float(bomb["y"]) - sy) / ARENA_DIAGONAL) * 0.5 + 0.5
             result[idx + 2] = min(float(bomb["fuseTicksRemaining"]) / MAX_FUSE_TICKS, 1.0)
             result[idx + 3] = min(float(bomb["blastRadius"]) / MAX_BLAST_RADIUS, 1.0)
-            result[idx + 4] = 1.0 if bomb.get("team") == "enemy" else 0.0
+            result[idx + 4] = 1.0 if bomb.get("team") != self_data.get("team") else 0.0
         idx += BOMB_DIM
 
     result[idx] = min(len(living_enemies) / MAX_ENEMIES, 1.0)
@@ -451,9 +471,8 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
     result[idx + 2] = min(len(projectiles) / MAX_PROJECTILES, 1.0)
     result[idx + 3] = min(len(bombs) / MAX_BOMBS, 1.0)
 
-    enemy_bombs = [bomb for bomb in bombs if bomb.get("team") == "enemy"]
-    if enemy_bombs:
-        closest_bomb_sq = min(_bomb_distance_sq(bomb, sx, sy) for bomb in enemy_bombs)
+    if bombs:
+        closest_bomb_sq = min(_bomb_distance_sq(bomb, sx, sy) for bomb in bombs)
         result[idx + 4] = min(math.sqrt(closest_bomb_sq) / ARENA_DIAGONAL, 1.0)
     else:
         result[idx + 4] = 1.0
@@ -464,6 +483,10 @@ def normalize_observation(obs_raw: ObsDict) -> NDArray[np.float32]:
     else:
         result[idx + 5] = 0.0
 
+    result[idx + 6] = max(0, len(living_enemies) - MAX_ENEMIES) / max(len(living_enemies), 1)
+    result[idx + 7] = max(0, len(projectiles) - MAX_PROJECTILES) / max(len(projectiles), 1)
+    result[idx + 8] = max(0, len(bombs) - MAX_BOMBS) / max(len(bombs), 1)
+    result[idx + 9] = max(0, len(obstacles) - MAX_OBSTACLES) / max(len(obstacles), 1)
     return np.clip(result, 0.0, 1.0)
 
 

@@ -6,6 +6,7 @@ export interface NeuralModelContractData {
 	observationVersion: string;
 	actionVersion: string;
 	observation: {
+		tickNormTicks: number;
 		selfDim: number;
 		enemyDim: number;
 		maxEnemies: number;

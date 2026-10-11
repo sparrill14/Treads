@@ -102,6 +102,43 @@ export function projectileHitsTank(projectile: ProjectileStateView, tank: TankSt
 
 const PREDICTION_MAX_TICKS = 600;
 
+export interface PredictedTankMotion {
+	tank: TankStateView;
+	velocityPerTick?: { x: number; y: number };
+}
+
+/** Predict the first tank that absorbs a round, using the simulation's tick physics. */
+export function predictProjectileFirstHit(
+	projectile: ProjectileStateView,
+	tanks: readonly PredictedTankMotion[],
+	arena: ArenaState,
+	obstacles: ObstacleStateView[],
+	allowBounces = true,
+	maxTicks = PREDICTION_MAX_TICKS
+): { tank: TankStateView; tick: number } | null {
+	const predictedProjectile = { ...projectile };
+	const candidates = tanks.filter(({ tank }) => !tank.destroyed).map(({ tank, velocityPerTick }) => ({
+		tank: { ...tank }, velocity: velocityPerTick ?? { x: 0, y: 0 },
+	}));
+	for (let tick = 1; tick <= maxTicks; tick++) {
+		if (predictedProjectile.bounces > predictedProjectile.maxBounces) return null;
+		stepProjectile(predictedProjectile, arena, obstacles, allowBounces);
+		if (predictedProjectile.bounces > predictedProjectile.maxBounces) return null;
+		for (const { tank, velocity } of candidates) {
+			if (velocity.x !== 0 || velocity.y !== 0) {
+				const x = clamp(tank.x + velocity.x, 0, arena.width - tank.size);
+				const y = clamp(tank.y + velocity.y, 0, arena.height - tank.size);
+				if (!obstacles.some((obstacle) => obstacleIntersectsTank(x, y, tank.size, obstacle))) {
+					tank.x = x;
+					tank.y = y;
+				}
+			}
+			if (projectileHitsTank(predictedProjectile, tank)) return { tank, tick };
+		}
+	}
+	return null;
+}
+
 export function predictProjectileWillHitTank(
 	projectile: ProjectileStateView,
 	tank: TankStateView,
@@ -110,27 +147,7 @@ export function predictProjectileWillHitTank(
 	allowBounces = true,
 	velocityPerTick = { x: 0, y: 0 }
 ): boolean {
-	const predictedProjectile: ProjectileStateView = { ...projectile };
-	const predictedTank: TankStateView = { ...tank };
-	for (let tick = 0; tick < PREDICTION_MAX_TICKS; tick++) {
-		if (predictedProjectile.bounces > predictedProjectile.maxBounces) {
-			return false;
-		}
-		stepProjectile(predictedProjectile, arena, obstacles, allowBounces);
-		if (predictedProjectile.bounces > predictedProjectile.maxBounces) return false;
-		if (velocityPerTick.x !== 0 || velocityPerTick.y !== 0) {
-			const x = clamp(predictedTank.x + velocityPerTick.x, 0, arena.width - tank.size);
-			const y = clamp(predictedTank.y + velocityPerTick.y, 0, arena.height - tank.size);
-			if (!obstacles.some((obstacle) => obstacleIntersectsTank(x, y, tank.size, obstacle))) {
-				predictedTank.x = x;
-				predictedTank.y = y;
-			}
-		}
-		if (projectileHitsTank(predictedProjectile, predictedTank)) {
-			return true;
-		}
-	}
-	return false;
+	return predictProjectileFirstHit(projectile, [{ tank, velocityPerTick }], arena, obstacles, allowBounces) !== null;
 }
 
 export function bombWouldHitTank(x: number, y: number, blastRadius: number, tank: TankStateView): boolean {
