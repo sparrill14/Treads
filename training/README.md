@@ -169,6 +169,33 @@ If the pilot learns reliably, compare seeds 43 and 44 and a matched run using th
 Continue a selected compatible v4 checkpoint through `--load-model`, preserving its trainer sidecar and output directory.
 Select checkpoints with validation data, then apply the final unseen-seed readiness gate to the selected candidates.
 
+## Seed-42 pilot results, October 11, 2026
+
+The fresh v4 pilot finished in about 33 minutes at 2,007,040 transitions and 4,994 completed episodes, rounding the two-million-step budget to an 8,192-step PPO update boundary.
+It used eight rollout workers and four PPO threads, with the settings in the pilot command above.
+One transient Windows checkpoint replacement failure triggered automatic recovery from the saved final checkpoint at 32,768 steps.
+The follow-up fixes add bounded retries for Windows file locks and preserve replay cadence across parallel episode-count jumps.
+Both faults have reproducing regressions; artifact replacement, checkpoint resume, replay continuity, and export parity checks pass.
+
+The pilot passed all 36 held-out aiming lessons in three consecutive evaluations and advanced to dodge-and-fight at episode 1,504.
+It remained in that phase because its deterministic held-out combat checks failed.
+The best real-map validation result was 28/120 wins at 401,408 steps and 515 episodes.
+The actual final checkpoint scored 0/120 on the same fixed validation seeds, starting at 1,000,000,000, with twelve randomized episodes on each of the ten real maps.
+The final readiness namespace beginning at 2,000,000,000 was not used.
+Neither result supports describing the neural policy as formidable.
+
+Live deterministic probes of the final checkpoint requested no shots over 300 ticks on each of scenarios 111 and 121, where mean firing probabilities were about 46% and 42%.
+The level-1 probe fired two observed projectiles and lost after 115 ticks.
+Training samples categorical actions, while gameplay and validation select each head's largest logit.
+A firing probability below 50% still produces shots when sampled but selects no firing under deterministic control.
+This is an observed training-to-gameplay gap, and it does not establish that firing alone explains every combat failure.
+Measure firing decisions at legal shot opportunities and compare action-selection behavior before extending this configuration.
+Retain the earlier best-validation checkpoint as a comparison baseline.
+
+Both saved checkpoints contain finite parameters and match the v4 contract.
+The actual final export passed 356 ticks of browser-controller simulation parity across levels 1, 7, and 10, with Python action parity on twelve real observations and matching ONNX logits.
+Local checkpoints, 74 replays, the validation history, behavior probes, artifact verification, and a progress chart are under `training/output/v4_pilot_seed42/`.
+
 ## Remaining design limits and next experiments
 
 The corrected pipeline is suitable for controlled training experiments, but a formidable neural tank remains an empirical result that must be demonstrated.
