@@ -644,7 +644,10 @@ function collectRollout(
 			episodeLevels.push(currentLevel);
 			episodeRewardBreakdowns.push(episodeBreakdown);
 			const absoluteEpisode = startEpisode + completedEpisodes;
-			if (replayEveryEpisodes > 0 && absoluteEpisode % replayEveryEpisodes === 0 && replayRecorder !== null) {
+			// Global offsets jump by every worker's completions between requests.
+			// Use this worker's continuous episode count so replay boundaries cannot be skipped.
+			const workerEpisode = workerTotalEpisodes + completedEpisodes;
+			if (replayEveryEpisodes > 0 && workerEpisode % replayEveryEpisodes === 0 && replayRecorder !== null) {
 				fs.mkdirSync(replayDir, { recursive: true });
 				const replayPath = path.join(
 					replayDir,

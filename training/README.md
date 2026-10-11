@@ -152,6 +152,7 @@ node training/run-python.mjs training/preflight_training.py `
 
 The proposed first experiment is a fresh seed-42 pilot capped at two million transitions, with eight rollout workers and four PPO threads.
 Leave the full curriculum enabled, evaluate all ten levels every 500 completed episodes, and save replays frequently enough to inspect movement, firing, self-damage, and bomb escape.
+Replay intervals use each worker's continuous episode count, so parallel jumps in the global episode total cannot skip saves.
 Treat it as a learning check rather than a promotion attempt.
 Budget roughly 45 to 60 minutes for the pilot, including validation and checkpoint overhead, based on the local preflight.
 Require increasing held-out lesson competence and inspect per-level combat behavior before extending it.
