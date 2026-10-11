@@ -36,11 +36,10 @@ from sb3_compat import ensure_pickle_compat
 from export_onnx import export_to_onnx
 from stable_baselines3 import PPO
 from stable_baselines3.common.logger import configure
-from runtime_codec import decode_multi_discrete_action
-from treads_env import OBS_SIZE, TreadsEnv
 from model_contract import (
     ACTION_HEAD_SIZES,
     MODEL_CONTRACT,
+    OBS_SIZE,
     assert_contract_compatible,
     write_contract_for_model,
 )
@@ -252,6 +251,7 @@ class HybridTrainer:
         self.last_global_eval_details: Dict[int, Dict[str, float]] = {}
         self.last_phase_eval_lower_bound = 0.0
         self.last_phase_eval_details: Dict[int, Dict[str, float]] = {}
+        self.evaluation_progress: Optional[Dict[str, Any]] = None
         self.stable_checkpoints: Dict[int, str] = {}
         self.peak_phase_index: int = 0
         self.ret_rms = RunningMeanStd()
@@ -405,75 +405,191 @@ class HybridTrainer:
         return win_rate
 
     def _evaluate_levels(self, levels: List[int], episodes_per_level: int, seed_start: int) -> float:
-        """Evaluate deterministic actions on independent held-out variants."""
+        """Evaluate deterministic actions in parallel inside rollout workers."""
+        unique_levels = list(dict.fromkeys(int(level) for level in levels))
+        if not unique_levels:
+            raise ValueError("Evaluation requires at least one level")
+        if not self.workers:
+            raise RuntimeError("Evaluation requires at least one live rollout worker")
+
+        self._send_weights()
         wins = 0
         episodes = 0
         seed = seed_start
         details: Dict[int, Dict[str, float]] = {}
+        started_at = time.perf_counter()
+        self.evaluation_progress = {
+            "status": "running",
+            "startedAt": self._now_iso(),
+            "levels": unique_levels,
+            "levelsCompleted": 0,
+            "levelsTotal": len(unique_levels),
+            "episodesCompleted": 0,
+            "episodesTotal": len(unique_levels) * episodes_per_level,
+        }
+        self._write_run_manifest(status="evaluating")
+        print(
+            f"  EvalStart | levels={unique_levels} | episodes_per_level={episodes_per_level} | "
+            f"workers={min(len(self.workers), episodes_per_level)}",
+            flush=True,
+        )
 
-        for level in levels:
-            level_wins = 0
-            env: Optional[TreadsEnv] = None
+        try:
+            for level_index, level in enumerate(unique_levels):
+                level_seeds = list(range(seed, seed + episodes_per_level))
+                seed += episodes_per_level
+                level_started_at = time.perf_counter()
+                results = self._evaluate_level_on_workers(level, level_seeds)
+                level_wins = sum(int(bool(result.get("win", False))) for result in results)
+                level_ticks = sum(int(result.get("ticks", 0)) for result in results)
+                wins += level_wins
+                episodes += len(results)
+                details[level] = {
+                    "wins": float(level_wins),
+                    "episodes": float(episodes_per_level),
+                    "win_rate": float(level_wins / max(episodes_per_level, 1)),
+                    "wilson_lower": self._wilson_lower_bound(level_wins, episodes_per_level),
+                }
 
-            def create_env(episode_seed: int) -> TreadsEnv:
-                return TreadsEnv(
-                    level=level,
-                    seed_start=episode_seed,
-                    max_episode_steps=self.max_episode_steps,
-                    spawn_jitter=True,
-                    procedural_levels=True,
-                    difficulty_band=max(0.15, self.curriculum_difficulty_band),
-                    player_max_ammo=self._get_player_max_ammo(),
-                    player_max_bombs=self._get_player_max_bombs(),
+                level_elapsed = time.perf_counter() - level_started_at
+                self.evaluation_progress.update(
+                    {
+                        "currentLevel": level,
+                        "levelsCompleted": level_index + 1,
+                        "episodesCompleted": episodes,
+                        "elapsedSec": time.perf_counter() - started_at,
+                    }
                 )
-
-            try:
-                for _ in range(episodes_per_level):
-                    result: Dict[str, Any] = {}
-                    for attempt in range(3):
-                        if env is None:
-                            env = create_env(seed)
-                        try:
-                            obs, _ = env.reset(seed=seed)
-                            done = False
-                            info: Dict[str, Any] = {}
-                            while not done:
-                                action, _ = cast(Any, self.model).predict(obs, deterministic=True)
-                                obs_raw = cast(Optional[Dict[str, Any]], getattr(env, "_last_obs_raw", None))
-                                decoded = decode_multi_discrete_action(action, obs_raw)
-                                obs, _reward, terminated, truncated, info = env.step(decoded)
-                                done = terminated or truncated
-                            result = cast(Dict[str, Any], info.get("result", {}))
-                            break
-                        except Exception as exc:
-                            env.close()
-                            env = None
-                            if attempt == 2:
-                                raise RuntimeError(
-                                    f"Evaluation failed after 3 attempts for level={level}, seed={seed}"
-                                ) from exc
-                            print(
-                                f"  WARNING: retrying eval level={level} seed={seed} "
-                                f"after attempt {attempt + 1}: {exc}"
-                            )
-                    outcome = int(bool(result.get("win", False)))
-                    wins += outcome
-                    level_wins += outcome
-                    episodes += 1
-                    seed += 1
-            finally:
-                if env is not None:
-                    env.close()
-            details[level] = {
-                "wins": float(level_wins),
-                "episodes": float(episodes_per_level),
-                "win_rate": float(level_wins / max(episodes_per_level, 1)),
-                "wilson_lower": self._wilson_lower_bound(level_wins, episodes_per_level),
-            }
+                self._write_run_manifest(status="evaluating")
+                print(
+                    f"  EvalProgress | level={level} | wins={level_wins}/{episodes_per_level} | "
+                    f"ticks={level_ticks} | level_time={level_elapsed:.1f}s | "
+                    f"levels={level_index + 1}/{len(unique_levels)}",
+                    flush=True,
+                )
+        except BaseException as exc:
+            self.evaluation_progress.update(
+                {
+                    "status": "failed",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "elapsedSec": time.perf_counter() - started_at,
+                }
+            )
+            self._write_run_manifest(status="evaluating")
+            raise
 
         self.last_eval_lower_bound = self._wilson_lower_bound(wins, episodes)
         self.last_eval_details = details
+        self.evaluation_progress.update(
+            {
+                "status": "completed",
+                "finishedAt": self._now_iso(),
+                "elapsedSec": time.perf_counter() - started_at,
+            }
+        )
+        self._write_run_manifest(status="evaluating")
         return float(wins / max(episodes, 1))
+
+    def _evaluate_level_on_workers(self, level: int, seeds: List[int]) -> List[Dict[str, Any]]:
+        """Evaluate one level across worker processes, retrying failed shards once."""
+        if not seeds:
+            return []
+        worker_count = min(len(self.workers), len(seeds))
+        assignments: List[List[int]] = [[] for _ in range(worker_count)]
+        for index, seed in enumerate(seeds):
+            assignments[index % worker_count].append(seed)
+
+        for attempt in range(2):
+            results: List[Optional[List[Dict[str, Any]]]] = [None] * worker_count
+            errors: List[Optional[Exception]] = [None] * worker_count
+
+            def evaluate_worker(index: int) -> None:
+                try:
+                    response = self.workers[index]["stub"].Evaluate(
+                        TREADS_PB2.EvaluateRequest(
+                            episodes=[
+                                TREADS_PB2.EvaluationEpisode(level=level, seed=seed)
+                                for seed in assignments[index]
+                            ],
+                            max_ticks=self.max_episode_steps,
+                            tick_norm_ticks=self.max_episode_steps,
+                            procedural_levels=True,
+                            difficulty_band=max(0.15, self.curriculum_difficulty_band),
+                            player_max_ammo=self._get_player_max_ammo(),
+                            player_max_bombs=self._get_player_max_bombs(),
+                        ),
+                        timeout=180.0,
+                    )
+                    payload = cast(Dict[str, Any], json.loads(str(response.evaluation_json)))
+                    if payload.get("type") != "evaluation":
+                        raise RuntimeError(
+                            f"Worker returned unexpected evaluation payload: {payload.get('type')}"
+                        )
+                    results[index] = [
+                        cast(Dict[str, Any], episode)
+                        for episode in cast(List[Any], payload.get("episodes", []))
+                    ]
+                except Exception as exc:
+                    errors[index] = exc
+
+            threads = [
+                threading.Thread(target=evaluate_worker, args=(index,))
+                for index in range(worker_count)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            failed = [index for index, error in enumerate(errors) if error is not None]
+            if failed:
+                if attempt == 0:
+                    print(
+                        f"  WARNING: evaluation worker failure on level {level} ({failed}); "
+                        "restarting and retrying the level once.",
+                        flush=True,
+                    )
+                    for index in failed:
+                        self._restart_worker(index)
+                    self._send_weights()
+                    continue
+                detail = ", ".join(f"worker {index}: {errors[index]}" for index in failed)
+                raise RuntimeError(f"Evaluation failed after retry on level {level}: {detail}")
+
+            flattened = [
+                episode
+                for worker_results in results
+                for episode in (worker_results or [])
+            ]
+            expected = {(level, seed) for seed in seeds}
+            received = {
+                (int(episode.get("level", -1)), int(episode.get("seed", -1)))
+                for episode in flattened
+            }
+            if received != expected or len(flattened) != len(expected):
+                raise RuntimeError(
+                    f"Evaluation result mismatch for level {level}: "
+                    f"expected={sorted(expected)}, received={sorted(received)}"
+                )
+            return flattened
+
+        raise RuntimeError("Unreachable evaluation retry state")
+
+    @classmethod
+    def _summarize_eval_details(
+        cls,
+        levels: List[int],
+        details: Dict[int, Dict[str, float]],
+    ) -> Tuple[float, float]:
+        unique_levels = list(dict.fromkeys(int(level) for level in levels))
+        missing = [level for level in unique_levels if level not in details]
+        if missing:
+            raise ValueError(f"Evaluation details missing levels: {missing}")
+        wins = int(sum(float(details[level].get("wins", 0.0)) for level in unique_levels))
+        episodes = int(sum(float(details[level].get("episodes", 0.0)) for level in unique_levels))
+        if episodes <= 0:
+            raise ValueError("Evaluation details contain no episodes")
+        return float(wins / episodes), cls._wilson_lower_bound(wins, episodes)
 
     @staticmethod
     def _wilson_lower_bound(wins: int, episodes: int, z: float = 1.96) -> float:
@@ -484,6 +600,38 @@ class HybridTrainer:
         center = rate + z * z / (2.0 * episodes)
         margin = z * np.sqrt((rate * (1.0 - rate) + z * z / (4.0 * episodes)) / episodes)
         return float(max(0.0, (center - margin) / denominator))
+
+    @staticmethod
+    def _phase_eval_gate(
+        phase_levels: List[int],
+        details: Dict[int, Dict[str, float]],
+        aggregate_lower_bound: float,
+        required_win_rate: float,
+    ) -> Tuple[bool, Optional[int], float]:
+        """Require aggregate confidence and competence on every phase scenario."""
+        unique_levels = list(dict.fromkeys(int(level) for level in phase_levels))
+        if not unique_levels:
+            return False, None, 0.0
+
+        weakest_level: Optional[int] = None
+        weakest_rate = 1.0
+        all_scenarios_pass = True
+        for level in unique_levels:
+            stats = details.get(level)
+            episodes = float(stats.get("episodes", 0.0)) if stats is not None else 0.0
+            wins = float(stats.get("wins", 0.0)) if stats is not None else 0.0
+            win_rate = wins / episodes if episodes > 0.0 else 0.0
+            if weakest_level is None or win_rate < weakest_rate:
+                weakest_level = level
+                weakest_rate = win_rate
+            if episodes <= 0.0 or win_rate < required_win_rate:
+                all_scenarios_pass = False
+
+        return (
+            aggregate_lower_bound >= required_win_rate and all_scenarios_pass,
+            weakest_level,
+            weakest_rate,
+        )
 
     def _save_ret_rms(self) -> None:
         """Persist running-mean-std reward normalizer state next to the model."""
@@ -715,6 +863,7 @@ class HybridTrainer:
                 "lastGlobalDetails": self.last_global_eval_details,
                 "lastPhaseWilsonLower": self.last_phase_eval_lower_bound,
                 "lastPhaseDetails": self.last_phase_eval_details,
+                "progress": self.evaluation_progress,
             },
             "error": error or None,
         }
@@ -1697,10 +1846,21 @@ class HybridTrainer:
                     self._save_model_checkpoint(self.best_train_model_path)
                     print(f"  ** New best training-window model: {avg_winrate:.3f} **")
 
-                # 7b. Periodic deterministic eval for robust best checkpoint selection.
+                # 7b. Save due checkpoints before evaluation so an interrupted or
+                # slow evaluation never strands the newest training progress.
+                while self.total_episodes >= next_checkpoint_episode:
+                    ckpt_path = os.path.join(
+                        self.output_dir, f"treads_ppo_ep{next_checkpoint_episode}"
+                    )
+                    self._save_model_checkpoint(ckpt_path)
+                    next_checkpoint_episode += self.checkpoint_episode_interval
+
+                # 7c. Periodic deterministic eval for robust best checkpoint selection.
                 while self.total_episodes >= next_eval_episode:
+                    global_eval_succeeded = False
                     try:
                         eval_win_rate = self._evaluate_policy()
+                        global_eval_succeeded = True
                         print(
                             f"  Eval | Episodes={self.total_episodes} | "
                             f"WinRate={eval_win_rate:.3f} | Wilson95Lower={self.last_global_eval_lower_bound:.3f} "
@@ -1724,17 +1884,35 @@ class HybridTrainer:
                         print(f"  WARNING: _evaluate_policy failed ({eval_exc}) - continuing with phase gate checks.")
 
                     if not self._explicit_levels:
-                        phase_levels = self._get_curriculum_levels()
+                        phase_levels = list(dict.fromkeys(self._get_curriculum_levels()))
                         phase_eval_source = "held-out-randomized"
                         try:
-                            phase_eval = self._evaluate_levels(
+                            phase_details = {
+                                level: dict(self.last_global_eval_details[level])
+                                for level in phase_levels
+                                if global_eval_succeeded and level in self.last_global_eval_details
+                            }
+                            remaining_phase_levels = [
+                                level for level in phase_levels if level not in phase_details
+                            ]
+                            if remaining_phase_levels:
+                                self._evaluate_levels(
+                                    remaining_phase_levels,
+                                    self.eval_episodes,
+                                    self.eval_seed_start + 50_000_000 + self.total_episodes * 10,
+                                )
+                                phase_details.update(
+                                    {
+                                        level: dict(details)
+                                        for level, details in self.last_eval_details.items()
+                                    }
+                                )
+                            phase_eval, phase_lower_bound = self._summarize_eval_details(
                                 phase_levels,
-                                self.eval_episodes,
-                                self.eval_seed_start + 50_000_000 + self.total_episodes * 10,
+                                phase_details,
                             )
-                            phase_lower_bound = self.last_eval_lower_bound
                             self.last_phase_eval_lower_bound = phase_lower_bound
-                            self.last_phase_eval_details = dict(self.last_eval_details)
+                            self.last_phase_eval_details = phase_details
                         except Exception as phase_eval_exc:
                             phase_eval_source = "training-window-fallback"
                             phase_eval = self._phase_recent_win_rate()
@@ -1753,14 +1931,28 @@ class HybridTrainer:
                         self.last_phase_eval_win_rate = phase_eval
                         current = self._get_curriculum_phase()
                         required_wr = float(current.get("required_win_rate", 0.40))
-                        if phase_lower_bound >= required_wr:
+                        phase_gate_pass, weakest_scenario, weakest_rate = self._phase_eval_gate(
+                            phase_levels,
+                            self.last_phase_eval_details,
+                            phase_lower_bound,
+                            required_wr,
+                        )
+                        held_out_eval_succeeded = phase_eval_source == "held-out-randomized"
+                        if held_out_eval_succeeded and phase_gate_pass:
                             self.phase_eval_pass_streak += 1
                         else:
                             self.phase_eval_pass_streak = 0
 
+                        weakest_summary = (
+                            f"S{weakest_scenario}:{weakest_rate:.3f}"
+                            if weakest_scenario is not None
+                            else "unavailable"
+                        )
+
                         print(
                             f"  PhaseEval[{phase_eval_source}] | Phase={current['name']} | WR={phase_eval:.3f} | "
                             f"Wilson95Lower={phase_lower_bound:.3f} | required={required_wr:.3f} | "
+                            f"weakest={weakest_summary} | gate={'pass' if phase_gate_pass else 'fail'} | "
                             f"pass_streak={self.phase_eval_pass_streak}"
                         )
                         if self.last_phase_eval_details:
@@ -1792,15 +1984,8 @@ class HybridTrainer:
                                     f"phase_eval={phase_eval:.3f}, lower={phase_lower_bound:.3f} ***\n"
                                 )
                     next_eval_episode += self.eval_interval_episodes
+                    self.evaluation_progress = None
                     self._write_run_manifest(status="running")
-
-                # 8. Episode-based periodic checkpoints
-                while self.total_episodes >= next_checkpoint_episode:
-                    ckpt_path = os.path.join(
-                        self.output_dir, f"treads_ppo_ep{next_checkpoint_episode}"
-                    )
-                    self._save_model_checkpoint(ckpt_path)
-                    next_checkpoint_episode += self.checkpoint_episode_interval
 
         except KeyboardInterrupt:
             interrupt_reason = "Training interrupted by user."

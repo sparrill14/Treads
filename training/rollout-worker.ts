@@ -81,6 +81,25 @@ interface CollectResponse {
 	rolloutJson: string;
 }
 
+interface EvaluationEpisodeRequest {
+	level?: number;
+	seed?: number;
+}
+
+interface EvaluateRequest {
+	episodes?: EvaluationEpisodeRequest[];
+	maxTicks?: number;
+	tickNormTicks?: number;
+	proceduralLevels?: boolean;
+	difficultyBand?: number;
+	playerMaxAmmo?: number;
+	playerMaxBombs?: number;
+}
+
+interface EvaluateResponse {
+	evaluationJson: string;
+}
+
 type CloseRequest = Record<string, never>;
 interface CloseResponse {
 	closed: boolean;
@@ -694,6 +713,7 @@ function computeSteppingReward(
 class RLController implements TankController {
 	private mlp: PolicyMLP;
 	private rng: () => number;
+	private deterministic: boolean;
 	private navigationPlanner: NavigationPlanner | null = null;
 	public lastNormalizedObs: number[] = [];
 	public lastAction: number[] = []; // MultiDiscrete: [moveIdx, aimBin, fire, bomb] (ints)
@@ -702,9 +722,10 @@ class RLController implements TankController {
 	public lastLogProb = 0;
 	public lastRawObs: TankObservation | null = null;
 
-	constructor(mlp: PolicyMLP, rng: () => number = Math.random) {
+	constructor(mlp: PolicyMLP, rng: () => number = Math.random, deterministic = false) {
 		this.mlp = mlp;
 		this.rng = rng;
+		this.deterministic = deterministic;
 	}
 
 	reset(initial: MatchInit): void {
@@ -719,7 +740,13 @@ class RLController implements TankController {
 		this.lastNormalizedObs = normalized;
 
 		const { logits, value } = this.mlp.forward(normalized);
-		const { action, logProb } = this.mlp.sampleMultiCategorical(logits, this.rng);
+		let action: number[];
+		let logProb = 0;
+		if (this.deterministic) {
+			action = this.mlp.argmaxMultiCategorical(logits);
+		} else {
+			({ action, logProb } = this.mlp.sampleMultiCategorical(logits, this.rng));
+		}
 
 		this.lastAction = action;
 		this.lastValue = value;
@@ -759,6 +786,18 @@ interface RolloutData {
 	episode_wins: (0 | 1)[];
 	episode_levels: number[];
 	episode_reward_breakdowns: RewardBreakdown[];
+}
+
+interface EvaluationEpisodeResult {
+	level: number;
+	seed: number;
+	win: boolean;
+	ticks: number;
+}
+
+interface EvaluationData {
+	type: 'evaluation';
+	episodes: EvaluationEpisodeResult[];
 }
 
 function clamp(value: number, minValue: number, maxValue: number): number {
@@ -992,6 +1031,48 @@ function collectRollout(
 	};
 }
 
+/** Run deterministic held-out episodes without per-tick Python RPC. */
+export function evaluatePolicy(
+	mlp: PolicyMLP,
+	episodes: EvaluationEpisodeRequest[],
+	maxTicks: number,
+	proceduralLevels: boolean,
+	difficultyBand: number,
+	playerMaxAmmo: number,
+	playerMaxBombs: number
+): EvaluationData {
+	const results: EvaluationEpisodeResult[] = [];
+	for (const episode of episodes) {
+		const level = Number(episode.level ?? 1);
+		const seed = Number(episode.seed ?? 0);
+		const baseConfig = resolveScenarioConfig(level);
+		const variedConfig = proceduralLevels
+			? varyDifficulty(varySpawn(baseConfig, seed), seed, difficultyBand)
+			: varySpawn(baseConfig, seed);
+		const levelConfig = configurePlayerResources(variedConfig, playerMaxAmmo, playerMaxBombs);
+		const initialState = createInitialGameState(levelConfig, seed);
+		const controllers = createDefaultControllers(levelConfig);
+		controllers[PLAYER_TANK_ID] = new RLController(mlp, Math.random, true);
+		const simulation = new Simulation(initialState, controllers, { debugFreeze: false });
+
+		let ticks = 0;
+		let state = simulation.getState();
+		while (state.status === 'running' && ticks < maxTicks) {
+			simulation.step();
+			ticks++;
+			state = simulation.getState();
+		}
+
+		results.push({
+			level,
+			seed,
+			win: state.status === 'player_win',
+			ticks,
+		});
+	}
+	return { type: 'evaluation', episodes: results };
+}
+
 let mlp: PolicyMLP | null = null;
 let workerTotalEpisodes = 0;
 
@@ -1113,6 +1194,38 @@ function collect(
 	}
 }
 
+function evaluate(
+	call: grpc.ServerUnaryCall<EvaluateRequest, EvaluateResponse>,
+	callback: grpc.sendUnaryData<EvaluateResponse>
+): void {
+	try {
+		if (!mlp) {
+			callback({ code: grpc.status.FAILED_PRECONDITION, message: 'Weights not set' }, null);
+			return;
+		}
+		const req = call.request;
+		const episodes = req.episodes ?? [];
+		if (episodes.length === 0) {
+			callback({ code: grpc.status.INVALID_ARGUMENT, message: 'No evaluation episodes supplied' }, null);
+			return;
+		}
+		const maxTicks = Math.max(1, Number(req.maxTicks ?? 720));
+		TICK_NORM_TICKS = Math.max(1, Number(req.tickNormTicks ?? maxTicks));
+		const evaluation = evaluatePolicy(
+			mlp,
+			episodes,
+			maxTicks,
+			Boolean(req.proceduralLevels ?? true),
+			clamp(Number(req.difficultyBand ?? 0), 0, 1),
+			Number(req.playerMaxAmmo ?? 0),
+			Number(req.playerMaxBombs ?? 0)
+		);
+		callback(null, { evaluationJson: JSON.stringify(evaluation) });
+	} catch (err) {
+		callback({ code: grpc.status.INTERNAL, message: String(err) }, null);
+	}
+}
+
 function close(
 	_call: grpc.ServerUnaryCall<CloseRequest, CloseResponse>,
 	callback: grpc.sendUnaryData<CloseResponse>
@@ -1128,6 +1241,7 @@ function main(): void {
 		Health: health,
 		SetWeightsFromFile: setWeightsFromFile,
 		Collect: collect,
+		Evaluate: evaluate,
 		Close: close,
 	});
 

@@ -24,30 +24,47 @@ def navigation_move_index(observation: Any) -> int:
     return MOVE_INTENTS.index(best)
 
 
+def solve_with_navigation(seed: int, randomized: bool) -> None:
+    env = TreadsEnv(
+        level=141,
+        seed_start=seed,
+        max_episode_steps=720,
+        spawn_jitter=randomized,
+        procedural_levels=randomized,
+        difficulty_band=0.38 if randomized else 0.0,
+        player_max_ammo=3,
+        player_max_bombs=0,
+    )
+    try:
+        _obs, _ = env.reset(seed=seed)
+        done = False
+        steps = 0
+        result: Dict[str, Any] = {}
+        while not done:
+            assert env._last_obs_raw is not None
+            encoded = normalize_observation(env._last_obs_raw)
+            move_index = navigation_move_index(encoded)
+            decoded = decode_multi_discrete_action(
+                [move_index, NEUTRAL_AIM_BIN, 1, 0], env._last_obs_raw
+            )
+            _obs, _reward, terminated, truncated, info = env.step(decoded)
+            done = terminated or truncated
+            steps += 1
+            result = cast(Dict[str, Any], info.get("result", {}))
+        assert result.get("win") is True, (seed, randomized, steps, result)
+        assert steps < 720
+    finally:
+        env.close()
+
+
 def main() -> None:
     for seed in (14100, 14101, 14102):
-        env = TreadsEnv(level=141, seed_start=seed, max_episode_steps=720)
-        try:
-            _obs, _ = env.reset(seed=seed)
-            done = False
-            steps = 0
-            result: Dict[str, Any] = {}
-            while not done:
-                assert env._last_obs_raw is not None
-                encoded = normalize_observation(env._last_obs_raw)
-                move_index = navigation_move_index(encoded)
-                decoded = decode_multi_discrete_action(
-                    [move_index, NEUTRAL_AIM_BIN, 1, 0], env._last_obs_raw
-                )
-                _obs, _reward, terminated, truncated, info = env.step(decoded)
-                done = terminated or truncated
-                steps += 1
-                result = cast(Dict[str, Any], info.get("result", {}))
-            assert result.get("win") is True, (seed, steps, result)
-            assert steps < 720
-        finally:
-            env.close()
-    print("Navigation guidance solved scenario 141 on 3 deterministic seeds")
+        solve_with_navigation(seed, randomized=False)
+
+    for seed in (24100, 24101, 24102, 24103, 24104):
+        solve_with_navigation(seed, randomized=True)
+
+    print("Navigation guidance solved scenario 141 on deterministic and randomized variants")
 
 
 if __name__ == "__main__":

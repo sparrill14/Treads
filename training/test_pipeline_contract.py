@@ -63,6 +63,47 @@ def main() -> None:
     assert HybridTrainer._wilson_lower_bound(12, 12) > 0.70
     assert HybridTrainer._wilson_lower_bound(2, 4) < 0.20
 
+    summary_details = {
+        1: {"wins": 6.0, "episodes": 12.0},
+        2: {"wins": 3.0, "episodes": 12.0},
+    }
+    summary_rate, summary_lower = HybridTrainer._summarize_eval_details(
+        [1, 2, 1], summary_details
+    )
+    assert summary_rate == 9.0 / 24.0
+    assert summary_lower == HybridTrainer._wilson_lower_bound(9, 24)
+    try:
+        HybridTrainer._summarize_eval_details([1, 2, 3], summary_details)
+    except ValueError as exc:
+        assert "missing levels: [3]" in str(exc)
+    else:
+        raise AssertionError("Missing evaluation scenarios must fail the summary")
+
+    phase_details = {
+        132: {"wins": 12.0, "episodes": 12.0},
+        133: {"wins": 12.0, "episodes": 12.0},
+        141: {"wins": 0.0, "episodes": 12.0},
+    }
+    passed, weakest_scenario, weakest_rate = HybridTrainer._phase_eval_gate(
+        [132, 133, 141], phase_details, aggregate_lower_bound=0.50, required_win_rate=0.45
+    )
+    assert not passed
+    assert weakest_scenario == 141
+    assert weakest_rate == 0.0
+
+    phase_details[141]["wins"] = 6.0
+    passed, weakest_scenario, weakest_rate = HybridTrainer._phase_eval_gate(
+        [132, 133, 141], phase_details, aggregate_lower_bound=0.50, required_win_rate=0.45
+    )
+    assert passed
+    assert weakest_scenario == 141
+    assert weakest_rate == 0.5
+
+    passed, _, _ = HybridTrainer._phase_eval_gate(
+        [132, 133, 141], {}, aggregate_lower_bound=0.90, required_win_rate=0.45
+    )
+    assert not passed
+
     curriculum_probe = HybridTrainer.__new__(HybridTrainer)
     curriculum_probe._explicit_levels = False
     curriculum_probe.curriculum = DEFAULT_CURRICULUM

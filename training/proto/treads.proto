@@ -67,6 +67,7 @@ service RolloutWorkerService {
   rpc Health(HealthRequest) returns (HealthResponse);
   rpc SetWeightsFromFile(SetWeightsFromFileRequest) returns (SetWeightsFromFileResponse);
   rpc Collect(CollectRequest) returns (CollectResponse);
+  rpc Evaluate(EvaluateRequest) returns (EvaluateResponse);
   rpc Close(CloseRequest) returns (CloseResponse);
 }
 
@@ -99,4 +100,23 @@ message CollectRequest {
 
 message CollectResponse {
   string rollout_json = 1;
+}
+
+message EvaluationEpisode {
+  int32 level = 1;
+  int32 seed = 2;
+}
+
+message EvaluateRequest {
+  repeated EvaluationEpisode episodes = 1;
+  int32 max_ticks = 2;
+  int32 tick_norm_ticks = 3;
+  bool procedural_levels = 4;
+  double difficulty_band = 5;
+  int32 player_max_ammo = 6;
+  int32 player_max_bombs = 7;
+}
+
+message EvaluateResponse {
+  string evaluation_json = 1;
 }
